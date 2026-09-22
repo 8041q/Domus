@@ -1,13 +1,25 @@
-# Space Studio — Room Planner Prototype
+# Space Studio - Room Planner Prototype
 
 TypeScript-first browser room planner with two focused workflows:
 
-1. **Build Room** — room geometry, dimensions and architectural openings.
-2. **Furnish Room** — finishes, product placement, snapping, views and spatial guidance.
+1. **Build Room** - room geometry, dimensions and architectural openings.
+2. **Furnish Room** - finishes, product placement, snapping, views and spatial guidance.
 
 Both workflows share one semantic room state. Three.js renders that state; it is not the source of truth.
 
-## Phase 8 — stabilization before core-focus work
+
+## Phase 9 - reference-style dollhouse interaction
+
+This pass brings the 3D workspace closer to the supplied reference images/video:
+
+- **Dollhouse dimensions** now follow the visible room silhouette: far/visible walls dimension above the wall top, while cut-away foreground walls dimension around the floor edge. Metric drafting labels use centimetres.
+- **Selected products** use a crisp yellow screen-space silhouette rather than a blue bounding box.
+- **Product dimensions** use a white dashed 3D measurement cage, white extension lines/anchor points, and dark centimetre badges while keeping the yellow selection outline visible.
+- **Wall junctions** overlap their structural cores, finish faces and skirting slightly at true wall ends to remove hairline corner gaps in the dollhouse view.
+- **Furniture dragging** is more magnetic: wall-affinity products auto-rotate and settle on the visible interior wall face, object-edge snaps have practical enter/exit hysteresis, rotated collision tests use the real oriented footprint, and Shift still provides immediate free-move/overlap.
+- Perspective framing/background were tuned toward the lighter reference presentation, and furniture now exposes a move cursor while draggable.
+
+## Phase 8 - stabilization before core-focus work
 
 This phase intentionally adds very little surface area. It fixes coordinate-system, camera-transition and architectural-opening behavior so the next core phase can build on a predictable baseline.
 
@@ -122,13 +134,13 @@ npm run build
 
 ## Useful controls
 
-- `Ctrl/Cmd + Z` — undo
-- `Ctrl/Cmd + Y` — redo
-- `R` — rotate selected furniture 90°
-- `Delete` / `Backspace` — remove selected furniture
-- Drag empty 3D space — orbit
-- Mouse wheel / trackpad — zoom
-- Hold `Shift` while dragging furniture — free movement / snapping off
+- `Ctrl/Cmd + Z` - undo
+- `Ctrl/Cmd + Y` - redo
+- `R` - rotate selected furniture 90°
+- `Delete` / `Backspace` - remove selected furniture
+- Drag empty 3D space - orbit
+- Mouse wheel / trackpad - zoom
+- Hold `Shift` while dragging furniture - free movement / snapping off
 - Build Room: drag walls/corners/openings directly
 - Build Room: click a wall-centre `+` to create a new corner
 - Build Room: Shift while drafting uses the finer snap step

@@ -17,11 +17,11 @@ const VIEW_PRESETS: Array<{ id: FurnishCameraView; label: string }> = [
   { id: 'left', label: 'Left' }
 ];
 const WALL_SWATCHES = [
-  { name: 'Warm white', value: '#f5f3ee' },
-  { name: 'Soft beige', value: '#ded5c7' },
-  { name: 'Sage', value: '#b9c2ad' },
-  { name: 'Mist blue', value: '#b7c7cf' },
-  { name: 'Clay', value: '#c8a28d' }
+  { name: 'Soft grey', value: '#dddddb' },
+  { name: 'Warm white', value: '#f1f0ed' },
+  { name: 'Soft beige', value: '#d8d0c5' },
+  { name: 'Sage', value: '#bcc3b5' },
+  { name: 'Mist blue', value: '#bcc8cd' }
 ];
 const FLOORS: Array<{ id: FloorFinish; name: string }> = [
   { id: 'light-oak', name: 'Light oak' },
@@ -248,8 +248,8 @@ export function FurnishRoom() {
               {showViewOptions && (
                 <div className="view-options-popover">
                   <strong>Annotations</strong>
-                  <label><input type="checkbox" checked={showRoomDimensions} onChange={(e) => setShowRoomDimensions(e.target.checked)} /><span>Room dimensions<small>Aligned perimeter dimensions</small></span></label>
-                  <label><input type="checkbox" checked={showProductDimensions} onChange={(e) => setShowProductDimensions(e.target.checked)} /><span>Product dimensions<small>3D bounding-box dimensions</small></span></label>
+                  <label><input type="checkbox" checked={showRoomDimensions} onChange={(e) => setShowRoomDimensions(e.target.checked)} /><span>Room dimensions<small>Dollhouse perimeter dimensions</small></span></label>
+                  <label><input type="checkbox" checked={showProductDimensions} onChange={(e) => setShowProductDimensions(e.target.checked)} /><span>Product dimensions<small>Width, depth and height overlay</small></span></label>
                   <label><input type="checkbox" checked={showSpacingDimensions} onChange={(e) => setShowSpacingDimensions(e.target.checked)} /><span>Item spacing<small>Nearest free space badges</small></span></label>
                 </div>
               )}
@@ -269,12 +269,12 @@ export function FurnishRoom() {
           {collisionId
             ? 'This item cannot fit at the current position.'
             : collisionPush
-              ? 'Object contact — placement was nudged to the nearest free edge.'
+              ? 'Object contact - placement was nudged to the nearest free edge.'
               : activeSnap.label === 'Free move'
-                ? 'Free move · snapping and wall auto-alignment are off while Shift is held.'
+                ? 'Free move · magnetic wall and object snapping are off while Shift is held.'
                 : activeSnap.kind !== 'none'
                   ? `Alignment assist · ${activeSnap.label ?? 'guide'}`
-                  : 'Drag from any point on the item · hold Shift for immediate free move / overlap · subtle snapping only helps when very close'}
+                  : 'Drag an item near a wall to auto-align it, or near another item to snap edges · hold Shift for free move / overlap'}
         </div>
       </section>
     </div>

@@ -122,6 +122,8 @@ export interface SnapAxisFeedback {
 
 export interface SnapFeedback {
   kind: 'none' | 'wall' | 'object' | 'center' | 'multi';
+  /** Optional semantic target used to keep magnetic snapping stable while dragging. */
+  targetId?: string;
   x?: SnapAxisFeedback;
   z?: SnapAxisFeedback;
   label?: string;

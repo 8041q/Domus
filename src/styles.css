@@ -1,16 +1,16 @@
 :root {
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #222725;
-  background: #f2f2ef;
+  color: #111111;
+  background: #f5f5f5;
   font-synthesis: none;
-  --blue: #1769aa;
-  --blue-dark: #0f568e;
-  --blue-soft: #e8f1f8;
-  --ink: #222725;
-  --muted: #68706c;
-  --border: #dedfda;
+  --blue: #0058a3;
+  --blue-dark: #004f93;
+  --blue-soft: #eaf3fb;
+  --ink: #111111;
+  --muted: #666666;
+  --border: #d8d8d8;
   --panel: #ffffff;
-  --canvas: #efefeb;
+  --canvas: #f5f5f5;
   --danger: #b83a32;
 }
 
@@ -27,7 +27,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
   height: 70px; padding: 0 18px 0 16px; background: #fff; border-bottom: 1px solid var(--border);
 }
 .brand-block { display: flex; align-items: center; gap: 11px; min-width: 0; }
-.brand-mark { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: #1d2320; color: white; font-weight: 800; }
+.brand-mark { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: #0058a3; color: #ffda1a; font-weight: 800; }
 .brand-block > div:last-child { display: grid; line-height: 1.15; }
 .brand-block strong { font-size: 14px; letter-spacing: -.01em; }
 .brand-block span { margin-top: 3px; font-size: 11px; color: var(--muted); }
@@ -45,8 +45,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .header-actions { justify-self: end; display: flex; align-items: center; gap: 5px; }
 .header-actions button { min-height: 36px; padding: 7px 10px; border-radius: 7px; border: 0; background: transparent; cursor: pointer; font-size: 12px; }
 .header-actions button:hover { background: #f3f4f1; }
-.header-actions .save-button { background: #1d2320; color: #fff; padding-inline: 15px; }
-.header-actions .save-button:hover { background: #343a36; }
+.header-actions .save-button { background: #0058a3; color: #fff; padding-inline: 15px; }
+.header-actions .save-button:hover { background: #004f93; }
 .header-actions .more-button { width: 38px; letter-spacing: 2px; }
 .header-divider { width: 1px; height: 22px; margin: 0 4px; background: var(--border); }
 
@@ -103,8 +103,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .floor-option { border: 1px solid #dddeda; border-radius: 7px; background: #fff; padding: 6px; cursor: pointer; text-align: left; display: flex; align-items: center; gap: 7px; font-size: 10px; }
 .floor-option > span { width: 31px; height: 25px; border-radius: 4px; background: #d9c3a1; border: 1px solid rgba(0,0,0,.07); }
 .floor-warm-oak > span { background: #a9825c; }
-.floor-stone > span { background: #c7c5bf; }
-.floor-concrete > span { background: #a9aba8; }
+.floor-stone > span { background: #b9bab8; }
+.floor-concrete > span { background: #858992; }
 .floor-option.selected { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue) inset; }
 .builder-continue { margin-top: auto; padding: 16px 22px 22px; border-top: 1px solid #e9eae6; position: sticky; bottom: 0; background: rgba(255,255,255,.95); backdrop-filter: blur(8px); }
 .primary-button { width: 100%; min-height: 46px; border: 0; border-radius: 7px; background: var(--blue); color: #fff; font-weight: 720; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; }
@@ -118,7 +118,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .segmented-control { display: inline-flex; padding: 3px; border-radius: 8px; background: #e4e5e1; gap: 2px; }
 .segmented-control button { min-height: 31px; border: 0; background: transparent; border-radius: 6px; padding: 6px 12px; color: #68706c; font-size: 10.5px; font-weight: 650; cursor: pointer; }
 .segmented-control button.active { background: #fff; color: #202522; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
-.workspace-content { min-height: 0; min-width: 0; border: 1px solid #d9dad6; border-radius: 10px; overflow: hidden; background: #efefeb; }
+.workspace-content { min-height: 0; min-width: 0; border: 1px solid #d9dad6; border-radius: 10px; overflow: hidden; background: #f2f2f2; }
 .plan-stage, .viewport-stage { width: 100%; height: 100%; min-height: 0; position: relative; }
 .plan-stage canvas { display: block; width: 100%; height: 100%; min-height: 420px; touch-action: none; cursor: default; }
 .plan-stage.build canvas { cursor: crosshair; }
@@ -185,7 +185,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .designer-topbar { display: flex; align-items: center; justify-content: space-between; }
 .canvas-toggle { background: #dedfdb; }
 .room-count { color: var(--muted); font-size: 10.5px; }
-.designer-stage { min-width: 0; min-height: 0; border: 1px solid #d7d8d4; border-radius: 10px; overflow: hidden; position: relative; background: #efefeb; }
+.designer-stage { min-width: 0; min-height: 0; border: 1px solid #d7d8d4; border-radius: 10px; overflow: hidden; position: relative; background: #f2f2f2; }
 .selection-panel { position: absolute; top: 14px; right: 14px; width: min(280px, calc(100% - 28px)); border: 1px solid rgba(188,191,185,.9); border-radius: 10px; background: rgba(255,255,255,.96); backdrop-filter: blur(10px); box-shadow: 0 10px 28px rgba(32,38,34,.08); padding: 14px; }
 .selection-heading { display: flex; justify-content: space-between; gap: 10px; }
 .selection-heading h2 { margin: 3px 0 0; font-size: 15px; }
@@ -352,9 +352,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 }
 
 /* Annotation overlays */
-.viewport-stage { background: #c9cbc8; }
-.viewport { background: #c9cbc8; }
-.designer-stage { background: #c9cbc8; }
+.viewport-stage { background: #d2d2d2; }
+.viewport { background: #d2d2d2; }
+.designer-stage { background: #d2d2d2; }
 
 .view-options-wrap { position: relative; }
 .view-options-popover {
@@ -376,7 +376,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
   .view-options-popover { right: -48px; width: 230px; }
 }
 
-/* Phase 6: cleanup pass — precise interaction and cleaner drafting */
+/* Phase 6: cleanup pass - precise interaction and cleaner drafting */
 .rotation-control .range { min-width: 0; }
 .rotation-control .range-value-row strong { min-width: 52px; text-align: right; }
 
@@ -409,3 +409,17 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .opening-size-sliders { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 7px; }
 .opening-size-sliders .field-label { min-width: 0; }
 @media (max-width: 480px) { .opening-size-sliders { grid-template-columns: 1fr; } }
+
+
+/* IKEA Kreativ-inspired visual pass: quiet white chrome, neutral canvas, stronger primary actions. */
+.app-header, .tool-panel, .catalog-panel { background: #fff; }
+.app-header { border-bottom-color: #d6d6d6; }
+.product-card { border-radius: 0; }
+.product-visual { background: #f3f3f3; border-radius: 0; }
+.designer-stage, .workspace-content { border-radius: 0; border-color: #d6d6d6; }
+.selection-panel, .finish-panel, .view-options-popover { border-radius: 4px; box-shadow: 0 4px 18px rgba(0,0,0,.10); }
+.view-preset-bar, .segmented-control { background: #ededed; border-radius: 999px; }
+.view-preset-bar button, .segmented-control button { border-radius: 999px; }
+.finish-toggle { border-radius: 999px; padding-inline: 13px; }
+.primary-button, .header-actions .save-button { border-radius: 999px; }
+.eyebrow { color: #0058a3; }

@@ -1,9 +1,18 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { OutlinePass } from 'three/examples/jsm/postprocessing/OutlinePass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { Line2 } from 'three/examples/jsm/lines/Line2.js';
+import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
+import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { PRODUCTS } from '../core/products';
 import { clearanceRegions, resolvePlacement, spacingMeasurements } from '../core/placement';
-import { distanceToWall, getRoomWalls, roomBounds, wallPoint, wallProjectionDistance } from '../core/roomGeometry';
+import { getRoomWalls, roomBounds, wallPoint, wallProjectionDistance } from '../core/roomGeometry';
 import { formatLength } from '../core/units';
 import type { FurnishCameraView, MeasurementSystem, PlannerSnapshot, PlacedObject, RoomOpening, SnapFeedback, Vec2 } from '../core/types';
 
@@ -35,27 +44,35 @@ interface SceneOptions {
 }
 
 const FLOOR_COLORS: Record<string, number> = {
-  'light-oak': 0xd9c3a1,
-  'warm-oak': 0xa9825c,
-  stone: 0xc7c5bf,
-  concrete: 0xa9aba8
+  'light-oak': 0xd7cfbf,
+  'warm-oak': 0xa98766,
+  stone: 0xb9bab8,
+  concrete: 0x858992
 };
 
-const DIMENSION_COLOR = 0x575e5a;
-const SELECTION_COLOR = 0x1769aa;
+const DIMENSION_COLOR = 0x4a4a4a;
+const SELECTION_COLOR = 0xffd800;
+const DIMENSION_WHITE = 0xffffff;
 const CLEARANCE_COLOR = 0xc28c3d;
-const TRIM_COLOR = 0xf8f8f5;
+const TRIM_COLOR = 0xffffff;
+const JUNCTION_COLOR = 0xffffff;
+const WALL_THICKNESS = 0.05;
+const FLOOR_THICKNESS = WALL_THICKNESS;
+const CEILING_THICKNESS = WALL_THICKNESS;
 
 export class PlannerScene {
   private scene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(43, 1, 0.08, 100);
   private renderer: THREE.WebGLRenderer;
+  private composer: EffectComposer;
+  private outlinePass: OutlinePass;
   private controls: OrbitControls;
   private raycaster = new THREE.Raycaster();
   private pointer = new THREE.Vector2();
   private floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   private floorGroup = new THREE.Group();
   private wallsGroup = new THREE.Group();
+  private ceilingGroup = new THREE.Group();
   private objectGroup = new THREE.Group();
   private helperGroup = new THREE.Group();
   private objectModels = new Map<string, THREE.Group>();
@@ -66,6 +83,7 @@ export class PlannerScene {
   private animationFrame = 0;
   private lastRoomKey = '';
   private lastOpeningsKey = '';
+  private lastHelperKey = '';
   private currentCameraView: FurnishCameraView = 'perspective';
   private environmentTexture: THREE.Texture | null = null;
   private mainLight: THREE.DirectionalLight;
@@ -78,13 +96,29 @@ export class PlannerScene {
     // A firmer PCF shadow reads better for furniture and avoids the over-blurred Phase 5 result.
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMapping = THREE.NeutralToneMapping;
+    this.renderer.toneMappingExposure = 0.98;
     this.container.appendChild(this.renderer.domElement);
 
-    // Neutral mid-grey: enough separation from pale walls without the heavy dark-stage feel.
-    this.scene.background = new THREE.Color(0xd6d7d4);
-    this.scene.add(this.floorGroup, this.wallsGroup, this.objectGroup, this.helperGroup);
+    // IKEA Kreativ uses a neutral studio field around the cutaway room. Keeping this
+    // noticeably darker than the shell is important: white chamfers and selection
+    // annotations should remain readable without making the room itself look greyed out.
+    this.scene.background = new THREE.Color(0xd2d2d2);
+    this.scene.add(this.floorGroup, this.wallsGroup, this.ceilingGroup, this.objectGroup, this.helperGroup);
+
+    // Screen-space silhouette outlining matches the reference planner: the selected
+    // product gets one crisp yellow contour, independent of its component meshes.
+    this.composer = new EffectComposer(this.renderer);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.outlinePass = new OutlinePass(new THREE.Vector2(1, 1), this.scene, this.camera);
+    this.outlinePass.visibleEdgeColor.setHex(SELECTION_COLOR);
+    this.outlinePass.hiddenEdgeColor.setHex(SELECTION_COLOR);
+    this.outlinePass.edgeStrength = 20.0;
+    this.outlinePass.edgeThickness = 3.8;
+    this.outlinePass.edgeGlow = 0;
+    this.outlinePass.pulsePeriod = 0;
+    this.composer.addPass(this.outlinePass);
+    this.composer.addPass(new OutputPass());
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.environmentTexture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
@@ -101,9 +135,9 @@ export class PlannerScene {
     this.controls.screenSpacePanning = false;
 
     // Fast, artifact-free studio lighting. Contact depth now comes from real shadows instead of SSAO.
-    const hemi = new THREE.HemisphereLight(0xffffff, 0x7f817e, 0.92);
-    const ambient = new THREE.AmbientLight(0xffffff, 0.13);
-    this.mainLight = new THREE.DirectionalLight(0xfffcf5, 2.35);
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x777b80, 0.78);
+    const ambient = new THREE.AmbientLight(0xffffff, 0.18);
+    this.mainLight = new THREE.DirectionalLight(0xfffdf8, 1.72);
     this.mainLight.position.set(4.2, 7.2, 4.8);
     this.mainLight.castShadow = true;
     this.mainLight.shadow.mapSize.set(2048, 2048);
@@ -111,7 +145,7 @@ export class PlannerScene {
     this.mainLight.shadow.camera.far = 34;
     this.mainLight.shadow.bias = -0.00012;
     this.mainLight.shadow.normalBias = 0.012;
-    const fill = new THREE.DirectionalLight(0xe8edf0, 0.25);
+    const fill = new THREE.DirectionalLight(0xe5e9ed, 0.34);
     fill.position.set(-4.5, 5.2, -4.2);
     this.scene.add(hemi, ambient, this.mainLight, this.mainLight.target, fill);
 
@@ -136,8 +170,11 @@ export class PlannerScene {
     this.controls.dispose();
     this.disposeGroup(this.floorGroup);
     this.disposeGroup(this.wallsGroup);
+    this.disposeGroup(this.ceilingGroup);
     this.disposeGroup(this.objectGroup);
     this.disposeGroup(this.helperGroup);
+    this.outlinePass.dispose();
+    this.composer.dispose();
     this.environmentTexture?.dispose();
     this.renderer.dispose();
     this.container.removeChild(this.renderer.domElement);
@@ -156,9 +193,9 @@ export class PlannerScene {
     const size = Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ, 2);
     const targetY = Math.min(0.95, room.height * 0.38);
     const isDollhouse = view === 'perspective';
-    this.camera.fov = isDollhouse ? 43 : 32;
+    this.camera.fov = isDollhouse ? 39 : 32;
     this.camera.updateProjectionMatrix();
-    const distance = Math.max(4.2, size * (isDollhouse ? 1.65 : 2.2));
+    const distance = Math.max(4.2, size * (isDollhouse ? 1.72 : 2.2));
     this.controls.maxDistance = Math.max(20, size * 4.5);
     this.controls.target.set(cx, targetY, cz);
 
@@ -180,10 +217,11 @@ export class PlannerScene {
         this.camera.position.set(bounds.maxX + distance, targetY, cz);
         break;
       default:
-        this.camera.position.set(bounds.maxX + size * 0.7, Math.max(3.8, size * 0.8), bounds.maxZ + size * 0.9);
+        this.camera.position.set(bounds.maxX + size * 0.76, Math.max(3.8, size * 0.84), bounds.maxZ + size * 0.96);
         break;
     }
     this.controls.update();
+    this.updateCeilingVisibility();
     this.updateCutawayWalls(true);
   }
 
@@ -204,7 +242,12 @@ export class PlannerScene {
     }
     this.syncObjects(snapshot);
     this.syncOpeningHighlight(snapshot);
-    this.rebuildHelpers(snapshot);
+    this.syncHelperTransforms(snapshot);
+    const helperKey = this.helperStateKey(snapshot);
+    if (helperKey !== this.lastHelperKey) {
+      this.rebuildHelpers(snapshot);
+      this.lastHelperKey = helperKey;
+    }
     this.updateCutawayWalls(true);
   }
 
@@ -229,9 +272,12 @@ export class PlannerScene {
 
   private disposeGroup(group: THREE.Group) {
     group.traverse((obj) => {
-      if (!(obj instanceof THREE.Mesh || obj instanceof THREE.LineSegments || obj instanceof THREE.Line || obj instanceof THREE.Sprite)) return;
-      if ('geometry' in obj && obj.geometry) obj.geometry.dispose();
-      const material = obj.material;
+      const renderable = obj as THREE.Object3D & {
+        geometry?: THREE.BufferGeometry;
+        material?: THREE.Material | THREE.Material[];
+      };
+      renderable.geometry?.dispose();
+      const material = renderable.material;
       if (Array.isArray(material)) material.forEach((m) => {
         if (m instanceof THREE.SpriteMaterial) m.map?.dispose();
         m.dispose();
@@ -248,72 +294,196 @@ export class PlannerScene {
     return Math.atan2(wall.inward.x, wall.inward.z);
   }
 
+  /**
+   * Offset the room polygon along each wall's inward normal. Positive values move
+   * toward the room interior; negative values move outward. Intersections of the
+   * shifted wall lines give exact miter corners, including non-orthogonal rooms.
+   */
+  private insetRoomVertices(snapshot: PlannerSnapshot, offset: number): Vec2[] {
+    const walls = getRoomWalls(snapshot.room);
+    if (walls.length < 3 || Math.abs(offset) <= 1e-9) return snapshot.room.vertices.map((v) => ({ x: v.x, z: v.z }));
+
+    const cross = (a: Vec2, b: Vec2) => a.x * b.z - a.z * b.x;
+    return walls.map((wall, index) => {
+      const previous = walls[(index - 1 + walls.length) % walls.length];
+      const p = {
+        x: previous.start.x + previous.inward.x * offset,
+        z: previous.start.z + previous.inward.z * offset
+      };
+      const q = {
+        x: wall.start.x + wall.inward.x * offset,
+        z: wall.start.z + wall.inward.z * offset
+      };
+      const denom = cross(previous.tangent, wall.tangent);
+      if (Math.abs(denom) > 1e-6) {
+        const delta = { x: q.x - p.x, z: q.z - p.z };
+        const t = cross(delta, wall.tangent) / denom;
+        return {
+          x: p.x + previous.tangent.x * t,
+          z: p.z + previous.tangent.z * t
+        };
+      }
+
+      // Degenerate / almost-collinear corner. A normalized bisector gives a safe
+      // visual fallback and keeps malformed custom rooms from producing NaNs.
+      const bx = previous.inward.x + wall.inward.x;
+      const bz = previous.inward.z + wall.inward.z;
+      const bl = Math.hypot(bx, bz) || 1;
+      const vertex = snapshot.room.vertices[index];
+      return { x: vertex.x + bx / bl * offset, z: vertex.z + bz / bl * offset };
+    });
+  }
+
+  private createMiteredSlabGeometry(
+    topVertices: Vec2[],
+    bottomVertices: Vec2[],
+    topY: number,
+    bottomY: number,
+    topMaterialIndex = 0,
+    bottomMaterialIndex = 0,
+    sideMaterialIndex = 0
+  ) {
+    const count = Math.min(topVertices.length, bottomVertices.length);
+    const positions: number[] = [];
+    for (let i = 0; i < count; i += 1) positions.push(topVertices[i].x, topY, topVertices[i].z);
+    for (let i = 0; i < count; i += 1) positions.push(bottomVertices[i].x, bottomY, bottomVertices[i].z);
+
+    const indices: number[] = [];
+    const topContour = topVertices.slice(0, count).map((v) => new THREE.Vector2(v.x, v.z));
+    const bottomContour = bottomVertices.slice(0, count).map((v) => new THREE.Vector2(v.x, v.z));
+
+    const topStart = indices.length;
+    for (const [a, b, c] of THREE.ShapeUtils.triangulateShape(topContour, [])) indices.push(a, b, c);
+    const topCount = indices.length - topStart;
+
+    const bottomStart = indices.length;
+    for (const [a, b, c] of THREE.ShapeUtils.triangulateShape(bottomContour, [])) indices.push(count + c, count + b, count + a);
+    const bottomCount = indices.length - bottomStart;
+
+    const sideStart = indices.length;
+    for (let i = 0; i < count; i += 1) {
+      const j = (i + 1) % count;
+      indices.push(i, j, count + j, i, count + j, count + i);
+    }
+    const sideCount = indices.length - sideStart;
+
+    const indexed = new THREE.BufferGeometry();
+    indexed.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    indexed.setIndex(indices);
+    indexed.addGroup(topStart, topCount, topMaterialIndex);
+    indexed.addGroup(bottomStart, bottomCount, bottomMaterialIndex);
+    indexed.addGroup(sideStart, sideCount, sideMaterialIndex);
+
+    // Mitered architectural panels need hard normals. Sharing the perimeter vertices
+    // makes Three.js average the face normals, which visually creates a second soft
+    // edge beside the real cut. Splitting the vertices gives the same crisp edge as
+    // BoxGeometry / the door casing, with no fake seam.
+    const geometry = indexed.toNonIndexed();
+    indexed.dispose();
+    geometry.computeVertexNormals();
+    return geometry;
+  }
+
+  private makeQuadGeometry(points: [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3]) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(points.flatMap((point) => [point.x, point.y, point.z]), 3));
+    geometry.setIndex([0, 1, 2, 0, 2, 3]);
+    geometry.computeVertexNormals();
+    return geometry;
+  }
+
   private rebuildRoom(snapshot: PlannerSnapshot) {
     this.disposeGroup(this.floorGroup);
     this.disposeGroup(this.wallsGroup);
+    this.disposeGroup(this.ceilingGroup);
     this.wallHiddenState.clear();
-    const { floorFinish, vertices } = snapshot.room;
-    const wallThickness = 0.10;
+    const { floorFinish } = snapshot.room;
+    const halfWall = WALL_THICKNESS / 2;
 
-    const shape = new THREE.Shape();
-    vertices.forEach((vertex, index) => {
-      if (index === 0) shape.moveTo(vertex.x, -vertex.z);
-      else shape.lineTo(vertex.x, -vertex.z);
-    });
-    shape.closePath();
-
-    // The central slab supports the walkable room area.
-    const slabGeometry = new THREE.ExtrudeGeometry(shape, { depth: 0.055, bevelEnabled: false, steps: 1 });
-    slabGeometry.rotateX(-Math.PI / 2);
-    const slab = new THREE.Mesh(slabGeometry, new THREE.MeshStandardMaterial({ color: TRIM_COLOR, roughness: 0.82 }));
-    slab.position.y = -0.055;
+    // The floor is one physical mitered panel. The finish is now the top material
+    // of that same geometry rather than a second coplanar mesh; this removes the
+    // thin doubled/split line that could appear around the perimeter.
+    const floorTopVertices = this.insetRoomVertices(snapshot, halfWall);
+    const floorBottomVertices = this.insetRoomVertices(snapshot, halfWall - FLOOR_THICKNESS);
+    const slab = new THREE.Mesh(
+      this.createMiteredSlabGeometry(
+        floorTopVertices,
+        floorBottomVertices,
+        0,
+        -FLOOR_THICKNESS,
+        1,
+        0,
+        2
+      ),
+      [
+        new THREE.MeshStandardMaterial({ color: TRIM_COLOR, roughness: 0.82, side: THREE.DoubleSide }),
+        new THREE.MeshStandardMaterial({
+          color: FLOOR_COLORS[floorFinish] ?? FLOOR_COLORS['light-oak'],
+          roughness: 0.84,
+          metalness: 0,
+          side: THREE.DoubleSide
+        }),
+        // The miter reveal is an architectural graphic edge, not a lit finish.
+        // Keep it pure white regardless of environment lighting or shadows.
+        new THREE.MeshBasicMaterial({ color: JUNCTION_COLOR, side: THREE.DoubleSide, toneMapped: false })
+      ]
+    );
     slab.receiveShadow = true;
     slab.castShadow = true;
     this.floorGroup.add(slab);
 
-    const floorGeometry = new THREE.ShapeGeometry(shape);
-    floorGeometry.rotateX(-Math.PI / 2);
-    const floor = new THREE.Mesh(
-      floorGeometry,
-      new THREE.MeshStandardMaterial({
-        color: FLOOR_COLORS[floorFinish] ?? FLOOR_COLORS['light-oak'],
-        roughness: 0.84,
-        metalness: 0,
-        side: THREE.DoubleSide
-      })
-    );
-    floor.position.y = 0.001;
-    floor.receiveShadow = true;
-    this.floorGroup.add(floor);
-
-    // Extend the white slab underneath every wall. The floor and wall now overlap structurally
-    // instead of merely touching at a zero-thickness perimeter edge.
-    for (const wall of getRoomWalls(snapshot.room)) {
-      const centre = wallPoint(wall, wall.length / 2);
-      const yaw = this.wallYaw(wall);
-      const footing = new THREE.Mesh(
-        new THREE.BoxGeometry(wall.length + wallThickness * 0.9, 0.055, wallThickness),
-        new THREE.MeshStandardMaterial({ color: TRIM_COLOR, roughness: 0.82 })
-      );
-      footing.rotation.y = yaw;
-      footing.position.set(
-        centre.x,
-        -0.0275,
-        centre.z
-      );
-      footing.receiveShadow = true;
-      footing.castShadow = true;
-      this.floorGroup.add(footing);
-
-    }
-
     this.rebuildWalls(snapshot);
+    this.rebuildCeiling(snapshot);
+  }
+
+  private rebuildCeiling(snapshot: PlannerSnapshot) {
+    this.disposeGroup(this.ceilingGroup);
+    const halfWall = WALL_THICKNESS / 2;
+
+    // The ceiling uses the complementary full-thickness miter to the wall top.
+    // Its room-facing underside is inset to the inner wall face, while the upper
+    // perimeter reaches the outer wall face. It is only exposed in side presets.
+    const bottomVertices = this.insetRoomVertices(snapshot, halfWall);
+    const topVertices = this.insetRoomVertices(snapshot, halfWall - CEILING_THICKNESS);
+    const ceiling = new THREE.Mesh(
+      this.createMiteredSlabGeometry(
+        topVertices,
+        bottomVertices,
+        snapshot.room.height,
+        snapshot.room.height - CEILING_THICKNESS,
+        0,
+        0,
+        1
+      ),
+      [
+        new THREE.MeshStandardMaterial({
+          color: TRIM_COLOR,
+          roughness: 0.78,
+          side: THREE.DoubleSide,
+          polygonOffset: true,
+          polygonOffsetFactor: -0.6,
+          polygonOffsetUnits: -0.6
+        }),
+        new THREE.MeshBasicMaterial({ color: JUNCTION_COLOR, side: THREE.DoubleSide, toneMapped: false })
+      ]
+    );
+    ceiling.castShadow = true;
+    ceiling.receiveShadow = true;
+    this.ceilingGroup.add(ceiling);
+    this.updateCeilingVisibility();
+  }
+
+  private updateCeilingVisibility() {
+    this.ceilingGroup.visible = this.currentCameraView === 'front'
+      || this.currentCameraView === 'back'
+      || this.currentCameraView === 'left'
+      || this.currentCameraView === 'right';
   }
 
   private rebuildWalls(snapshot: PlannerSnapshot) {
     this.disposeGroup(this.wallsGroup);
     const { height, wallColor } = snapshot.room;
-    const thickness = 0.10;
+    const thickness = WALL_THICKNESS;
 
     for (const wall of getRoomWalls(snapshot.room)) {
       const wallOpenings = snapshot.openings.filter((o) => o.wallId === wall.id).sort((a, b) => a.offset - b.offset);
@@ -321,68 +491,61 @@ export class PlannerScene {
       for (const opening of wallOpenings) {
         const start = Math.max(cursor, opening.offset - opening.width / 2);
         const end = Math.min(wall.length, opening.offset + opening.width / 2);
-        if (start > cursor) this.addWallSegmentBox(wall, cursor, start, 0, height, thickness, wallColor);
-        if (opening.sillHeight > 0.01) this.addWallSegmentBox(wall, start, end, 0, opening.sillHeight, thickness, wallColor);
+        if (start > cursor) this.addWallSegmentBox(wall, cursor, start, 0, height, thickness, wallColor, height, snapshot);
+        if (opening.sillHeight > 0.01) this.addWallSegmentBox(wall, start, end, 0, opening.sillHeight, thickness, wallColor, height, snapshot);
         const openingTop = Math.min(height, opening.sillHeight + opening.height);
-        if (openingTop < height - 0.01) this.addWallSegmentBox(wall, start, end, openingTop, height, thickness, wallColor);
+        if (openingTop < height - 0.01) this.addWallSegmentBox(wall, start, end, openingTop, height, thickness, wallColor, height, snapshot);
         this.addOpeningFrame(opening, snapshot, thickness);
         cursor = Math.max(cursor, end);
       }
-      if (cursor < wall.length) this.addWallSegmentBox(wall, cursor, wall.length, 0, height, thickness, wallColor);
+      if (cursor < wall.length) this.addWallSegmentBox(wall, cursor, wall.length, 0, height, thickness, wallColor, height, snapshot);
 
-      // White skirting follows the actual wall material. Any opening that reaches
-      // into the 7 cm footer interrupts it, even if its bottom is slightly above floor level.
-      let trimCursor = 0;
-      const footerOpenings = wallOpenings.filter((o) => o.sillHeight < 0.075);
-      for (const opening of footerOpenings) {
-        const start = Math.max(trimCursor, opening.offset - opening.width / 2);
-        const end = Math.min(wall.length, opening.offset + opening.width / 2);
-        if (start > trimCursor) this.addBaseboard(wall, trimCursor, start);
-        trimCursor = Math.max(trimCursor, end);
-      }
-      if (trimCursor < wall.length) this.addBaseboard(wall, trimCursor, wall.length);
-      this.addFloorJunction(wall, snapshot, thickness);
+      // Keep the normal footer requested earlier, but give the footer itself a
+      // proper miter at room corners so it never sticks through a cutaway wall.
+      this.addBaseboardRuns(wall, snapshot);
     }
   }
 
-  private addFloorJunction(wall: ReturnType<typeof getRoomWalls>[number], snapshot: PlannerSnapshot, wallThickness: number) {
-    const yaw = this.wallYaw(wall);
-    const floorColor = FLOOR_COLORS[snapshot.room.floorFinish] ?? FLOOR_COLORS['light-oak'];
-    const floorOpenings = snapshot.openings
-      .filter((opening) => opening.wallId === wall.id && opening.sillHeight <= 0.025)
-      .sort((a, b) => a.offset - b.offset);
+  private wallOffsetPoint(wall: ReturnType<typeof getRoomWalls>[number], distance: number, offset: number): Vec2 {
+    const point = wallPoint(wall, distance);
+    return { x: point.x + wall.inward.x * offset, z: point.z + wall.inward.z * offset };
+  }
 
-    const addTrim = (start: number, end: number) => {
-      if (end - start < 0.025) return;
-      const centre = wallPoint(wall, (start + end) / 2);
-      const trim = new THREE.Mesh(
-        new THREE.BoxGeometry(end - start, 0.012, 0.026),
-        new THREE.MeshStandardMaterial({ color: TRIM_COLOR, roughness: 0.74 })
-      );
-      trim.rotation.y = yaw;
-      trim.position.set(centre.x + wall.inward.x * (wallThickness / 2 + 0.013), 0.007, centre.z + wall.inward.z * (wallThickness / 2 + 0.013));
-      trim.receiveShadow = true;
-      this.tagCutawaySurface(trim, wall);
-      this.wallsGroup.add(trim);
+  private wallSegmentEdgePoints(
+    wall: ReturnType<typeof getRoomWalls>[number],
+    start: number,
+    end: number,
+    offset: number,
+    snapshot: PlannerSnapshot
+  ) {
+    const corners = this.insetRoomVertices(snapshot, offset);
+    const startTouchesCorner = start <= 0.0001;
+    const endTouchesCorner = end >= wall.length - 0.0001;
+    return {
+      start: startTouchesCorner ? corners[wall.index] : this.wallOffsetPoint(wall, start, offset),
+      end: endTouchesCorner ? corners[(wall.index + 1) % corners.length] : this.wallOffsetPoint(wall, end, offset)
     };
+  }
+
+  private addBaseboardRuns(wall: ReturnType<typeof getRoomWalls>[number], snapshot: PlannerSnapshot) {
+    const openingFrameWidth = 0.05;
+    const blocked = snapshot.openings
+      .filter((opening) => opening.wallId === wall.id && opening.sillHeight <= 0.025)
+      .map((opening) => ({
+        // Stop at the outside of the casing, not the raw opening. The old run
+        // continued underneath half of the door frame, producing the little split
+        // at the jamb. This makes baseboard and casing meet edge-to-edge.
+        start: Math.max(0, opening.offset - opening.width / 2 - openingFrameWidth / 2),
+        end: Math.min(wall.length, opening.offset + opening.width / 2 + openingFrameWidth / 2)
+      }))
+      .sort((a, b) => a.start - b.start);
 
     let cursor = 0;
-    for (const opening of floorOpenings) {
-      const start = Math.max(cursor, opening.offset - opening.width / 2);
-      const end = Math.min(wall.length, opening.offset + opening.width / 2);
-      addTrim(cursor, start);
-      const thresholdPoint = wallPoint(wall, opening.offset);
-      const threshold = new THREE.Mesh(
-        new THREE.BoxGeometry(Math.max(0.05, opening.width), 0.012, wallThickness + 0.05),
-        new THREE.MeshStandardMaterial({ color: floorColor, roughness: 0.84 })
-      );
-      threshold.rotation.y = yaw;
-      threshold.position.set(thresholdPoint.x, 0.007, thresholdPoint.z);
-      threshold.receiveShadow = true;
-      this.wallsGroup.add(threshold);
-      cursor = Math.max(cursor, end);
+    for (const range of blocked) {
+      if (range.start > cursor) this.addBaseboard(wall, cursor, range.start, snapshot);
+      cursor = Math.max(cursor, range.end);
     }
-    addTrim(cursor, wall.length);
+    if (cursor < wall.length) this.addBaseboard(wall, cursor, wall.length, snapshot);
   }
 
   private addWallSegmentBox(
@@ -392,58 +555,115 @@ export class PlannerScene {
     bottom: number,
     top: number,
     thickness: number,
-    wallColor: THREE.ColorRepresentation
+    wallColor: THREE.ColorRepresentation,
+    roomHeight: number,
+    snapshot: PlannerSnapshot
   ) {
     if (end - start < 0.005 || top - bottom < 0.005) return;
-    const len = end - start;
-    const h = top - bottom;
-    const centre = wallPoint(wall, (start + end) / 2);
-    const yaw = this.wallYaw(wall);
+    const halfT = thickness / 2;
+    const outer = this.wallSegmentEdgePoints(wall, start, end, -halfT, snapshot);
+    const inner = this.wallSegmentEdgePoints(wall, start, end, halfT, snapshot);
 
-    // The wall core is always white. This makes exposed thickness/cut edges read as a clean border.
+    // A miter consumes the full panel thickness. There is no remaining square top
+    // ledge: the wall's outer top edge connects directly to the recessed inner edge.
+    const cutTop = top >= roomHeight - 0.0001;
+    const topCut = cutTop ? Math.min(thickness, Math.max(0, (top - bottom) * 0.45)) : 0;
+    const innerTop = top - topCut;
+
+    // The lower edge is mitered as well, but below floor level. That preserves the
+    // requested normal skirting/footer and avoids lifting the visible wall finish.
+    const outerBottom = bottom <= 0.0001 ? bottom - thickness : bottom;
+    const innerBottom = bottom;
+
+    const points = [
+      new THREE.Vector3(outer.start.x, outerBottom, outer.start.z),
+      new THREE.Vector3(outer.end.x, outerBottom, outer.end.z),
+      new THREE.Vector3(outer.end.x, top, outer.end.z),
+      new THREE.Vector3(outer.start.x, top, outer.start.z),
+      new THREE.Vector3(inner.start.x, innerBottom, inner.start.z),
+      new THREE.Vector3(inner.end.x, innerBottom, inner.end.z),
+      new THREE.Vector3(inner.end.x, innerTop, inner.end.z),
+      new THREE.Vector3(inner.start.x, innerTop, inner.start.z)
+    ];
+    const indexed = new THREE.BufferGeometry();
+    indexed.setAttribute('position', new THREE.Float32BufferAttribute(points.flatMap((point) => [point.x, point.y, point.z]), 3));
+    indexed.setIndex([
+      0, 1, 2, 0, 2, 3, // outer face
+      4, 7, 6, 4, 6, 5, // inner face
+      0, 3, 7, 0, 7, 4, // start miter
+      1, 5, 6, 1, 6, 2, // end miter
+      3, 2, 6, 3, 6, 7, // top miter
+      0, 4, 5, 0, 5, 1  // bottom miter
+    ]);
+    indexed.addGroup(0, 6, 0);   // outer structural face
+    indexed.addGroup(6, 6, 1);   // room-facing wall finish
+    indexed.addGroup(12, 24, 2); // all four miter cuts: constant unlit white
+
+    // Keep every miter edge genuinely sharp. The previous shared vertex normals
+    // blended the wall face into the cut and read as a second edge / split.
+    const geometry = indexed.toNonIndexed();
+    indexed.dispose();
+    geometry.computeVertexNormals();
+
     const body = new THREE.Mesh(
-      new THREE.BoxGeometry(len, h, thickness),
-      new THREE.MeshStandardMaterial({ color: TRIM_COLOR, roughness: 0.8 })
-    );
-    body.rotation.y = yaw;
-    body.position.set(
-      centre.x,
-      (bottom + top) / 2,
-      centre.z
+      geometry,
+      [
+        new THREE.MeshStandardMaterial({ color: TRIM_COLOR, roughness: 0.8, side: THREE.DoubleSide }),
+        new THREE.MeshStandardMaterial({ color: new THREE.Color(wallColor), roughness: 0.94, side: THREE.DoubleSide }),
+        // Miter faces deliberately ignore scene lighting and shadowing so the
+        // architectural cut stays the exact same white from every camera angle.
+        new THREE.MeshBasicMaterial({ color: JUNCTION_COLOR, side: THREE.DoubleSide, toneMapped: false })
+      ]
     );
     body.receiveShadow = true;
     body.castShadow = true;
     this.tagCutawaySurface(body, wall);
     this.wallsGroup.add(body);
-
-    // A thin coloured interior finish sits on the room-facing plane only.
-    const face = new THREE.Mesh(
-      new THREE.PlaneGeometry(len, h),
-      new THREE.MeshStandardMaterial({ color: new THREE.Color(wallColor), roughness: 0.9, side: THREE.FrontSide })
-    );
-    face.rotation.y = yaw;
-    face.position.set(
-      centre.x + wall.inward.x * (thickness / 2 + 0.0015),
-      (bottom + top) / 2,
-      centre.z + wall.inward.z * (thickness / 2 + 0.0015)
-    );
-    face.receiveShadow = true;
-    this.tagCutawaySurface(face, wall);
-    this.wallsGroup.add(face);
   }
 
-  private addBaseboard(wall: ReturnType<typeof getRoomWalls>[number], start: number, end: number) {
+  private addBaseboard(
+    wall: ReturnType<typeof getRoomWalls>[number],
+    start: number,
+    end: number,
+    snapshot: PlannerSnapshot
+  ) {
     if (end - start < 0.03) return;
-    const length = end - start;
-    const centre = wallPoint(wall, (start + end) / 2);
-    const depth = 0.026;
     const height = 0.07;
+    // Match the door casing projection exactly: frameDepth is wall thickness +
+    // 12 mm, so its room-side face sits 6 mm proud of the finished wall. A flush
+    // skirting/casing junction reads as one trim system instead of two stacked rails.
+    const casingProjection = 0.012 / 2;
+    const backOffset = WALL_THICKNESS / 2;
+    const frontOffset = backOffset + casingProjection;
+    const back = this.wallSegmentEdgePoints(wall, start, end, backOffset, snapshot);
+    const front = this.wallSegmentEdgePoints(wall, start, end, frontOffset, snapshot);
+    const geometry = new THREE.BufferGeometry();
+    const points = [
+      new THREE.Vector3(back.start.x, 0, back.start.z),
+      new THREE.Vector3(back.end.x, 0, back.end.z),
+      new THREE.Vector3(front.end.x, 0, front.end.z),
+      new THREE.Vector3(front.start.x, 0, front.start.z),
+      new THREE.Vector3(back.start.x, height, back.start.z),
+      new THREE.Vector3(back.end.x, height, back.end.z),
+      new THREE.Vector3(front.end.x, height, front.end.z),
+      new THREE.Vector3(front.start.x, height, front.start.z)
+    ];
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(points.flatMap((point) => [point.x, point.y, point.z]), 3));
+    geometry.setIndex([
+      0, 1, 2, 0, 2, 3,
+      4, 7, 6, 4, 6, 5,
+      0, 4, 5, 0, 5, 1,
+      1, 5, 6, 1, 6, 2,
+      2, 6, 7, 2, 7, 3,
+      3, 7, 4, 3, 4, 0
+    ]);
+    const flatGeometry = geometry.toNonIndexed();
+    geometry.dispose();
+    flatGeometry.computeVertexNormals();
     const mesh = new THREE.Mesh(
-      new THREE.BoxGeometry(length, height, depth),
-      new THREE.MeshStandardMaterial({ color: TRIM_COLOR, roughness: 0.72 })
+      flatGeometry,
+      new THREE.MeshStandardMaterial({ color: TRIM_COLOR, roughness: 0.72, side: THREE.DoubleSide })
     );
-    mesh.rotation.y = this.wallYaw(wall);
-    mesh.position.set(centre.x + wall.inward.x * (0.05 + depth / 2), height / 2, centre.z + wall.inward.z * (0.05 + depth / 2));
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     this.tagCutawaySurface(mesh, wall);
@@ -461,7 +681,7 @@ export class PlannerScene {
     const centre = wallPoint(wall, opening.offset);
 
     const material = (color: THREE.ColorRepresentation, roughness = 0.66) => new THREE.MeshStandardMaterial({ color, roughness });
-    const tag = (mesh: THREE.Object3D) => {
+    const tag = <T extends THREE.Object3D>(mesh: T): T => {
       this.tagCutawaySurface(mesh, wall);
       mesh.userData.openingId = opening.id;
       this.wallsGroup.add(mesh);
@@ -539,7 +759,7 @@ export class PlannerScene {
     const makeDoorPanel = (along: number, width: number, glass = false) => {
       if (glass) {
         glassPanel(along, Math.max(0.08, width - 0.025), 0.045, Math.max(0.12, panelHeight - 0.015), interiorOffset + 0.002);
-        const edge = alignedBox(along, panelHeight / 2, width, panelHeight, 0.028, interiorOffset, 0xf4f4f1);
+        const edge = alignedBox(along, panelHeight / 2, width, panelHeight, 0.028, interiorOffset, 0xf4f4f1) as THREE.Mesh;
         if (edge.material instanceof THREE.MeshStandardMaterial) {
           edge.material.transparent = true;
           edge.material.opacity = 0.22;
@@ -621,7 +841,7 @@ export class PlannerScene {
 
       // Camera/wall transitions are handled visually rather than by moving the camera.
       // This narrow hysteresis zone hides the complete wall assembly while the camera
-      // crosses its 10 cm core, preventing both wall-colour fill and collision jitter.
+      // crosses its structural core, preventing both wall-colour fill and collision jitter.
       const transitionLimit = previousHidden ? 0.16 : 0.075;
       const crossingWall = this.camera.position.y > -0.12
         && this.camera.position.y < snapshot.room.height + 0.22
@@ -632,17 +852,29 @@ export class PlannerScene {
       nextState.set(wall.id, crossingWall || dollhouseCutaway);
     }
 
+    const cutawayChanged = [...nextState.entries()].some(([id, hidden]) => this.wallHiddenState.get(id) !== hidden)
+      || this.wallHiddenState.size !== nextState.size;
     this.wallHiddenState = nextState;
-    this.wallsGroup.traverse((object) => {
+    for (const group of [this.wallsGroup, this.floorGroup]) group.traverse((object) => {
       const wallId = typeof object.userData.cutawayWallId === 'string' ? object.userData.cutawayWallId : null;
-      if (!wallId) return;
-      const hidden = nextState.get(wallId) ?? false;
+      const wallIds = Array.isArray(object.userData.cutawayWallIds)
+        ? object.userData.cutawayWallIds.filter((id: unknown): id is string => typeof id === 'string')
+        : wallId ? [wallId] : [];
+      if (!wallIds.length) return;
+      // A junction belongs to every adjoining wall; hide it whenever one of those
+      // walls is cut away so no white seam is left floating in the dollhouse opening.
+      const hidden = wallIds.some((id) => nextState.get(id) ?? false);
       if (force || object.visible === hidden) object.visible = !hidden;
     });
+    if (cutawayChanged && snapshot.showRoomDimensions) {
+      this.rebuildHelpers(snapshot);
+      this.lastHelperKey = this.helperStateKey(snapshot);
+    }
   }
 
   private syncObjects(snapshot: SceneSnapshot) {
     if (!this.options.showFurniture) {
+      this.outlinePass.selectedObjects = [];
       if (this.objectModels.size) {
         this.disposeGroup(this.objectGroup);
         this.objectModels.clear();
@@ -658,6 +890,7 @@ export class PlannerScene {
       this.objectModels.delete(id);
     }
 
+    let outlined: THREE.Group | null = null;
     for (const object of snapshot.objects) {
       let group = this.objectModels.get(object.id);
       if (!group) {
@@ -669,16 +902,9 @@ export class PlannerScene {
       }
       group.position.set(object.x, 0, object.z);
       group.rotation.y = object.rotationY;
-      const selected = object.id === snapshot.selectedId;
-      group.traverse((node) => {
-        if (!(node instanceof THREE.Mesh)) return;
-        const mat = node.material;
-        if (mat instanceof THREE.MeshStandardMaterial) {
-          mat.emissive.setHex(selected ? 0x10263a : 0x000000);
-          mat.emissiveIntensity = selected ? 0.09 : 0;
-        }
-      });
+      if (object.id === snapshot.selectedId) outlined = group;
     }
+    this.outlinePass.selectedObjects = outlined ? [outlined] : [];
   }
 
   private disposeObject(group: THREE.Group) {
@@ -761,25 +987,79 @@ export class PlannerScene {
     return group;
   }
 
-  private makeLine(points: THREE.Vector3[], color = DIMENSION_COLOR, opacity = 0.82, dashed = false) {
-    const geometry = new THREE.BufferGeometry().setFromPoints(points);
-    const material = dashed
-      ? new THREE.LineDashedMaterial({ color, transparent: opacity < 1, opacity, dashSize: 0.07, gapSize: 0.045 })
-      : new THREE.LineBasicMaterial({ color, transparent: opacity < 1, opacity });
-    const line = new THREE.Line(geometry, material);
+  private lineResolution(material: LineMaterial) {
+    const width = Math.max(1, this.container.clientWidth);
+    const height = Math.max(1, this.container.clientHeight);
+    material.resolution.set(width, height);
+  }
+
+  private makeLine(
+    points: THREE.Vector3[],
+    color = DIMENSION_COLOR,
+    opacity = 0.82,
+    dashed = false,
+    overlay = false,
+    widthPx = 2.0
+  ) {
+    const geometry = new LineGeometry();
+    geometry.setPositions(points.flatMap((point) => [point.x, point.y, point.z]));
+    const material = new LineMaterial({
+      color,
+      linewidth: widthPx,
+      transparent: opacity < 1,
+      opacity,
+      dashed,
+      dashSize: dashed ? 0.07 : 1,
+      gapSize: dashed ? 0.045 : 0,
+      depthTest: !overlay,
+      depthWrite: !overlay,
+      worldUnits: false
+    });
+    this.lineResolution(material);
+    const line = new Line2(geometry, material);
     if (dashed) line.computeLineDistances();
+    if (overlay) line.renderOrder = 24;
     this.helperGroup.add(line);
     return line;
   }
 
-  private makeLocalLine(parent: THREE.Group, points: THREE.Vector3[], color = DIMENSION_COLOR, opacity = 0.82, dashed = false) {
-    const geometry = new THREE.BufferGeometry().setFromPoints(points);
-    const material = dashed
-      ? new THREE.LineDashedMaterial({ color, transparent: opacity < 1, opacity, dashSize: 0.055, gapSize: 0.035 })
-      : new THREE.LineBasicMaterial({ color, transparent: opacity < 1, opacity });
-    const line = new THREE.Line(geometry, material);
+  private makeLocalLine(
+    parent: THREE.Group,
+    points: THREE.Vector3[],
+    color = DIMENSION_COLOR,
+    opacity = 0.82,
+    dashed = false,
+    overlay = false,
+    widthPx = 2.0
+  ) {
+    const geometry = new LineGeometry();
+    geometry.setPositions(points.flatMap((point) => [point.x, point.y, point.z]));
+    const material = new LineMaterial({
+      color,
+      linewidth: widthPx,
+      transparent: opacity < 1,
+      opacity,
+      dashed,
+      dashSize: dashed ? 0.055 : 1,
+      gapSize: dashed ? 0.035 : 0,
+      depthTest: !overlay,
+      depthWrite: !overlay,
+      worldUnits: false
+    });
+    this.lineResolution(material);
+    const line = new Line2(geometry, material);
     if (dashed) line.computeLineDistances();
+    if (overlay) line.renderOrder = 24;
     parent.add(line);
+    return line;
+  }
+
+  private makeLocalMeasurementLine(parent: THREE.Group, points: THREE.Vector3[], widthPx = 2.0) {
+    // Product measurements should read as clean screen-space drafting strokes.
+    // A single antialiased white stroke avoids the chunky/pixelated double-line
+    // effect caused by the old black under-stroke.
+    const line = this.makeLocalLine(parent, points, DIMENSION_WHITE, 0.98, false, true, widthPx);
+    line.renderOrder = 25;
     return line;
   }
 
@@ -789,14 +1069,13 @@ export class PlannerScene {
     canvas.height = 112;
     const ctx = canvas.getContext('2d')!;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    const fg = tone === 'blue' ? '#245f8e' : tone === 'amber' ? '#7a5727' : '#4e5551';
+    const fg = tone === 'blue' ? '#245f8e' : tone === 'amber' ? '#7a5727' : '#55595b';
     ctx.font = '600 40px system-ui, -apple-system, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    // Thin light halo gives drafting text contrast without a pill/badge container.
     ctx.lineJoin = 'round';
-    ctx.strokeStyle = 'rgba(250,250,248,0.92)';
-    ctx.lineWidth = 10;
+    ctx.strokeStyle = 'rgba(242,242,240,0.92)';
+    ctx.lineWidth = 8;
     ctx.strokeText(text, 256, 56);
     ctx.fillStyle = fg;
     ctx.fillText(text, 256, 56);
@@ -804,8 +1083,112 @@ export class PlannerScene {
     texture.colorSpace = THREE.SRGBColorSpace;
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false }));
     sprite.scale.set(scale * 2.0, scale * 0.44, 1);
-    sprite.renderOrder = 20;
+    sprite.renderOrder = 28;
     return sprite;
+  }
+
+  private createArchitecturalDimensionText(text: string, scale = 0.34) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 112;
+    const ctx = canvas.getContext('2d')!;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.font = '600 40px system-ui, -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(245,245,243,0.98)';
+    ctx.lineWidth = 9;
+    ctx.strokeText(text, 256, 56);
+    ctx.fillStyle = '#3f4142';
+    ctx.fillText(text, 256, 56);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false }));
+    sprite.scale.set(scale * 2.0, scale * 0.44, 1);
+    sprite.renderOrder = 30;
+    return sprite;
+  }
+
+  private createDimensionBadge(text: string, height = 0.215) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 320;
+    canvas.height = 96;
+    const ctx = canvas.getContext('2d')!;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.font = '800 37px system-ui, -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const boxWidth = Math.min(294, Math.max(120, Math.ceil(ctx.measureText(text).width + 46)));
+    const boxHeight = 66;
+    const x = (canvas.width - boxWidth) / 2;
+    const y = (canvas.height - boxHeight) / 2;
+    const r = 12;
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + boxWidth - r, y);
+    ctx.quadraticCurveTo(x + boxWidth, y, x + boxWidth, y + r);
+    ctx.lineTo(x + boxWidth, y + boxHeight - r);
+    ctx.quadraticCurveTo(x + boxWidth, y + boxHeight, x + boxWidth - r, y + boxHeight);
+    ctx.lineTo(x + r, y + boxHeight);
+    ctx.quadraticCurveTo(x, y + boxHeight, x, y + boxHeight - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(28,29,28,0.98)';
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 1);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false }));
+    const visibleAspect = boxWidth / boxHeight;
+    sprite.scale.set(height * visibleAspect, height, 1);
+    sprite.renderOrder = 30;
+    return sprite;
+  }
+
+  private annotationLength(metres: number, system: MeasurementSystem) {
+    return system === 'metric' ? `${Math.round(metres * 100)} cm` : formatLength(metres, system);
+  }
+
+
+  private helperStateKey(snapshot: SceneSnapshot) {
+    const selected = snapshot.selectedId ? snapshot.objects.find((object) => object.id === snapshot.selectedId) : undefined;
+    const spacingState = snapshot.showSpacingDimensions && selected
+      ? snapshot.objects.map((object) => [object.id, object.x, object.z, object.rotationY])
+      : null;
+    return JSON.stringify({
+      selectedId: snapshot.selectedId ?? null,
+      selectedProduct: selected?.productId ?? null,
+      showClearance: !!snapshot.showClearance,
+      showRoomDimensions: !!snapshot.showRoomDimensions,
+      showProductDimensions: !!snapshot.showProductDimensions,
+      showSpacingDimensions: !!snapshot.showSpacingDimensions,
+      measurementSystem: snapshot.measurementSystem ?? 'metric',
+      activeSnap: snapshot.activeSnap ?? null,
+      spacingState,
+      roomDimensionState: snapshot.showRoomDimensions || snapshot.showSpacingDimensions ? {
+        height: snapshot.room.height,
+        vertices: snapshot.room.vertices.map((vertex) => [vertex.x, vertex.z]),
+        hidden: snapshot.showRoomDimensions ? [...this.wallHiddenState.entries()] : null
+      } : null
+    });
+  }
+
+  private syncHelperTransforms(snapshot: SceneSnapshot) {
+    const selected = snapshot.selectedId ? snapshot.objects.find((object) => object.id === snapshot.selectedId) : undefined;
+    if (!selected) return;
+    this.helperGroup.children.forEach((object) => {
+      if (object.userData.objectId !== selected.id) return;
+      if (object.userData.helperRole === 'productDimensions') {
+        object.position.set(selected.x, 0, selected.z);
+        object.rotation.y = selected.rotationY;
+      } else if (object.userData.helperRole === 'clearance') {
+        object.position.set(selected.x, 0.014, selected.z);
+        object.rotation.y = selected.rotationY;
+      }
+    });
   }
 
   private rebuildHelpers(snapshot: SceneSnapshot) {
@@ -817,18 +1200,6 @@ export class PlannerScene {
     if (!snapshot.selectedId || !this.options.showFurniture) return;
     const selected = snapshot.objects.find((o) => o.id === snapshot.selectedId);
     if (!selected) return;
-    const p = PRODUCTS[selected.productId];
-
-    // Keep selection feedback distinct from the product dimension wireframe.
-    if (!snapshot.showProductDimensions) {
-      const selection = new THREE.LineSegments(
-        new THREE.EdgesGeometry(new THREE.BoxGeometry(p.width + 0.03, Math.max(0.05, p.height + 0.03), p.depth + 0.03)),
-        new THREE.LineBasicMaterial({ color: SELECTION_COLOR, transparent: true, opacity: 0.72 })
-      );
-      selection.position.set(selected.x, Math.max(0.05, p.height + 0.03) / 2, selected.z);
-      selection.rotation.y = selected.rotationY;
-      this.helperGroup.add(selection);
-    }
 
     if (snapshot.showClearance) this.addClearanceGuide(selected);
     if (snapshot.showProductDimensions) this.addProductDimensions(selected, system);
@@ -841,24 +1212,25 @@ export class PlannerScene {
         this.makeLine([
           new THREE.Vector3(snap.x.value, 0.025, bounds.minZ),
           new THREE.Vector3(snap.x.value, 0.025, bounds.maxZ)
-        ], SELECTION_COLOR, 0.75, true);
+        ], SELECTION_COLOR, 0.72, true, true);
       }
       if (snap.z) {
         this.makeLine([
           new THREE.Vector3(bounds.minX, 0.025, snap.z.value),
           new THREE.Vector3(bounds.maxX, 0.025, snap.z.value)
-        ], SELECTION_COLOR, 0.75, true);
+        ], SELECTION_COLOR, 0.72, true, true);
       }
     }
   }
 
   private addClearanceGuide(selected: PlacedObject) {
     const parent = new THREE.Group();
+    parent.userData.helperRole = 'clearance';
+    parent.userData.objectId = selected.id;
     parent.position.set(selected.x, 0.014, selected.z);
     parent.rotation.y = selected.rotationY;
 
     for (const region of clearanceRegions({ ...selected, x: 0, z: 0, rotationY: 0 })) {
-      // Regions are generated in local orientation here; the parent applies the product rotation once.
       const localCx = region.centre.x;
       const localCz = region.centre.z;
       const geo = new THREE.PlaneGeometry(region.width, region.depth);
@@ -887,30 +1259,33 @@ export class PlannerScene {
   }
 
   private addRoomDimensions(snapshot: SceneSnapshot, system: MeasurementSystem) {
-    const y = snapshot.room.height + 0.18;
     for (const wall of getRoomWalls(snapshot.room)) {
-      const outward = { x: -wall.inward.x, z: -wall.inward.z };
-      const offset = 0.10;
-      const start = new THREE.Vector3(wall.start.x + outward.x * offset, y, wall.start.z + outward.z * offset);
-      const end = new THREE.Vector3(wall.end.x + outward.x * offset, y, wall.end.z + outward.z * offset);
-      const centre = start.clone().add(end).multiplyScalar(0.5);
+      const hidden = this.wallHiddenState.get(wall.id) ?? false;
+      const outward = new THREE.Vector3(-wall.inward.x, 0, -wall.inward.z);
       const tangent = new THREE.Vector3(wall.tangent.x, 0, wall.tangent.z);
-      const gap = Math.min(0.48, wall.length * 0.3);
-      const leftEnd = centre.clone().addScaledVector(tangent, -gap / 2);
-      const rightStart = centre.clone().addScaledVector(tangent, gap / 2);
-      this.makeLine([start, leftEnd], DIMENSION_COLOR, 0.8);
-      this.makeLine([rightStart, end], DIMENSION_COLOR, 0.8);
-      // Extension lines rise from the wall top so the dimensions read above the architecture.
-      this.makeLine([
-        new THREE.Vector3(wall.start.x, snapshot.room.height + 0.025, wall.start.z),
-        start
-      ], DIMENSION_COLOR, 0.54);
-      this.makeLine([
-        new THREE.Vector3(wall.end.x, snapshot.room.height + 0.025, wall.end.z),
-        end
-      ], DIMENSION_COLOR, 0.54);
-      const label = this.createTextSprite(formatLength(wall.length, system), 0.34);
-      label.position.copy(centre).add(new THREE.Vector3(0, 0.075, 0));
+      const offset = hidden ? 0.34 : 0.32;
+      // IKEA's dollhouse dimensions read like a clean architectural annotation:
+      // one offset string, short witness marks and 45° slash ticks. Keeping the
+      // witness marks local to the string avoids the long perspective diagonals
+      // that made the previous version look skewed away from the wall.
+      const dimensionY = hidden ? 0.052 : snapshot.room.height + 0.045;
+      const start = new THREE.Vector3(wall.start.x + outward.x * offset, dimensionY, wall.start.z + outward.z * offset);
+      const end = new THREE.Vector3(wall.end.x + outward.x * offset, dimensionY, wall.end.z + outward.z * offset);
+
+      this.makeLine([start, end], DIMENSION_COLOR, 1, false, true, 2.65);
+      const witness = outward.clone().multiplyScalar(0.082);
+      this.makeLine([start.clone().sub(witness), start.clone().add(witness)], DIMENSION_COLOR, 0.98, false, true, 2.2);
+      this.makeLine([end.clone().sub(witness), end.clone().add(witness)], DIMENSION_COLOR, 0.98, false, true, 2.2);
+
+      const tickDirection = tangent.clone().add(outward).normalize().multiplyScalar(0.064);
+      this.makeLine([start.clone().sub(tickDirection), start.clone().add(tickDirection)], DIMENSION_COLOR, 1, false, true, 2.8);
+      this.makeLine([end.clone().sub(tickDirection), end.clone().add(tickDirection)], DIMENSION_COLOR, 1, false, true, 2.8);
+
+      const centre = start.clone().add(end).multiplyScalar(0.5).add(outward.clone().multiplyScalar(0.038));
+      centre.y += hidden ? 0.052 : 0.062;
+      const label = this.createArchitecturalDimensionText(this.annotationLength(wall.length, system), 0.62);
+      label.position.copy(centre);
+      label.userData.alignToDimensionLine = { start: start.clone(), end: end.clone() };
       this.helperGroup.add(label);
     }
   }
@@ -918,36 +1293,70 @@ export class PlannerScene {
   private addProductDimensions(selected: PlacedObject, system: MeasurementSystem) {
     const p = PRODUCTS[selected.productId];
     const parent = new THREE.Group();
+    parent.userData.helperRole = 'productDimensions';
+    parent.userData.objectId = selected.id;
     parent.position.set(selected.x, 0, selected.z);
     parent.rotation.y = selected.rotationY;
-    const lineColor = 0x2f6f9f;
     const x0 = -p.width / 2;
     const x1 = p.width / 2;
     const z0 = -p.depth / 2;
     const z1 = p.depth / 2;
-    const y = Math.max(0.08, p.height + 0.11);
+    const floorY = 0.028;
+    const widthZ = z1 + 0.16;
+    const depthX = x0 - 0.16;
+    const heightX = x0 - 0.16;
+    const heightZ = z0 - 0.04;
 
-    // Dashed wireframe volume annotation; this replaces (rather than stacks on) the selection box.
-    const box = new THREE.LineSegments(
-      new THREE.EdgesGeometry(new THREE.BoxGeometry(p.width, p.height, p.depth)),
-      new THREE.LineDashedMaterial({ color: lineColor, transparent: true, opacity: 0.66, dashSize: 0.055, gapSize: 0.035 })
-    );
+    // White dashed measurement volume, while the selected product keeps the yellow
+    // screen-space silhouette from OutlinePass.
+    const boxMaterial = new LineMaterial({
+      color: DIMENSION_WHITE,
+      linewidth: 1.9,
+      transparent: true,
+      opacity: 0.98,
+      dashed: true,
+      dashSize: 0.082,
+      gapSize: 0.050,
+      depthTest: false,
+      depthWrite: false,
+      worldUnits: false
+    });
+    this.lineResolution(boxMaterial);
+    const sourceEdges = new THREE.EdgesGeometry(new THREE.BoxGeometry(p.width, p.height, p.depth));
+    const boxGeometry = new LineSegmentsGeometry().fromEdgesGeometry(sourceEdges);
+    sourceEdges.dispose();
+
+    const box = new LineSegments2(boxGeometry, boxMaterial);
     box.computeLineDistances();
     box.position.y = p.height / 2;
+    box.renderOrder = 25;
     parent.add(box);
 
-    this.makeLocalLine(parent, [new THREE.Vector3(x0, y, z1 + 0.12), new THREE.Vector3(x1, y, z1 + 0.12)], lineColor, 0.88, true);
-    this.makeLocalLine(parent, [new THREE.Vector3(x1 + 0.12, y, z0), new THREE.Vector3(x1 + 0.12, y, z1)], lineColor, 0.88, true);
-    this.makeLocalLine(parent, [new THREE.Vector3(x1 + 0.16, 0, z0), new THREE.Vector3(x1 + 0.16, p.height, z0)], lineColor, 0.88, true);
+    const widthA = new THREE.Vector3(x0, floorY, widthZ);
+    const widthB = new THREE.Vector3(x1, floorY, widthZ);
+    const depthA = new THREE.Vector3(depthX, floorY, z0);
+    const depthB = new THREE.Vector3(depthX, floorY, z1);
+    const heightA = new THREE.Vector3(heightX, 0, heightZ);
+    const heightB = new THREE.Vector3(heightX, p.height, heightZ);
 
-    const widthLabel = this.createTextSprite(`W ${formatLength(p.width, system)}`, 0.31, 'blue');
-    widthLabel.position.set(0, y + 0.10, z1 + 0.12);
+    this.makeLocalMeasurementLine(parent, [widthA, widthB], 2.35);
+    this.makeLocalMeasurementLine(parent, [new THREE.Vector3(x0, floorY, z1), widthA], 1.8);
+    this.makeLocalMeasurementLine(parent, [new THREE.Vector3(x1, floorY, z1), widthB], 1.8);
+    this.makeLocalMeasurementLine(parent, [depthA, depthB], 2.35);
+    this.makeLocalMeasurementLine(parent, [new THREE.Vector3(x0, floorY, z0), depthA], 1.8);
+    this.makeLocalMeasurementLine(parent, [new THREE.Vector3(x0, floorY, z1), depthB], 1.8);
+    this.makeLocalMeasurementLine(parent, [heightA, heightB], 2.35);
+    this.makeLocalMeasurementLine(parent, [new THREE.Vector3(x0, 0, z0), heightA], 1.8);
+    this.makeLocalMeasurementLine(parent, [new THREE.Vector3(x0, p.height, z0), heightB], 1.8);
+
+    const widthLabel = this.createDimensionBadge(this.annotationLength(p.width, system), 0.18);
+    widthLabel.position.set(0, 0.16, widthZ + 0.015);
     parent.add(widthLabel);
-    const depthLabel = this.createTextSprite(`D ${formatLength(p.depth, system)}`, 0.31, 'blue');
-    depthLabel.position.set(x1 + 0.12, y + 0.10, 0);
+    const depthLabel = this.createDimensionBadge(this.annotationLength(p.depth, system), 0.18);
+    depthLabel.position.set(depthX - 0.015, 0.16, 0);
     parent.add(depthLabel);
-    const heightLabel = this.createTextSprite(`H ${formatLength(p.height, system)}`, 0.31, 'blue');
-    heightLabel.position.set(x1 + 0.16, p.height / 2, z0);
+    const heightLabel = this.createDimensionBadge(this.annotationLength(p.height, system), 0.18);
+    heightLabel.position.set(heightX - 0.02, p.height / 2, heightZ);
     parent.add(heightLabel);
 
     this.helperGroup.add(parent);
@@ -967,6 +1376,23 @@ export class PlannerScene {
       label.position.y = 0.2;
       this.helperGroup.add(label);
     }
+  }
+
+  private orientDimensionLabels() {
+    const a = new THREE.Vector3();
+    const b = new THREE.Vector3();
+    this.helperGroup.traverse((object) => {
+      if (!(object instanceof THREE.Sprite)) return;
+      const alignment = object.userData.alignToDimensionLine as { start?: THREE.Vector3; end?: THREE.Vector3 } | undefined;
+      if (!alignment?.start || !alignment.end || !(object.material instanceof THREE.SpriteMaterial)) return;
+      a.copy(alignment.start).project(this.camera);
+      b.copy(alignment.end).project(this.camera);
+      let angle = Math.atan2(b.y - a.y, b.x - a.x);
+      // Keep drafting text upright even when the camera crosses to the opposite side.
+      if (angle > Math.PI / 2) angle -= Math.PI;
+      if (angle < -Math.PI / 2) angle += Math.PI;
+      object.material.rotation = angle;
+    });
   }
 
   private findObjectId(object: THREE.Object3D | null): string | null {
@@ -1053,6 +1479,7 @@ export class PlannerScene {
       : { x: 0, z: 0 };
     this.dragging = { id, before, snap: { kind: 'none' }, grabOffset };
     this.controls.enabled = false;
+    this.renderer.domElement.style.cursor = 'grabbing';
     this.renderer.domElement.setPointerCapture?.(event.pointerId);
   };
 
@@ -1108,6 +1535,13 @@ export class PlannerScene {
       this.dragging.snap = freeMove ? { kind: 'none' } : resolved.snap;
       const patch: Partial<PlacedObject> = { x: resolved.x, z: resolved.z };
       if (resolved.rotationY != null && Math.abs(resolved.rotationY - moving.rotationY) > 1e-6) patch.rotationY = resolved.rotationY;
+      // Apply the visual transform immediately. Store/React synchronisation still happens
+      // below, but the mesh no longer waits for another animation frame while dragging.
+      const model = this.objectModels.get(moving.id);
+      if (model) {
+        model.position.set(resolved.x, 0, resolved.z);
+        model.rotation.y = resolved.rotationY ?? moving.rotationY;
+      }
       this.bridge.updateObject(moving.id, patch);
       this.bridge.feedback(
         freeMove ? { kind: 'none', label: 'Free move' } : resolved.snap,
@@ -1125,6 +1559,13 @@ export class PlannerScene {
         this.renderer.domElement.style.cursor = openingId ? 'pointer' : '';
         this.syncOpeningHighlight(this.bridge.getSnapshot());
       }
+      return;
+    }
+
+    if (this.options.interactiveFurniture) {
+      const furnitureHits = this.raycaster.intersectObjects([...this.objectModels.values()], true);
+      const furnitureId = this.findObjectId(furnitureHits[0]?.object ?? null);
+      this.renderer.domElement.style.cursor = furnitureId ? 'move' : '';
     }
   };
 
@@ -1140,6 +1581,7 @@ export class PlannerScene {
     this.bridge.commitDrag(this.dragging.before);
     this.dragging = null;
     this.controls.enabled = true;
+    this.renderer.domElement.style.cursor = '';
     this.bridge.feedback({ kind: 'none' }, null, false);
   };
 
@@ -1149,12 +1591,21 @@ export class PlannerScene {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height, false);
+    this.composer.setSize(width, height);
+    this.helperGroup.traverse((object) => {
+      const material = (object as THREE.Object3D & { material?: THREE.Material | THREE.Material[] }).material;
+      const materials = Array.isArray(material) ? material : material ? [material] : [];
+      materials.forEach((item) => {
+        if (item instanceof LineMaterial) item.resolution.set(width, height);
+      });
+    });
   }
 
   private animate = () => {
     this.controls.update();
     this.updateCutawayWalls();
-    this.renderer.render(this.scene, this.camera);
+    this.orientDimensionLabels();
+    this.composer.render();
     this.animationFrame = requestAnimationFrame(this.animate);
   };
 }

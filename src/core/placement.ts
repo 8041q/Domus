@@ -60,6 +60,10 @@ export interface SpacingMeasurement {
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 const EPS = 1e-7;
+// Room vertices describe the wall centreline. Furniture should stop at the visible
+// interior wall face, not half-way through the 5 cm structural wall. Keep the same
+// 2 mm visual/contact allowance used before the wall thickness change.
+const WALL_FACE_INSET = 0.027;
 
 export function objectAabb(object: PlacedObject, padding = 0) {
   const product = PRODUCTS[object.productId];
@@ -76,16 +80,17 @@ export function objectAabb(object: PlacedObject, padding = 0) {
 
 export function objectsOverlap(a: PlacedObject, b: PlacedObject, padding = 0): boolean {
   if (PRODUCTS[a.productId].collision === false || PRODUCTS[b.productId].collision === false) return false;
-  const aa = objectAabb(a, padding);
-  const bb = objectAabb(b, padding);
-  return aa.minX < bb.maxX && aa.maxX > bb.minX && aa.minZ < bb.maxZ && aa.maxZ > bb.minZ;
+  // Use the actual rotated floor footprints for collision tests. The earlier AABB-only
+  // test created large invisible collision zones whenever an item was rotated.
+  return polygonsOverlap(objectFootprintCorners(a, padding), objectFootprintCorners(b, padding));
 }
 
 type Candidate = SnapAxisFeedback & { distance: number };
 
 function snapDistance(kind: Candidate['kind'], phase: 'enter' | 'exit', override?: number) {
   if (override != null) return override;
-  // Phase 6: snapping is a very light assist. It should confirm an intention, never create one.
+  // Deliberately tiny magnetic thresholds. Keep these values stable: collision
+  // response/dragging is handled separately and must not be faked by a large snap radius.
   const defaults = {
     wall: { enter: 0.018, exit: 0.021 },
     object: { enter: 0.010, exit: 0.013 },
@@ -120,46 +125,247 @@ function makeFeedback(x?: Candidate, z?: Candidate): SnapFeedback {
   return { kind: one.kind, x, z, label: one.label };
 }
 
-function pushOutOfCollisions(candidate: PlacedObject, others: PlacedObject[], room: RoomState, gap: number) {
-  let x = candidate.x;
-  let z = candidate.z;
-  let pushed = false;
-  const size = rotatedFootprint(PRODUCTS[candidate.productId], candidate.rotationY);
+function objectFitsVisibleRoom(candidate: PlacedObject, room: RoomState) {
+  const footprint = objectFootprintCorners(candidate);
+  if (!pointInRoom({ x: candidate.x, z: candidate.z }, room) || !footprint.every((point) => pointInRoom(point, room))) return false;
 
-  for (let pass = 0; pass < 5; pass += 1) {
-    const current = { ...candidate, x, z };
-    const hit = others.find((o) => objectsOverlap(current, o, gap));
-    if (!hit) break;
+  // Room vertices are wall centrelines, while furniture collides with the visible
+  // interior finish. Enforce that face offset only for walls whose finite segment
+  // overlaps the footprint; this also behaves sensibly around concave room shapes.
+  for (const wall of getRoomWalls(room)) {
+    const along = (candidate.x - wall.start.x) * wall.tangent.x + (candidate.z - wall.start.z) * wall.tangent.z;
+    const halfAlong = supportAlong(candidate, wall.tangent);
+    if (along < -halfAlong || along > wall.length + halfAlong) continue;
+    const signedCentre = (candidate.x - wall.start.x) * wall.inward.x + (candidate.z - wall.start.z) * wall.inward.z;
+    const required = supportAlong(candidate, wall.inward) + WALL_FACE_INSET;
+    if (signedCentre < required - 0.0015) return false;
+  }
+  return true;
+}
 
-    const a = objectAabb(current, gap);
-    const b = objectAabb(hit, gap);
-    const shifts = [
-      { axis: 'x' as const, delta: b.minX - a.maxX },
-      { axis: 'x' as const, delta: b.maxX - a.minX },
-      { axis: 'z' as const, delta: b.minZ - a.maxZ },
-      { axis: 'z' as const, delta: b.maxZ - a.minZ }
-    ].sort((p, q) => Math.abs(p.delta) - Math.abs(q.delta));
+function placementValid(candidate: PlacedObject, room: RoomState, others: PlacedObject[], gap: number, allowOverlap = false) {
+  if (!objectFitsVisibleRoom(candidate, room)) return false;
+  if (allowOverlap) return true;
+  return !others.some((other) => objectsOverlap(candidate, other, gap));
+}
 
-    let applied = false;
-    for (const shift of shifts) {
-      const nx = shift.axis === 'x' ? x + shift.delta : x;
-      const nz = shift.axis === 'z' ? z + shift.delta : z;
-      if (!rectFitsRoom(room, nx, nz, size.width, size.depth)) continue;
-      x = nx;
-      z = nz;
-      pushed = true;
-      applied = true;
-      break;
+interface SweepResult {
+  x: number;
+  z: number;
+  blocked: boolean;
+  hit?: PlacedObject;
+  roomBlocked?: boolean;
+}
+
+/**
+ * Move from the object's current position toward a target without tunnelling.
+ * The old resolver teleported an overlapping AABB to whichever side happened to
+ * need the smallest correction. At pointer speed that could look like the item
+ * froze and then reappeared beyond a wall/object. This sweep always advances from
+ * the last visible position, so contact is continuous.
+ */
+function sweepToTarget(
+  moving: PlacedObject,
+  target: Vec2,
+  room: RoomState,
+  others: PlacedObject[],
+  gap: number,
+  allowOverlap: boolean
+): SweepResult {
+  const dx = target.x - moving.x;
+  const dz = target.z - moving.z;
+  const distance = Math.hypot(dx, dz);
+  if (distance < EPS) return { x: moving.x, z: moving.z, blocked: false };
+
+  // Sampling prevents a fast pointer from crossing a thin obstacle in one event.
+  const steps = Math.max(1, Math.ceil(distance / 0.025));
+  let last = { x: moving.x, z: moving.z };
+  for (let step = 1; step <= steps; step += 1) {
+    const t = step / steps;
+    const probe = { ...moving, x: moving.x + dx * t, z: moving.z + dz * t };
+    if (placementValid(probe, room, others, gap, allowOverlap)) {
+      last = { x: probe.x, z: probe.z };
+      continue;
     }
-    if (!applied) break;
+
+    // Refine the first contact within this small segment.
+    let low = (step - 1) / steps;
+    let high = t;
+    for (let i = 0; i < 12; i += 1) {
+      const mid = (low + high) / 2;
+      const candidate = { ...moving, x: moving.x + dx * mid, z: moving.z + dz * mid };
+      if (placementValid(candidate, room, others, gap, allowOverlap)) low = mid;
+      else high = mid;
+    }
+    const contact = { ...moving, x: moving.x + dx * low, z: moving.z + dz * low };
+    const blockedProbe = { ...moving, x: moving.x + dx * high, z: moving.z + dz * high };
+    const hit = allowOverlap ? undefined : others.find((other) => objectsOverlap(blockedProbe, other, gap));
+    const roomBlocked = !objectFitsVisibleRoom(blockedProbe, room);
+    return { x: contact.x, z: contact.z, blocked: true, hit, roomBlocked };
+  }
+  return { x: last.x, z: last.z, blocked: false };
+}
+
+function projectionInterval(points: Vec2[], axis: Vec2) {
+  const values = points.map((point) => point.x * axis.x + point.z * axis.z);
+  return { min: Math.min(...values), max: Math.max(...values) };
+}
+
+function collisionNormal(a: PlacedObject, b: PlacedObject, padding: number): Vec2 | null {
+  const pa = objectFootprintCorners(a, padding);
+  const pb = objectFootprintCorners(b, padding);
+  let bestAxis: Vec2 | null = null;
+  let bestOverlap = Infinity;
+  for (const points of [pa, pb]) {
+    for (let i = 0; i < points.length; i += 1) {
+      const p = points[i];
+      const q = points[(i + 1) % points.length];
+      const dx = q.x - p.x;
+      const dz = q.z - p.z;
+      const length = Math.hypot(dx, dz) || 1;
+      const axis = { x: -dz / length, z: dx / length };
+      const aa = projectionInterval(pa, axis);
+      const bb = projectionInterval(pb, axis);
+      const overlap = Math.min(aa.max, bb.max) - Math.max(aa.min, bb.min);
+      if (overlap <= 0) return null;
+      if (overlap < bestOverlap) {
+        bestOverlap = overlap;
+        bestAxis = axis;
+      }
+    }
+  }
+  if (!bestAxis) return null;
+  const towardsA = { x: a.x - b.x, z: a.z - b.z };
+  if (bestAxis.x * towardsA.x + bestAxis.z * towardsA.z < 0) {
+    bestAxis = { x: -bestAxis.x, z: -bestAxis.z };
+  }
+  return bestAxis;
+}
+
+function supportAlong(object: PlacedObject, normal: Vec2) {
+  const product = PRODUCTS[object.productId];
+  const xAxis = rotatePoint(1, 0, object.rotationY);
+  const zAxis = rotatePoint(0, 1, object.rotationY);
+  return Math.abs(xAxis.x * normal.x + xAxis.z * normal.z) * product.width / 2
+    + Math.abs(zAxis.x * normal.x + zAxis.z * normal.z) * product.depth / 2;
+}
+
+function nearestContactWall(object: PlacedObject, room: RoomState, extra = 0.04) {
+  let best: { wall: ReturnType<typeof getRoomWalls>[number]; gap: number } | null = null;
+  for (const wall of getRoomWalls(room)) {
+    const along = (object.x - wall.start.x) * wall.tangent.x + (object.z - wall.start.z) * wall.tangent.z;
+    const halfAlong = supportAlong(object, wall.tangent);
+    if (along < -halfAlong - 0.08 || along > wall.length + halfAlong + 0.08) continue;
+    const signedCentre = (object.x - wall.start.x) * wall.inward.x + (object.z - wall.start.z) * wall.inward.z;
+    const gap = signedCentre - supportAlong(object, wall.inward) - WALL_FACE_INSET;
+    if (gap > extra) continue;
+    if (!best || gap < best.gap) best = { wall, gap };
+  }
+  return best;
+}
+
+function angleDelta(from: number, to: number) {
+  let delta = normalizeAngle(to) - normalizeAngle(from);
+  if (delta > Math.PI) delta -= Math.PI * 2;
+  if (delta < -Math.PI) delta += Math.PI * 2;
+  return delta;
+}
+
+function rotateToward(from: number, to: number, maxStep: number) {
+  const delta = angleDelta(from, to);
+  if (Math.abs(delta) <= maxStep) return normalizeAngle(to);
+  return normalizeAngle(from + Math.sign(delta) * maxStep);
+}
+
+/**
+ * Wall-affinity is contact behaviour, not a large magnetic snap. A sofa that is
+ * pushed into a wall gradually pivots until its back is flush, while its centre
+ * continues to track the pointer tangentially. This mirrors the reference video
+ * and keeps the actual wall snap threshold at 18 mm.
+ */
+function contactAlignedObject(moving: PlacedObject, rawX: number, rawZ: number, room: RoomState) {
+  const product = PRODUCTS[moving.productId];
+  if (!product.wallAffinity) return moving;
+  const dx = rawX - moving.x;
+  const dz = rawZ - moving.z;
+  const rawProbe = { ...moving, x: rawX, z: rawZ };
+  const currentContact = nearestContactWall(moving, room, 0.025);
+  const currentNear = nearestContactWall(moving, room, 0.12);
+  const targetContact = nearestContactWall(rawProbe, room, 0.025);
+  // Do not rotate an item merely because the pointer jumped to the far side of a
+  // wall in one event. First sweep it to actual contact; subsequent events pivot it.
+  const contact = currentContact
+    ?? (currentNear && targetContact?.wall.id === currentNear.wall.id ? currentNear : null);
+  if (!contact) return moving;
+
+  const approach = dx * contact.wall.inward.x + dz * contact.wall.inward.z;
+  // Pivot while pressing into the wall or sliding along it. Pulling away should
+  // immediately release the contact instead of continuing to rotate by itself.
+  if (approach > 0.004) return moving;
+
+  const targetRotation = normalizeAngle(Math.atan2(contact.wall.inward.x, contact.wall.inward.z));
+  const travel = Math.hypot(dx, dz);
+  const maxStep = clamp(0.035 + travel * 0.55, 0.035, 0.12);
+  const nextRotation = rotateToward(moving.rotationY, targetRotation, maxStep);
+  if (Math.abs(angleDelta(moving.rotationY, nextRotation)) < 1e-6) return moving;
+
+  const beforeSupport = supportAlong(moving, contact.wall.inward);
+  const rotated = { ...moving, rotationY: nextRotation };
+  const afterSupport = supportAlong(rotated, contact.wall.inward);
+  const shift = Math.max(0, afterSupport - beforeSupport);
+  const adjusted = {
+    ...rotated,
+    x: rotated.x + contact.wall.inward.x * shift,
+    z: rotated.z + contact.wall.inward.z * shift
+  };
+  return objectFitsVisibleRoom(adjusted, room) ? adjusted : moving;
+}
+
+function moveWithCollisionSlide(
+  moving: PlacedObject,
+  target: Vec2,
+  room: RoomState,
+  others: PlacedObject[],
+  gap: number,
+  allowOverlap: boolean
+) {
+  const first = sweepToTarget(moving, target, room, others, gap, allowOverlap);
+  if (!first.blocked) return { x: first.x, z: first.z, pushed: false, colliding: false };
+
+  const contactObject = { ...moving, x: first.x, z: first.z };
+  const remaining = { x: target.x - first.x, z: target.z - first.z };
+  let tangent: Vec2 | null = null;
+
+  if (first.hit && !allowOverlap) {
+    const probeDistance = Math.hypot(remaining.x, remaining.z) || 1;
+    const probe = {
+      ...contactObject,
+      x: first.x + remaining.x / probeDistance * 0.004,
+      z: first.z + remaining.z / probeDistance * 0.004
+    };
+    const normal = collisionNormal(probe, first.hit, gap) ?? {
+      x: first.x - first.hit.x,
+      z: first.z - first.hit.z
+    };
+    const nLen = Math.hypot(normal.x, normal.z) || 1;
+    tangent = { x: -normal.z / nLen, z: normal.x / nLen };
+  } else if (first.roomBlocked) {
+    const wallContact = nearestContactWall(contactObject, room, 0.12);
+    if (wallContact) tangent = wallContact.wall.tangent;
   }
 
-  const finalObject = { ...candidate, x, z };
+  if (!tangent) return { x: first.x, z: first.z, pushed: true, colliding: true };
+  const tangentialAmount = remaining.x * tangent.x + remaining.z * tangent.z;
+  const slideTarget = {
+    x: first.x + tangent.x * tangentialAmount,
+    z: first.z + tangent.z * tangentialAmount
+  };
+  const second = sweepToTarget(contactObject, slideTarget, room, others, gap, allowOverlap);
   return {
-    x,
-    z,
-    pushed,
-    colliding: others.some((o) => objectsOverlap(finalObject, o, gap))
+    x: second.x,
+    z: second.z,
+    pushed: true,
+    colliding: second.blocked
   };
 }
 
@@ -178,12 +384,12 @@ function addWallSnapCandidates(
     if (Math.abs(wall.tangent.x) > 0.995) {
       const projection = (x - wall.start.x) * wall.tangent.x + (z - wall.start.z) * wall.tangent.z;
       if (projection < halfW - 0.04 || projection > wall.length - halfW + 0.04) continue;
-      const value = wall.start.z + wall.inward.z * halfD;
+      const value = wall.start.z + wall.inward.z * (halfD + WALL_FACE_INSET);
       zCandidates.push({ kind: 'wall', targetId: wall.id, axis: 'z', value, distance: Math.abs(z - value), label: 'Wall' });
     } else if (Math.abs(wall.tangent.z) > 0.995) {
       const projection = (x - wall.start.x) * wall.tangent.x + (z - wall.start.z) * wall.tangent.z;
       if (projection < halfD - 0.04 || projection > wall.length - halfD + 0.04) continue;
-      const value = wall.start.x + wall.inward.x * halfW;
+      const value = wall.start.x + wall.inward.x * (halfW + WALL_FACE_INSET);
       xCandidates.push({ kind: 'wall', targetId: wall.id, axis: 'x', value, distance: Math.abs(x - value), label: 'Wall' });
     }
   }
@@ -194,42 +400,7 @@ function normalizeAngle(angle: number) {
   return ((angle % tau) + tau) % tau;
 }
 
-function angleDelta(a: number, b: number) {
-  const d = Math.abs(normalizeAngle(a) - normalizeAngle(b));
-  return Math.min(d, Math.PI * 2 - d);
-}
 
-/**
- * Spatial wall snapping is deliberately conservative: only wall-affinity products,
- * already roughly facing the wall, are auto-aligned. This prevents the planner from
- * rotating furniture merely because it passed near a wall.
- */
-function spatialWallAlignment(moving: PlacedObject, rawX: number, rawZ: number, room: RoomState) {
-  const product = PRODUCTS[moving.productId];
-  if (!product.wallAffinity) return null;
-  let best: { wallId: string; rotationY: number; x: number; z: number; distance: number } | null = null;
-
-  for (const wall of getRoomWalls(room)) {
-    // Product local +Z is its front. Point the front into the room, leaving its back against the wall.
-    const targetRotation = normalizeAngle(Math.atan2(wall.inward.x, wall.inward.z));
-    if (angleDelta(moving.rotationY, targetRotation) > Math.PI / 15) continue; // ~12°: user intent must already be clear.
-
-    const halfDepth = product.depth / 2;
-    const halfAlong = product.width / 2;
-    const rawProjection = (rawX - wall.start.x) * wall.tangent.x + (rawZ - wall.start.z) * wall.tangent.z;
-    const along = clamp(rawProjection, halfAlong, Math.max(halfAlong, wall.length - halfAlong));
-    if (wall.length < product.width - 0.02) continue;
-    const onWall = wallPoint(wall, along);
-    const target = {
-      x: onWall.x + wall.inward.x * halfDepth,
-      z: onWall.z + wall.inward.z * halfDepth
-    };
-    const distance = Math.hypot(rawX - target.x, rawZ - target.z);
-    if (distance > 0.014) continue;
-    if (!best || distance < best.distance) best = { wallId: wall.id, rotationY: targetRotation, x: target.x, z: target.z, distance };
-  }
-  return best;
-}
 
 export function resolvePlacement(
   moving: PlacedObject,
@@ -241,19 +412,14 @@ export function resolvePlacement(
 ): PlacementResult {
   const enter = options.enterSnapDistance;
   const exit = options.exitSnapDistance;
-  const collisionGap = options.collisionGap ?? 0.012;
+  const collisionGap = options.collisionGap ?? 0.001;
+  const allowOverlap = options.allowOverlap ?? false;
 
-  let working = moving;
-  let spatialWallId: string | undefined;
-  if (options.spatialWallSnap !== false && enter !== 0) {
-    const alignment = spatialWallAlignment(moving, rawX, rawZ, room);
-    if (alignment) {
-      working = { ...moving, rotationY: alignment.rotationY };
-      rawX = alignment.x;
-      rawZ = alignment.z;
-      spatialWallId = alignment.wallId;
-    }
-  }
+  // Contact rotation is intentionally separate from magnetic snapping. It only
+  // activates when a wall-affinity item physically meets a wall.
+  const working = options.spatialWallSnap === false || enter === 0
+    ? moving
+    : contactAlignedObject(moving, rawX, rawZ, room);
 
   const product = PRODUCTS[working.productId];
   const size = rotatedFootprint(product, working.rotationY);
@@ -261,8 +427,18 @@ export function resolvePlacement(
   const halfD = size.depth / 2;
   const bounds = roomBounds(room.vertices);
 
-  let x = clamp(rawX, bounds.minX + halfW, bounds.maxX - halfW);
-  let z = clamp(rawZ, bounds.minZ + halfD, bounds.maxZ - halfD);
+  // Start from the last visible object position and sweep to the pointer. This is
+  // what makes collision response glide instead of teleporting across obstacles.
+  const moved = moveWithCollisionSlide(
+    working,
+    { x: rawX, z: rawZ },
+    room,
+    others,
+    collisionGap,
+    allowOverlap
+  );
+  let x = moved.x;
+  let z = moved.z;
 
   const centreX = (bounds.minX + bounds.maxX) / 2;
   const centreZ = (bounds.minZ + bounds.maxZ) / 2;
@@ -296,28 +472,27 @@ export function resolvePlacement(
 
   const xSnap = chooseAxisSnap(options.previousSnap?.x, xCandidates, enter, exit);
   const zSnap = chooseAxisSnap(options.previousSnap?.z, zCandidates, enter, exit);
-  if (xSnap) x = xSnap.value;
-  if (zSnap) z = zSnap.value;
+  const snapTarget = { x: xSnap?.value ?? x, z: zSnap?.value ?? z };
 
-  const inside = projectRectInsideRoom(room, size.width, size.depth, { x: moving.x, z: moving.z }, { x, z });
-  x = inside.x;
-  z = inside.z;
+  // Snaps are only millimetres away, but still run through the same continuous
+  // solver so snapping can never pull a product through another product/wall.
+  const snapped = (xSnap || zSnap) && enter !== 0
+    ? moveWithCollisionSlide({ ...working, x, z }, snapTarget, room, others, collisionGap, allowOverlap)
+    : { x, z, pushed: false, colliding: false };
+  x = snapped.x;
+  z = snapped.z;
 
-  const collisionProbe = { ...working, x, z };
-  const pushed = options.allowOverlap
-    ? { x, z, pushed: false, colliding: others.some((other) => objectsOverlap(collisionProbe, other, collisionGap)) }
-    : pushOutOfCollisions(collisionProbe, others, room, collisionGap);
-  const finalXSnap = xSnap && Math.abs(pushed.x - xSnap.value) <= 0.008 ? xSnap : undefined;
-  const finalZSnap = zSnap && Math.abs(pushed.z - zSnap.value) <= 0.008 ? zSnap : undefined;
-  let snap = makeFeedback(finalXSnap, finalZSnap);
-  if (spatialWallId) snap = { kind: 'wall', label: 'Wall aligned' };
+  const finalXSnap = xSnap && Math.abs(x - xSnap.value) <= 0.003 ? xSnap : undefined;
+  const finalZSnap = zSnap && Math.abs(z - zSnap.value) <= 0.003 ? zSnap : undefined;
+  const snap = makeFeedback(finalXSnap, finalZSnap);
+  const finalObject = { ...working, x, z };
 
   return {
-    x: pushed.x,
-    z: pushed.z,
+    x,
+    z,
     rotationY: working.rotationY,
-    colliding: pushed.colliding,
-    pushedByCollision: pushed.pushed,
+    colliding: allowOverlap ? others.some((other) => objectsOverlap(finalObject, other, collisionGap)) : moved.colliding || snapped.colliding,
+    pushedByCollision: moved.pushed || snapped.pushed,
     snap
   };
 }
