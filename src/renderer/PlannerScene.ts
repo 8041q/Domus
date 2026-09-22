@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { OutlinePass } from 'three/examples/jsm/postprocessing/OutlinePass.js';
@@ -11,10 +12,11 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { PRODUCTS } from '../core/products';
+import { floorFinishDefinition, type FloorFinishDefinition } from '../core/roomFinishes';
 import { clearanceRegions, resolvePlacement, spacingMeasurements } from '../core/placement';
 import { getRoomWalls, roomBounds, wallPoint, wallProjectionDistance } from '../core/roomGeometry';
 import { formatLength } from '../core/units';
-import type { FurnishCameraView, MeasurementSystem, PlannerSnapshot, PlacedObject, RoomOpening, SnapFeedback, Vec2 } from '../core/types';
+import type { FloorFinish, FurnishCameraView, MeasurementSystem, PlannerSnapshot, PlacedObject, RoomOpening, SnapFeedback, Vec2 } from '../core/types';
 
 export interface SceneSnapshot extends PlannerSnapshot {
   selectedId?: string | null;
@@ -43,13 +45,6 @@ interface SceneOptions {
   interactiveArchitecture: boolean;
 }
 
-const FLOOR_COLORS: Record<string, number> = {
-  'light-oak': 0xd7cfbf,
-  'warm-oak': 0xa98766,
-  stone: 0xb9bab8,
-  concrete: 0x858992
-};
-
 const DIMENSION_COLOR = 0x4a4a4a;
 const SELECTION_COLOR = 0xffd800;
 const DIMENSION_WHITE = 0xffffff;
@@ -59,6 +54,27 @@ const JUNCTION_COLOR = 0xffffff;
 const WALL_THICKNESS = 0.05;
 const FLOOR_THICKNESS = WALL_THICKNESS;
 const CEILING_THICKNESS = WALL_THICKNESS;
+
+type DomusExportCategory = 'Walls' | 'Floors' | 'Frames' | 'Ceiling' | 'Furniture';
+
+interface DomusExportSource {
+  object: THREE.Object3D;
+  logicalRoot: boolean;
+}
+
+interface LoadedFloorMaps {
+  color: THREE.Texture | null;
+  normal: THREE.Texture | null;
+  roughness: THREE.Texture | null;
+}
+
+interface DomusExportItem {
+  category: DomusExportCategory;
+  id: string;
+  name: string;
+  rotationY: number;
+  sources: DomusExportSource[];
+}
 
 export class PlannerScene {
   private scene = new THREE.Scene();
@@ -88,6 +104,13 @@ export class PlannerScene {
   private environmentTexture: THREE.Texture | null = null;
   private mainLight: THREE.DirectionalLight;
   private wallHiddenState = new Map<string, boolean>();
+  private floorTextureReady: Promise<void> = Promise.resolve();
+  private floorMaterial: THREE.MeshStandardMaterial | null = null;
+  private floorFinishRequest = 0;
+  private lastFloorFinish: FloorFinish | null = null;
+  private floorMapCache = new Map<FloorFinish, Promise<LoadedFloorMaps>>();
+  private floorMapResults = new Map<FloorFinish, LoadedFloorMaps>();
+  private floorMapAssets = new Set<THREE.Texture>();
 
   constructor(private container: HTMLElement, private bridge: SceneBridge, private options: SceneOptions) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
@@ -173,6 +196,10 @@ export class PlannerScene {
     this.disposeGroup(this.ceilingGroup);
     this.disposeGroup(this.objectGroup);
     this.disposeGroup(this.helperGroup);
+    for (const texture of this.floorMapAssets) texture.dispose();
+    this.floorMapAssets.clear();
+    this.floorMapCache.clear();
+    this.floorMapResults.clear();
     this.outlinePass.dispose();
     this.composer.dispose();
     this.environmentTexture?.dispose();
@@ -182,6 +209,334 @@ export class PlannerScene {
 
   resetCamera() {
     this.setCameraView('perspective');
+  }
+
+  /**
+   * Attach semantic export metadata to one complete logical item. The object's
+   * hierarchy is preserved (important for sofas/models made from many parts).
+   */
+  private tagExportRoot<T extends THREE.Object3D>(
+    object: T,
+    category: DomusExportCategory,
+    itemId: string,
+    itemName: string
+  ): T {
+    object.userData.domusExportCategory = category;
+    object.userData.domusExportItemId = itemId;
+    object.userData.domusExportItemName = itemName;
+    object.userData.domusExportRoot = true;
+    return object;
+  }
+
+  /**
+   * Attach one piece of a logical export item. Multiple meshes carrying the same
+   * category + item id are gathered below one centred parent in the GLB.
+   */
+  private tagExportPart<T extends THREE.Object3D>(
+    object: T,
+    category: DomusExportCategory,
+    itemId: string,
+    itemName: string,
+    rotationY = 0
+  ): T {
+    object.userData.domusExportCategory = category;
+    object.userData.domusExportItemId = itemId;
+    object.userData.domusExportItemName = itemName;
+    object.userData.domusExportRotationY = rotationY;
+    object.userData.domusExportRoot = false;
+    return object;
+  }
+
+  private collectExportItems(): DomusExportItem[] {
+    const items = new Map<string, DomusExportItem>();
+    const registrations: Array<{ root: THREE.Group; fallbackCategory: DomusExportCategory }> = [
+      { root: this.floorGroup, fallbackCategory: 'Floors' },
+      { root: this.wallsGroup, fallbackCategory: 'Walls' },
+      { root: this.ceilingGroup, fallbackCategory: 'Ceiling' },
+      { root: this.objectGroup, fallbackCategory: 'Furniture' }
+    ];
+
+    const add = (
+      object: THREE.Object3D,
+      category: DomusExportCategory,
+      id: string,
+      name: string,
+      logicalRoot: boolean,
+      rotationY = 0
+    ) => {
+      const key = `${category}:${id}`;
+      let item = items.get(key);
+      if (!item) {
+        item = { category, id, name, rotationY, sources: [] };
+        items.set(key, item);
+      }
+      item.sources.push({ object, logicalRoot });
+    };
+
+    for (const { root, fallbackCategory } of registrations) {
+      root.updateMatrixWorld(true);
+      for (const child of root.children) {
+        const category = child.userData.domusExportCategory as DomusExportCategory | undefined;
+        const itemId = typeof child.userData.domusExportItemId === 'string' ? child.userData.domusExportItemId : undefined;
+        const itemName = typeof child.userData.domusExportItemName === 'string' ? child.userData.domusExportItemName : undefined;
+        if (category && itemId) {
+          add(
+            child,
+            category,
+            itemId,
+            itemName || child.name || itemId,
+            child.userData.domusExportRoot === true,
+            typeof child.userData.domusExportRotationY === 'number' ? child.userData.domusExportRotationY : 0
+          );
+          continue;
+        }
+
+        // Future-proof default: any new logical direct child added to one of the
+        // physical scene groups is exported automatically. For example, a future
+        // LightFixture group added to ceilingGroup appears under Ceiling without
+        // changing exportGLB(). Explicit metadata is only needed when several
+        // separate scene meshes must be gathered as one logical item.
+        add(
+          child,
+          fallbackCategory,
+          child.uuid,
+          child.name || `${fallbackCategory} Item`,
+          true,
+          0
+        );
+      }
+    }
+
+    return [...items.values()];
+  }
+
+  private exportableWorldBounds(sources: DomusExportSource[]) {
+    const bounds = new THREE.Box3();
+    const temp = new THREE.Box3();
+    let hasGeometry = false;
+
+    for (const { object } of sources) {
+      object.updateWorldMatrix(true, true);
+      object.traverse((node) => {
+        if (node.userData.invisiblePick || !(node instanceof THREE.Mesh)) return;
+        const geometry = node.geometry;
+        if (!geometry.boundingBox) geometry.computeBoundingBox();
+        if (!geometry.boundingBox) return;
+        temp.copy(geometry.boundingBox).applyMatrix4(node.matrixWorld);
+        if (temp.isEmpty()) return;
+        bounds.union(temp);
+        hasGeometry = true;
+      });
+    }
+
+    if (hasGeometry) return bounds;
+
+    // A future punctual light can be a valid glTF node without fixture geometry.
+    // In that case its own world position is the most useful pivot.
+    const centre = new THREE.Vector3();
+    const point = new THREE.Vector3();
+    for (const { object } of sources) centre.add(object.getWorldPosition(point));
+    if (sources.length) centre.multiplyScalar(1 / sources.length);
+    bounds.set(centre, centre);
+    return bounds;
+  }
+
+  private prepareExportClone(root: THREE.Object3D) {
+    const remove: THREE.Object3D[] = [];
+    root.traverse((object) => {
+      if (object.userData.invisiblePick) {
+        remove.push(object);
+        return;
+      }
+
+      // Keep useful semantic ids, but strip viewport/export implementation details
+      // from glTF extras.
+      delete object.userData.cutawayWallId;
+      delete object.userData.cutawayOutwardX;
+      delete object.userData.cutawayOutwardZ;
+      delete object.userData.domusExportCategory;
+      delete object.userData.domusExportItemId;
+      delete object.userData.domusExportItemName;
+      delete object.userData.domusExportRotationY;
+      delete object.userData.domusExportRoot;
+      delete object.userData.invisiblePick;
+
+      if (!(object instanceof THREE.Mesh)) return;
+
+      // Object3D.clone() shares geometries/materials. Export clones get independent
+      // copies because we re-centre their origins and clear UI highlight materials.
+      object.geometry = object.geometry.clone();
+      object.material = Array.isArray(object.material)
+        ? object.material.map((material) => material.clone())
+        : object.material.clone();
+
+      if (typeof object.userData.openingId === 'string') {
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        for (const material of materials) {
+          if (material instanceof THREE.MeshStandardMaterial || material instanceof THREE.MeshPhysicalMaterial) {
+            material.emissive.setHex(0x000000);
+            material.emissiveIntensity = 0;
+          }
+        }
+      }
+    });
+
+    for (const object of remove) object.parent?.remove(object);
+  }
+
+  /**
+   * Re-centre leaf mesh geometry around each mesh node's own origin without moving
+   * it in world space. Logical item parents are centred separately below.
+   */
+  private centreExportMeshOrigins(root: THREE.Object3D) {
+    const offset = new THREE.Vector3();
+    const translation = new THREE.Matrix4();
+    const adjusted = new THREE.Matrix4();
+
+    root.traverse((object) => {
+      if (!(object instanceof THREE.Mesh) || object instanceof THREE.SkinnedMesh || object.children.length) return;
+      if (Object.keys(object.geometry.morphAttributes).length) return;
+      object.geometry.computeBoundingBox();
+      const bounds = object.geometry.boundingBox;
+      if (!bounds || bounds.isEmpty()) return;
+      bounds.getCenter(offset);
+      if (offset.lengthSq() < 1e-12) return;
+
+      object.geometry.translate(-offset.x, -offset.y, -offset.z);
+      object.updateMatrix();
+      translation.makeTranslation(offset.x, offset.y, offset.z);
+      adjusted.copy(object.matrix).multiply(translation);
+      adjusted.decompose(object.position, object.quaternion, object.scale);
+      object.matrixAutoUpdate = true;
+    });
+  }
+
+  private buildExportItem(item: DomusExportItem) {
+    const bounds = this.exportableWorldBounds(item.sources);
+    const centre = bounds.getCenter(new THREE.Vector3());
+    const itemRoot = new THREE.Group();
+    itemRoot.name = item.name;
+    itemRoot.userData.domusCategory = item.category;
+    itemRoot.userData.domusItemId = item.id;
+
+    // A single logical model (furniture / future light fixture) keeps its complete
+    // world orientation at the new centred parent. Multi-piece architectural items
+    // use the wall-aligned yaw stored by their builders.
+    if (item.sources.length === 1 && item.sources[0].logicalRoot) {
+      item.sources[0].object.getWorldQuaternion(itemRoot.quaternion);
+    } else {
+      itemRoot.rotation.y = item.rotationY;
+    }
+    itemRoot.position.copy(centre);
+    itemRoot.updateMatrixWorld(true);
+    const inverseItemMatrix = itemRoot.matrixWorld.clone().invert();
+
+    let partIndex = 0;
+    const addCloneAtWorldTransform = (source: THREE.Object3D, preferredName?: string) => {
+      if (source.userData.invisiblePick) return;
+      source.updateWorldMatrix(true, true);
+      const clone = source.clone(true);
+      this.prepareExportClone(clone);
+
+      // Preserve the source's exact world-space appearance while changing its parent
+      // to the item's new centred pivot.
+      const localMatrix = inverseItemMatrix.clone().multiply(source.matrixWorld);
+      localMatrix.decompose(clone.position, clone.quaternion, clone.scale);
+      clone.matrixAutoUpdate = true;
+      if (preferredName) clone.name = preferredName;
+      else if (!clone.name) clone.name = `${item.name} Part ${++partIndex}`;
+      itemRoot.add(clone);
+    };
+
+    for (const { object, logicalRoot } of item.sources) {
+      if (object.userData.invisiblePick) continue;
+      object.updateWorldMatrix(true, true);
+
+      if (logicalRoot && object instanceof THREE.Group) {
+        // The centred item parent replaces the source model's outer group. This gives
+        // Blender the useful hierarchy Furniture > Sofa > cushion/legs rather than
+        // Furniture > Sofa > Sofa > cushion/legs, while retaining every nested part.
+        for (const child of object.children) addCloneAtWorldTransform(child);
+        for (const key of ['objectId', 'productId']) {
+          if (object.userData[key] !== undefined) itemRoot.userData[key] = object.userData[key];
+        }
+      } else {
+        const preferredName = logicalRoot && object.name === item.name
+          ? `${item.name} Geometry`
+          : undefined;
+        addCloneAtWorldTransform(object, preferredName);
+      }
+    }
+
+    this.centreExportMeshOrigins(itemRoot);
+    itemRoot.updateMatrixWorld(true);
+
+    let hasContent = false;
+    let unnamedMeshIndex = 0;
+    itemRoot.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        hasContent = true;
+        if (!object.name) object.name = `${item.name} Part ${++unnamedMeshIndex}`;
+      } else if (object instanceof THREE.Light) {
+        hasContent = true;
+      }
+    });
+    return hasContent ? itemRoot : null;
+  }
+
+  async exportGLB(filename = 'domus-room.glb') {
+    // Give the active finish maps a chance to arrive before GLTFExporter serialises
+    // the floor material. Failed requests resolve too, so export never hangs offline.
+    await this.floorTextureReady;
+    // Export semantic data, not the current dollhouse view. Camera cutaways,
+    // dimensions, selection outlines and other helper/UI state are never part of
+    // this export tree.
+    const exportRoot = new THREE.Group();
+    exportRoot.name = 'DomusRoom';
+    exportRoot.userData.domusFormatVersion = 2;
+    exportRoot.userData.units = 'meters';
+
+    const categories = new Map<DomusExportCategory, THREE.Group>();
+    const categoryOrder: DomusExportCategory[] = ['Walls', 'Floors', 'Frames', 'Ceiling', 'Furniture'];
+    for (const name of categoryOrder) {
+      const group = new THREE.Group();
+      group.name = name;
+      group.userData.domusCategory = name;
+      categories.set(name, group);
+      exportRoot.add(group);
+    }
+
+    for (const item of this.collectExportItems()) {
+      if (item.category === 'Furniture' && !this.options.showFurniture) continue;
+      const node = this.buildExportItem(item);
+      if (node) categories.get(item.category)?.add(node);
+    }
+
+    // Keep stable top-level categories, but do not clutter Blender with an empty
+    // Furniture node in architecture-only views.
+    for (const [name, group] of categories) {
+      if (!group.children.length && name === 'Furniture') exportRoot.remove(group);
+    }
+
+    exportRoot.updateMatrixWorld(true);
+    const exporter = new GLTFExporter();
+    const result = await exporter.parseAsync(exportRoot, {
+      binary: true,
+      onlyVisible: false,
+      // Explicit TRS nodes make Blender's object origins/transforms easy to inspect.
+      trs: true
+    });
+    if (!(result instanceof ArrayBuffer)) throw new Error('GLB export did not return binary data.');
+
+    const blob = new Blob([result], { type: 'model/gltf-binary' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
   }
 
   setCameraView(view: FurnishCameraView) {
@@ -227,15 +582,23 @@ export class PlannerScene {
 
   renderFromState() {
     const snapshot = this.bridge.getSnapshot();
-    const roomKey = JSON.stringify(snapshot.room);
+    const { floorFinish, ...roomWithoutFloorFinish } = snapshot.room;
+    const roomKey = JSON.stringify(roomWithoutFloorFinish);
     const openingsKey = JSON.stringify(snapshot.openings);
     if (roomKey !== this.lastRoomKey) {
       this.rebuildRoom(snapshot);
       this.lastRoomKey = roomKey;
+      this.lastFloorFinish = floorFinish;
       this.lastOpeningsKey = openingsKey;
       const bounds = roomBounds(snapshot.room.vertices);
       this.controls.target.set((bounds.minX + bounds.maxX) / 2, Math.min(0.95, snapshot.room.height * 0.38), (bounds.minZ + bounds.maxZ) / 2);
       this.updateShadowBounds(snapshot);
+    } else if (floorFinish !== this.lastFloorFinish) {
+      // Finish changes are deliberately decoupled from geometry rebuilds. Keep the
+      // current floor visible until every map for the requested finish has settled,
+      // then replace the material channels atomically in one frame.
+      this.requestFloorFinish(floorFinish);
+      this.lastFloorFinish = floorFinish;
     } else if (openingsKey !== this.lastOpeningsKey) {
       this.rebuildWalls(snapshot);
       this.lastOpeningsKey = openingsKey;
@@ -271,6 +634,19 @@ export class PlannerScene {
   }
 
   private disposeGroup(group: THREE.Group) {
+    const disposedTextures = new Set<THREE.Texture>();
+    const disposeMaterial = (material: THREE.Material) => {
+      // Floor finishes and annotation sprites own their textures. Dispose every
+      // texture reference once so changing finishes repeatedly does not leak GPU memory.
+      for (const value of Object.values(material)) {
+        if (value instanceof THREE.Texture && !disposedTextures.has(value)) {
+          disposedTextures.add(value);
+          value.dispose();
+        }
+      }
+      material.dispose();
+    };
+
     group.traverse((obj) => {
       const renderable = obj as THREE.Object3D & {
         geometry?: THREE.BufferGeometry;
@@ -278,14 +654,8 @@ export class PlannerScene {
       };
       renderable.geometry?.dispose();
       const material = renderable.material;
-      if (Array.isArray(material)) material.forEach((m) => {
-        if (m instanceof THREE.SpriteMaterial) m.map?.dispose();
-        m.dispose();
-      });
-      else if (material) {
-        if (material instanceof THREE.SpriteMaterial) material.map?.dispose();
-        material.dispose();
-      }
+      if (Array.isArray(material)) material.forEach(disposeMaterial);
+      else if (material) disposeMaterial(material);
     });
     group.clear();
   }
@@ -345,8 +715,17 @@ export class PlannerScene {
   ) {
     const count = Math.min(topVertices.length, bottomVertices.length);
     const positions: number[] = [];
-    for (let i = 0; i < count; i += 1) positions.push(topVertices[i].x, topY, topVertices[i].z);
-    for (let i = 0; i < count; i += 1) positions.push(bottomVertices[i].x, bottomY, bottomVertices[i].z);
+    const uvs: number[] = [];
+    // World-space planar UVs: one UV unit equals one metre. This keeps finish
+    // scale stable across rooms and also makes the texture mapping portable in glTF.
+    for (let i = 0; i < count; i += 1) {
+      positions.push(topVertices[i].x, topY, topVertices[i].z);
+      uvs.push(topVertices[i].x, topVertices[i].z);
+    }
+    for (let i = 0; i < count; i += 1) {
+      positions.push(bottomVertices[i].x, bottomY, bottomVertices[i].z);
+      uvs.push(bottomVertices[i].x, bottomVertices[i].z);
+    }
 
     const indices: number[] = [];
     const topContour = topVertices.slice(0, count).map((v) => new THREE.Vector2(v.x, v.z));
@@ -369,6 +748,7 @@ export class PlannerScene {
 
     const indexed = new THREE.BufferGeometry();
     indexed.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    indexed.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
     indexed.setIndex(indices);
     indexed.addGroup(topStart, topCount, topMaterialIndex);
     indexed.addGroup(bottomStart, bottomCount, bottomMaterialIndex);
@@ -392,6 +772,166 @@ export class PlannerScene {
     return geometry;
   }
 
+  /** Configure one loaded map at the material's documented physical tile size. */
+  private configureFloorMap(texture: THREE.Texture, name: string, textureWidthMetres: number, srgb: boolean) {
+    texture.name = name;
+    texture.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    const repeatsPerMetre = 1 / Math.max(0.1, textureWidthMetres);
+    texture.repeat.set(repeatsPerMetre, repeatsPerMetre);
+    texture.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+    texture.needsUpdate = true;
+    return texture;
+  }
+
+  /**
+   * Carpet011 has useful real fibre detail but its albedo is warm. This derives a
+   * neutral charcoal base-colour from that CC0 photograph while preserving the
+   * photographed pile variation. Normal and roughness maps remain untouched.
+   */
+  private makeDarkGreyCarpetTexture(source: THREE.Texture) {
+    const image = source.image as CanvasImageSource & { width?: number; height?: number; naturalWidth?: number; naturalHeight?: number };
+    const width = image.naturalWidth || image.width || 0;
+    const height = image.naturalHeight || image.height || 0;
+    if (!width || !height) return source;
+
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      if (!context) return source;
+      context.drawImage(image, 0, 0, width, height);
+      const pixels = context.getImageData(0, 0, width, height);
+      const data = pixels.data;
+      for (let index = 0; index < data.length; index += 4) {
+        const luminance = data[index] * 0.2126 + data[index + 1] * 0.7152 + data[index + 2] * 0.0722;
+        // Keep a little range in the fibres, but move the whole material into a
+        // dark neutral grey instead of multiplying the original beige/brown hue.
+        const grey = Math.max(48, Math.min(116, 40 + luminance * 0.34));
+        data[index] = grey * 0.94;
+        data[index + 1] = grey * 0.98;
+        data[index + 2] = grey;
+      }
+      context.putImageData(pixels, 0, 0);
+      const graded = new THREE.CanvasTexture(canvas);
+      source.dispose();
+      return graded;
+    } catch {
+      // A texture host without canvas-readable CORS data still gets the original
+      // CC0 colour map instead of breaking the finish load.
+      return source;
+    }
+  }
+
+  private async loadFloorMap(url: string, name: string, textureWidthMetres: number, srgb: boolean) {
+    const loader = new THREE.TextureLoader();
+    loader.setCrossOrigin('anonymous');
+    try {
+      const texture = await loader.loadAsync(url);
+      this.floorMapAssets.add(texture);
+      return this.configureFloorMap(texture, name, textureWidthMetres, srgb);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Load each finish once; scene rebuilds clone the already-loaded images instantly. */
+  private loadFloorFinishMaps(definition: FloorFinishDefinition) {
+    const cached = this.floorMapCache.get(definition.id);
+    if (cached) return cached;
+
+    const load = Promise.all([
+      this.loadFloorMap(definition.maps.color, `${definition.name} Base Color`, definition.textureWidthMetres, true),
+      this.loadFloorMap(definition.maps.normal, `${definition.name} Normal`, definition.textureWidthMetres, false),
+      this.loadFloorMap(definition.maps.roughness, `${definition.name} Roughness`, definition.textureWidthMetres, false)
+    ]).then(([loadedColor, normal, roughness]) => {
+      let color = loadedColor;
+      if (color && definition.colorTreatment === 'dark-grey-carpet') {
+        const treated = this.makeDarkGreyCarpetTexture(color);
+        if (treated !== color) {
+          this.floorMapAssets.delete(color);
+          color = this.configureFloorMap(treated, `${definition.name} Base Color`, definition.textureWidthMetres, true);
+          this.floorMapAssets.add(color);
+        }
+      }
+      const maps = { color, normal, roughness };
+      this.floorMapResults.set(definition.id, maps);
+      return maps;
+    });
+    this.floorMapCache.set(definition.id, load);
+    return load;
+  }
+
+  private cloneFloorMap(texture: THREE.Texture | null) {
+    if (!texture) return null;
+    const clone = texture.clone();
+    clone.needsUpdate = true;
+    return clone;
+  }
+
+  private disposeFloorMaterialMaps(material: THREE.MeshStandardMaterial) {
+    const maps = [material.map, material.normalMap, material.roughnessMap];
+    for (const texture of maps) texture?.dispose();
+    material.map = null;
+    material.normalMap = null;
+    material.roughnessMap = null;
+  }
+
+  private applyFloorMaps(material: THREE.MeshStandardMaterial, definition: FloorFinishDefinition, maps: LoadedFloorMaps) {
+    this.disposeFloorMaterialMaps(material);
+    material.map = this.cloneFloorMap(maps.color);
+    material.normalMap = this.cloneFloorMap(maps.normal);
+    material.roughnessMap = this.cloneFloorMap(maps.roughness);
+    material.color.set(maps.color ? 0xffffff : definition.fallbackColor);
+    material.normalScale.set(definition.normalScale, definition.normalScale);
+    material.roughness = maps.roughness ? 1 : definition.fallbackRoughness;
+    material.metalness = 0;
+    material.envMapIntensity = definition.envMapIntensity;
+    material.name = `Floor - ${definition.name}`;
+    material.needsUpdate = true;
+  }
+
+  private createFloorMaterial(definition: FloorFinishDefinition) {
+    const material = new THREE.MeshStandardMaterial({
+      color: definition.fallbackColor,
+      roughness: definition.fallbackRoughness,
+      metalness: 0,
+      envMapIntensity: definition.envMapIntensity,
+      side: THREE.DoubleSide
+    });
+    material.normalScale.set(definition.normalScale, definition.normalScale);
+    material.name = `Floor - ${definition.name}`;
+    this.floorMaterial = material;
+
+    // If this finish has already loaded once, room edits can rebuild the slab with
+    // its full PBR material synchronously—no colour/blank flash while dragging walls.
+    const cached = this.floorMapResults.get(definition.id);
+    if (cached) this.applyFloorMaps(material, definition, cached);
+    else this.requestFloorFinish(definition.id, material);
+    return material;
+  }
+
+  private requestFloorFinish(finish: FloorFinish, target = this.floorMaterial) {
+    if (!target) return;
+    const definition = floorFinishDefinition(finish);
+    const request = ++this.floorFinishRequest;
+    const cached = this.floorMapResults.get(finish);
+    if (cached) {
+      this.applyFloorMaps(target, definition, cached);
+      this.floorTextureReady = Promise.resolve();
+      return;
+    }
+
+    // Crucially, do not clear or replace the current material here. During a user
+    // selection the old finish stays rendered until all three new channels settle.
+    this.floorTextureReady = this.loadFloorFinishMaps(definition).then((maps) => {
+      if (request !== this.floorFinishRequest || this.floorMaterial !== target) return;
+      this.applyFloorMaps(target, definition, maps);
+    });
+  }
+
   private rebuildRoom(snapshot: PlannerSnapshot) {
     this.disposeGroup(this.floorGroup);
     this.disposeGroup(this.wallsGroup);
@@ -399,6 +939,8 @@ export class PlannerScene {
     this.wallHiddenState.clear();
     const { floorFinish } = snapshot.room;
     const halfWall = WALL_THICKNESS / 2;
+    const floorDefinition = floorFinishDefinition(floorFinish);
+    const floorMaterial = this.createFloorMaterial(floorDefinition);
 
     // The floor is one physical mitered panel. The finish is now the top material
     // of that same geometry rather than a second coplanar mesh; this removes the
@@ -417,12 +959,7 @@ export class PlannerScene {
       ),
       [
         new THREE.MeshStandardMaterial({ color: TRIM_COLOR, roughness: 0.82, side: THREE.DoubleSide }),
-        new THREE.MeshStandardMaterial({
-          color: FLOOR_COLORS[floorFinish] ?? FLOOR_COLORS['light-oak'],
-          roughness: 0.84,
-          metalness: 0,
-          side: THREE.DoubleSide
-        }),
+        floorMaterial,
         // The miter reveal is an architectural graphic edge, not a lit finish.
         // Keep it pure white regardless of environment lighting or shadows.
         new THREE.MeshBasicMaterial({ color: JUNCTION_COLOR, side: THREE.DoubleSide, toneMapped: false })
@@ -430,6 +967,8 @@ export class PlannerScene {
     );
     slab.receiveShadow = true;
     slab.castShadow = true;
+    slab.name = 'Floor';
+    this.tagExportRoot(slab, 'Floors', 'floor', 'Floor');
     this.floorGroup.add(slab);
 
     this.rebuildWalls(snapshot);
@@ -469,6 +1008,8 @@ export class PlannerScene {
     );
     ceiling.castShadow = true;
     ceiling.receiveShadow = true;
+    ceiling.name = 'Ceiling';
+    this.tagExportRoot(ceiling, 'Ceiling', 'ceiling', 'Ceiling');
     this.ceilingGroup.add(ceiling);
     this.updateCeilingVisibility();
   }
@@ -617,7 +1158,9 @@ export class PlannerScene {
     );
     body.receiveShadow = true;
     body.castShadow = true;
+    body.name = `Wall ${wall.index + 1} Segment`;
     this.tagCutawaySurface(body, wall);
+    this.tagExportPart(body, 'Walls', wall.id, `Wall ${wall.index + 1}`, this.wallYaw(wall));
     this.wallsGroup.add(body);
   }
 
@@ -666,7 +1209,9 @@ export class PlannerScene {
     );
     mesh.castShadow = true;
     mesh.receiveShadow = true;
+    mesh.name = `Baseboard ${wall.index + 1} Segment`;
     this.tagCutawaySurface(mesh, wall);
+    this.tagExportPart(mesh, 'Floors', `baseboard:${wall.id}`, `Baseboard ${wall.index + 1}`, this.wallYaw(wall));
     this.wallsGroup.add(mesh);
   }
 
@@ -679,11 +1224,16 @@ export class PlannerScene {
     const top = Math.min(snapshot.room.height, bottom + opening.height);
     const yaw = this.wallYaw(wall);
     const centre = wallPoint(wall, opening.offset);
+    const typeLabel = opening.type === 'window' ? 'Window' : opening.type === 'door' ? 'Door' : 'Opening';
+    const typeIndex = snapshot.openings.filter((candidate) => candidate.type === opening.type).findIndex((candidate) => candidate.id === opening.id) + 1;
+    const exportName = `${typeLabel} ${Math.max(1, typeIndex)}`;
 
     const material = (color: THREE.ColorRepresentation, roughness = 0.66) => new THREE.MeshStandardMaterial({ color, roughness });
     const tag = <T extends THREE.Object3D>(mesh: T): T => {
       this.tagCutawaySurface(mesh, wall);
       mesh.userData.openingId = opening.id;
+      mesh.name = mesh.name || `${exportName} Part`;
+      this.tagExportPart(mesh, 'Frames', opening.id, exportName, yaw);
       this.wallsGroup.add(mesh);
       return mesh;
     };
@@ -895,7 +1445,11 @@ export class PlannerScene {
       let group = this.objectModels.get(object.id);
       if (!group) {
         group = this.createPlaceholderModel(object.productId);
+        const product = PRODUCTS[object.productId];
+        group.name = product.name;
         group.userData.objectId = object.id;
+        group.userData.productId = object.productId;
+        this.tagExportRoot(group, 'Furniture', object.id, product.name);
         group.traverse((node) => { node.userData.objectId = object.id; });
         this.objectModels.set(object.id, group);
         this.objectGroup.add(group);

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { PlannerScene } from './renderer/PlannerScene';
 import type { FurnishCameraView } from './core/types';
 import { getSnapshot, usePlannerStore } from './store';
@@ -7,15 +7,31 @@ export function Viewport3D({
   furniture = true,
   interactive = true,
   architectureInteractive = false,
-  view
+  view,
+  exportable = false
 }: {
   furniture?: boolean;
   interactive?: boolean;
   architectureInteractive?: boolean;
   view?: FurnishCameraView;
+  exportable?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<PlannerScene | null>(null);
+  const [exporting, setExporting] = useState(false);
+
+  const exportGLB = async () => {
+    if (!sceneRef.current || exporting) return;
+    setExporting(true);
+    try {
+      await sceneRef.current.exportGLB();
+    } catch (error) {
+      console.error('Failed to export GLB', error);
+      window.alert('Could not export the room. See the browser console for details.');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   useEffect(() => {
     if (!ref.current) return;
@@ -63,9 +79,16 @@ export function Viewport3D({
   return (
     <div className="viewport-stage">
       <div className="viewport" ref={ref} />
-      <button className="floating-view-button" type="button" onClick={() => view ? sceneRef.current?.setCameraView(view) : sceneRef.current?.resetCamera()} aria-label="Reset 3D view">
-        Reset view
-      </button>
+      <div className="floating-view-actions">
+        {exportable && (
+          <button className="floating-view-button" type="button" onClick={exportGLB} disabled={exporting}>
+            {exporting ? 'Exporting…' : 'Export GLB'}
+          </button>
+        )}
+        <button className="floating-view-button" type="button" onClick={() => view ? sceneRef.current?.setCameraView(view) : sceneRef.current?.resetCamera()} aria-label="Reset 3D view">
+          Reset view
+        </button>
+      </div>
     </div>
   );
 }

@@ -151,4 +151,68 @@ npm run build
 - Geometry checks confirm a wall can move into negative world coordinates without rebasing the rest of the room.
 - Centered wall resizing preserves the wall midpoint.
 - All 14 TS/TSX files pass TypeScript syntax/transpile validation.
-- The final React/Three dependency-resolved build still requires `npm install`; package-registry access is not available in this environment.
+- The supplied dependency bundle was used to run a full TypeScript + Vite production build successfully after the GLB export changes.
+
+## Blender / GLB export organization
+
+`Export GLB` now builds a semantic export scene rather than serializing the live dollhouse view.
+Camera cutaways and `helperGroup` UI are therefore irrelevant to the output.
+
+The portable glTF hierarchy is:
+
+```text
+DomusRoom
+├── Walls
+│   ├── Wall 1
+│   ├── Wall 2
+│   └── ...
+├── Floors
+│   ├── Floor
+│   ├── Baseboard 1
+│   └── ...
+├── Frames
+│   ├── Window 1
+│   ├── Door 1
+│   └── ...
+├── Ceiling
+│   └── Ceiling
+└── Furniture
+    ├── 3-seat sofa
+    └── ...
+```
+
+Every logical item receives a centred parent pivot. Leaf static meshes are also re-centred safely where possible, while multipart model hierarchy is preserved. The parent contains `domusCategory` and `domusItemId` glTF extras so downstream tools can retain semantic identity.
+
+### Future models and ceiling lights
+
+The exporter automatically includes new direct children added to the physical scene groups:
+
+- `floorGroup` -> `Floors`
+- `wallsGroup` -> `Walls` unless explicitly tagged as another semantic category
+- `ceilingGroup` -> `Ceiling`
+- `objectGroup` -> `Furniture`
+
+A future ceiling-light fixture implemented as one `THREE.Group` under `ceilingGroup` will therefore export automatically as one multipart item. When several independent scene meshes should be treated as one logical item (as happens with wall segments, baseboard runs, and window/door frame parts), tag them with `tagExportPart`. Complete model groups can use `tagExportRoot`.
+
+
+## Floor finish assets
+
+The floor finish picker uses real PBR texture sets rather than generated canvas patterns. The persisted finish ids remain unchanged for snapshot compatibility, but the visible choices are **Wood floor**, **Floating floor**, **Dark grey carpet**, and **Vinyl**.
+
+Each finish defines a base-colour map, OpenGL normal map, roughness map, physical texture width, source link and matte fallback in `src/core/roomFinishes.ts`. `PlannerScene` maps those textures with metre-based UVs, so changing the room dimensions does not stretch the flooring. The currently loaded maps are also used by `GLTFExporter`, keeping the Blender handoff on standard PBR material channels. Normal strength and planner environment intensity are tuned per material so the normal/roughness response reads clearly instead of every floor appearing polished.
+
+Finish loading is atomic. Selecting another finish leaves the currently rendered floor untouched until the requested base-colour, normal and roughness maps have all settled, then swaps the channels together. On the very first load a matte representative fallback is shown immediately, never an empty/uninitialised texture. Successfully loaded texture sets are cached, so editing room geometry does not cause repeated texture flashes.
+
+The wood, laminate and vinyl sets are CC0 assets from Poly Haven. The dark carpet keeps ambientCG Carpet 011's CC0 fibre/normal/roughness data and derives a neutral charcoal base colour from its photographic albedo. Source/licence metadata stays alongside each finish definition in code.
+
+## Builder plan annotation layout
+
+Builder measurements deliberately use separate visual lanes: wall length/name labels start outside the room, while the `+` split-wall controls start inside. Wall-label placement is collision-aware and scored by actual screen travel rather than a rigid horizontal-then-vertical order. Horizontal motion remains slightly cheaper, but a substantially shorter vertical or diagonal move can win. This keeps compact recesses readable without sending a label far away simply to preserve one axis.
+
+Moved labels use a subtle leader line back to the wall. Those leaders are now part of layout geometry: a candidate is rejected when its connector would cross an already placed connector, run through another label/annotation, or when its label box would cut an existing connector. Connectors attach to the nearest edge of the label rather than its centre. In an extreme layout where no legal connector exists, the connector is omitted instead of drawing crossed lines.
+
+Wall-label rectangles are also a hard non-overlap constraint. The layout searches the full usable viewport rather than falling back to an overlapping local candidate, and its collision rectangle is based on the measured two-line text size plus padding. If an exceptionally small viewport has literally no legal text slot, that one measurement is omitted rather than drawn over another label.
+
+Corner handles, interior-angle text and the natural split-button positions are treated as layout blockers. Split controls then get their own collision pass, also avoid committed leader lines, and can move deeper into the room (with only a small along-wall adjustment as a last resort); hit testing uses the final drawn position. This prevents the `+` affordance and wall/angle text from occupying the same pixels in tight edge cases.
+
+The room area is no longer painted into the top-left corner of the plan. It lives in the builder toolbar beside the 2D/3D control, so it cannot collide with walls or corner angles. Split-wall controls use one shared adaptive visibility rule for drawing and hit testing; they remain available on shorter walls than before, but still hide when there is not enough screen space between the two corner handles.

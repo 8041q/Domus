@@ -4,7 +4,8 @@ import { PRODUCT_LIST, PRODUCTS } from './core/products';
 import { clearanceIssues } from './core/placement';
 import { polygonArea } from './core/roomGeometry';
 import { formatArea, formatLength } from './core/units';
-import type { FloorFinish, FurnishCameraView, ProductCategory } from './core/types';
+import type { FurnishCameraView, ProductCategory } from './core/types';
+import { FLOOR_FINISHES, WALL_FINISHES } from './core/roomFinishes';
 import { getSnapshot, usePlannerStore } from './store';
 
 const CATEGORIES: Array<'All' | ProductCategory> = ['All', 'Seating', 'Tables', 'Storage', 'Decor'];
@@ -16,20 +17,6 @@ const VIEW_PRESETS: Array<{ id: FurnishCameraView; label: string }> = [
   { id: 'back', label: 'Back' },
   { id: 'left', label: 'Left' }
 ];
-const WALL_SWATCHES = [
-  { name: 'Soft grey', value: '#dddddb' },
-  { name: 'Warm white', value: '#f1f0ed' },
-  { name: 'Soft beige', value: '#d8d0c5' },
-  { name: 'Sage', value: '#bcc3b5' },
-  { name: 'Mist blue', value: '#bcc8cd' }
-];
-const FLOORS: Array<{ id: FloorFinish; name: string }> = [
-  { id: 'light-oak', name: 'Light oak' },
-  { id: 'warm-oak', name: 'Warm oak' },
-  { id: 'stone', name: 'Stone' },
-  { id: 'concrete', name: 'Concrete' }
-];
-
 function ProductGlyph({ productId }: { productId: string }) {
   return <div className={`product-glyph glyph-${productId}`} aria-hidden="true"><span /><i /></div>;
 }
@@ -156,7 +143,7 @@ function FinishesPanel({ onClose }: { onClose: () => void }) {
       <div className="finish-panel-heading"><div><span className="eyebrow">Room</span><h2>Finishes</h2></div><button type="button" onClick={onClose} aria-label="Close finishes">×</button></div>
       <span className="sub-label">Wall colour</span>
       <div className="swatch-row">
-        {WALL_SWATCHES.map((swatch) => (
+        {WALL_FINISHES.map((swatch) => (
           <button
             key={swatch.value}
             type="button"
@@ -170,9 +157,19 @@ function FinishesPanel({ onClose }: { onClose: () => void }) {
       </div>
       <span className="sub-label floor-label">Floor</span>
       <div className="floor-options">
-        {FLOORS.map((floor) => (
-          <button key={floor.id} type="button" className={`floor-option floor-${floor.id} ${room.floorFinish === floor.id ? 'selected' : ''}`} onClick={() => updateRoom({ floorFinish: floor.id })}>
-            <span />{floor.name}
+        {FLOOR_FINISHES.map((floor) => (
+          <button
+            key={floor.id}
+            type="button"
+            className={`floor-option ${room.floorFinish === floor.id ? 'selected' : ''}`}
+            title={floor.source}
+            onClick={() => updateRoom({ floorFinish: floor.id })}
+          >
+            <span style={{
+              backgroundImage: `url(${floor.previewUrl})`,
+              backgroundColor: floor.fallbackColor,
+              filter: floor.colorTreatment === 'dark-grey-carpet' ? 'grayscale(1) brightness(.48) contrast(1.12)' : undefined
+            }} />{floor.name}
           </button>
         ))}
       </div>
@@ -259,7 +256,7 @@ export function FurnishRoom() {
         </div>
 
         <div className="designer-stage">
-          <Viewport3D furniture interactive view={furnishView} />
+          <Viewport3D furniture interactive view={furnishView} exportable />
           {showFinishes && <FinishesPanel onClose={() => setShowFinishes(false)} />}
           {selectedId && <SelectionPanel />}
         </div>

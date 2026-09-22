@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
 import { Plan2D } from './Plan2D';
 import { Viewport3D } from './Viewport3D';
-import { getRoomWalls, getWall } from './core/roomGeometry';
-import { dimensionStepMetres, displayLengthValue, displayValueToMetres, formatLength, lengthInputSuffix } from './core/units';
+import { getRoomWalls, getWall, polygonArea } from './core/roomGeometry';
+import { dimensionStepMetres, displayLengthValue, displayValueToMetres, formatArea, formatLength, lengthInputSuffix } from './core/units';
 import type { MeasurementSystem, OpeningVariant, RoomOpening, RoomShapeKind } from './core/types';
 import { getSnapshot, usePlannerStore } from './store';
 
@@ -291,6 +291,7 @@ export function BuildRoom() {
   const selectOpening = usePlannerStore((s) => s.selectOpening);
   const setMode = usePlannerStore((s) => s.setMode);
   const selectedOpening = openings.find((o) => o.id === selectedOpeningId) ?? null;
+  const roomArea = Math.abs(polygonArea(room.vertices));
 
   const changeShape = (shape: Exclude<RoomShapeKind, 'custom'>) => {
     if (shape === room.shapeKind) return;
@@ -373,9 +374,12 @@ export function BuildRoom() {
             <strong>{buildView === 'plan' ? 'Floor plan' : '3D preview'}</strong>
             <span>{buildView === 'plan' ? 'Drag corners freely for angled walls, or move labelled wall segments' : 'Orbit the room, then drag doors, windows and wall openings directly on their walls'}</span>
           </div>
-          <div className="segmented-control" role="group" aria-label="Room builder view">
-            <button className={buildView === 'plan' ? 'active' : ''} onClick={() => setBuildView('plan')}>2D plan</button>
-            <button className={buildView === '3d' ? 'active' : ''} onClick={() => setBuildView('3d')}>3D</button>
+          <div className="workspace-toolbar-actions">
+            <span className="workspace-area-badge"><small>Room area</small><strong>{formatArea(roomArea, system)}</strong></span>
+            <div className="segmented-control" role="group" aria-label="Room builder view">
+              <button className={buildView === 'plan' ? 'active' : ''} onClick={() => setBuildView('plan')}>2D plan</button>
+              <button className={buildView === '3d' ? 'active' : ''} onClick={() => setBuildView('3d')}>3D</button>
+            </div>
           </div>
         </div>
         <div className="workspace-content">

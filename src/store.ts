@@ -91,8 +91,8 @@ const defaultRoom: RoomState = {
   width: 5.2,
   depth: 3.8,
   height: 2.6,
-  wallColor: '#dddddb',
-  floorFinish: 'concrete',
+  wallColor: '#eeeae1',
+  floorFinish: 'light-oak',
   shapeKind: 'rectangle',
   vertices: initialVertices
 };
