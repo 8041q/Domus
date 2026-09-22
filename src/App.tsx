@@ -41,7 +41,7 @@ export default function App() {
       <header className="app-header">
         <div className="brand-block">
           <div className="brand-mark">S</div>
-          <div><strong>Space Studio</strong><span>Room planner prototype</span></div>
+          <div><strong>Domus</strong><span>Room planner prototype</span></div>
         </div>
 
         <nav className="mode-stepper" aria-label="Design steps">

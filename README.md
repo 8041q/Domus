@@ -1,4 +1,4 @@
-# Space Studio - Room Planner Prototype
+# Domus - Room Planner Prototype
 
 TypeScript-first browser room planner with two focused workflows:
 
