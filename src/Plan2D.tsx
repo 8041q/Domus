@@ -15,6 +15,7 @@ import {
 import { formatLength } from './core/units';
 import type { PlannerSnapshot, RoomOpening, SnapFeedback } from './core/types';
 import { getSnapshot, usePlannerStore } from './store';
+import { themeColor, themeMetric, themeRgba } from './theme';
 
 const PAD = 64;
 
@@ -30,16 +31,13 @@ type DragState =
 
 type HoverTarget = { type: 'wall' | 'corner' | 'opening' | 'split'; id: string } | null;
 
-const HOVER_CYAN = '#facc15';
-const ACTIVE_YELLOW = '#eab308';
-const SOFT_YELLOW = '#fef3c7';
 
 type RoomWall = ReturnType<typeof getRoomWalls>[number];
 type LabelRect = { x: number; y: number; width: number; height: number };
 type ScreenPoint = { x: number; y: number };
 type LeaderSegment = { start: ScreenPoint; end: ScreenPoint };
 
-const WALL_LABEL_HEIGHT = 32;
+const WALL_LABEL_HEIGHT = themeMetric('builder-wall-label-height-px');
 const WALL_LABEL_MARGIN = 8;
 const WALL_LABEL_PADDING = 8;
 const SPLIT_MIN_WALL_METRES = 0.62;
@@ -251,6 +249,10 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
     canvas.height = Math.max(1, Math.round(rect.height * dpr));
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    const interaction = themeColor('interaction');
+    const interactionStrong = themeColor('interaction-strong');
+    const interactionSoft = themeColor('interaction-soft');
+    const dimensionText = themeColor('dimension-text');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, rect.width, rect.height);
 
@@ -313,8 +315,8 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
       ctx.save();
       ctx.setLineDash([6, 5]);
       ctx.lineWidth = 1.5;
-      ctx.strokeStyle = '#c28c3d';
-      ctx.fillStyle = 'rgba(194, 140, 61, 0.07)';
+      ctx.strokeStyle = themeColor('clearance-edge');
+      ctx.fillStyle = themeRgba('clearance-fill', 0.11);
       const x = ox + zone.minX * scale;
       const y = oz + zone.minZ * scale;
       const w = (zone.maxX - zone.minX) * scale;
@@ -332,8 +334,8 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
         const y = oz + (obj.z - size.depth / 2) * scale;
         const w = size.width * scale;
         const h = size.depth * scale;
-        ctx.fillStyle = obj.id === selectedId ? SOFT_YELLOW : p.swatch;
-        ctx.strokeStyle = obj.id === selectedId ? ACTIVE_YELLOW : '#71717a';
+        ctx.fillStyle = obj.id === selectedId ? interactionSoft : p.swatch;
+        ctx.strokeStyle = obj.id === selectedId ? interactionStrong : '#71717a';
         ctx.lineWidth = obj.id === selectedId ? 2.5 : 1.25;
         ctx.beginPath();
         ctx.roundRect(x, y, w, h, Math.min(7, w * 0.12, h * 0.12));
@@ -352,7 +354,7 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
       const selectedWall = purpose === 'build' && wall.id === selectedWallId;
       const hoveredWall = purpose === 'build' && hover?.type === 'wall' && hover.id === wall.id;
       const draggingWall = purpose === 'build' && drag?.type === 'wall' && drag.id === wall.id;
-      ctx.strokeStyle = (hoveredWall || draggingWall) ? HOVER_CYAN : selectedWall ? ACTIVE_YELLOW : '#27272a';
+      ctx.strokeStyle = (hoveredWall || draggingWall) ? interaction : selectedWall ? interactionStrong : '#27272a';
       ctx.lineWidth = (hoveredWall || draggingWall) ? 7.5 : selectedWall ? 7 : (purpose === 'build' ? 5 : 3);
       ctx.lineCap = 'round';
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
@@ -372,7 +374,7 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
       const hoveredOpening = purpose === 'build' && hover?.type === 'opening' && hover.id === opening.id;
       const draggingOpening = purpose === 'build' && drag?.type === 'opening' && drag.id === opening.id;
       const baseOpeningColor = opening.type === 'window' ? '#71717a' : opening.type === 'door' ? '#52525b' : '#71717a';
-      ctx.strokeStyle = (hoveredOpening || draggingOpening) ? HOVER_CYAN : isSelected ? ACTIVE_YELLOW : baseOpeningColor;
+      ctx.strokeStyle = (hoveredOpening || draggingOpening) ? interaction : isSelected ? interactionStrong : baseOpeningColor;
       ctx.lineWidth = (hoveredOpening || draggingOpening) ? 5.8 : isSelected ? 5.5 : 3.5;
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
 
@@ -403,7 +405,7 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
     if (purpose === 'plan' && activeSnap.kind !== 'none') {
       ctx.save();
       ctx.setLineDash([5, 5]);
-      ctx.strokeStyle = ACTIVE_YELLOW;
+      ctx.strokeStyle = interactionStrong;
       ctx.lineWidth = 1.4;
       if (activeSnap.x) {
         const x = ox + activeSnap.x.value * scale;
@@ -476,11 +478,11 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
         const midpoint = toPx((wall.start.x + wall.end.x) / 2, (wall.start.z + wall.end.z) / 2);
         const text = formatLength(wall.length, measurementSystem);
         const idText = `Wall ${wall.index + 1}`;
-        ctx.font = '600 11px system-ui, sans-serif';
+        ctx.font = `600 ${themeMetric('builder-wall-length-font-px')}px system-ui, sans-serif`;
         const lengthMetrics = ctx.measureText(text);
         const lengthWidth = lengthMetrics.width;
         const lengthHeight = (lengthMetrics.actualBoundingBoxAscent || 8) + (lengthMetrics.actualBoundingBoxDescent || 3);
-        ctx.font = '500 9px system-ui, sans-serif';
+        ctx.font = `500 ${themeMetric('builder-wall-id-font-px')}px system-ui, sans-serif`;
         const idMetrics = ctx.measureText(idText);
         const idWidth = idMetrics.width;
         const idHeight = (idMetrics.actualBoundingBoxAscent || 7) + (idMetrics.actualBoundingBoxDescent || 2);
@@ -644,7 +646,7 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
       for (const label of placedWallLabels) {
         if (!label.leader) continue;
         ctx.save();
-        ctx.strokeStyle = label.wall.id === selectedWallId ? 'rgba(37,99,235,.48)' : 'rgba(113,113,122,.46)';
+        ctx.strokeStyle = label.wall.id === selectedWallId ? themeRgba('interaction-strong', .58) : 'rgba(113,113,122,.46)';
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(label.leader.start.x, label.leader.start.y);
@@ -659,15 +661,15 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
         ctx.roundRect(label.rect.x, label.rect.y, label.rect.width, label.rect.height, 6);
         ctx.fillStyle = 'rgba(255,255,255,.97)';
         ctx.fill();
-        ctx.strokeStyle = label.wall.id === selectedWallId ? 'rgba(37,99,235,.72)' : 'rgba(24,24,27,.13)';
+        ctx.strokeStyle = label.wall.id === selectedWallId ? themeRgba('interaction-strong', .88) : 'rgba(24,24,27,.13)';
         ctx.lineWidth = 1;
         ctx.stroke();
-        ctx.font = '650 11px system-ui, sans-serif';
-        ctx.fillStyle = label.wall.id === selectedWallId ? '#1d4ed8' : '#18181b';
-        ctx.fillText(label.text, label.x, label.y - 4);
-        ctx.font = '500 9px system-ui, sans-serif';
-        ctx.fillStyle = label.wall.id === selectedWallId ? '#64748b' : '#71717a';
-        ctx.fillText(label.idText, label.x, label.y + 8);
+        ctx.font = `650 ${themeMetric('builder-wall-length-font-px')}px system-ui, sans-serif`;
+        ctx.fillStyle = dimensionText;
+        ctx.fillText(label.text, label.x, label.y - 5);
+        ctx.font = `500 ${themeMetric('builder-wall-id-font-px')}px system-ui, sans-serif`;
+        ctx.fillStyle = label.wall.id === selectedWallId ? dimensionText : '#71717a';
+        ctx.fillText(label.idText, label.x, label.y + 10);
         ctx.restore();
       }
 
@@ -675,7 +677,7 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
       for (const vertex of room.vertices) {
         const point = toPx(vertex.x, vertex.z);
         const active = (hover?.type === 'corner' && hover.id === vertex.id) || (drag?.type === 'corner' && drag.id === vertex.id);
-        ctx.fillStyle = active ? HOVER_CYAN : '#27272a';
+        ctx.fillStyle = active ? interaction : '#27272a';
         ctx.beginPath(); ctx.arc(point.x, point.y, active ? 8 : 7, 0, Math.PI * 2); ctx.fill();
         ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.stroke();
       }
@@ -736,8 +738,8 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
 
         const active = hover?.type === 'split' && hover.id === wall.id;
         ctx.save();
-        ctx.fillStyle = active ? HOVER_CYAN : 'rgba(255,255,255,.96)';
-        ctx.strokeStyle = active ? HOVER_CYAN : '#d4d4d8';
+        ctx.fillStyle = active ? interaction : 'rgba(255,255,255,.96)';
+        ctx.strokeStyle = active ? interaction : '#d4d4d8';
         ctx.lineWidth = active ? 2.2 : 1.4;
         ctx.beginPath(); ctx.arc(mid.x, mid.y, active ? 10 : 9, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
         ctx.strokeStyle = active ? '#ffffff' : '#52525b';
@@ -756,13 +758,13 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
         ctx.roundRect(label.rect.x, label.rect.y, label.rect.width, label.rect.height, 5);
         ctx.fillStyle = 'rgba(255,255,255,.94)';
         ctx.fill();
-        ctx.strokeStyle = active ? HOVER_CYAN : 'rgba(24,24,27,.10)';
+        ctx.strokeStyle = active ? interaction : 'rgba(24,24,27,.10)';
         ctx.lineWidth = 1;
         ctx.stroke();
         ctx.font = active ? '700 10px system-ui, sans-serif' : '600 9px system-ui, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillStyle = active ? '#1d4ed8' : '#52525b';
+        ctx.fillStyle = active ? dimensionText : '#52525b';
         ctx.fillText(`${label.angle.toFixed(1)}°`, label.x, label.y);
         ctx.restore();
       }

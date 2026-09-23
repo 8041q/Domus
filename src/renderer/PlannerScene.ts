@@ -17,6 +17,7 @@ import { clearanceRegions, resolvePlacement, spacingMeasurements } from '../core
 import { getRoomWalls, roomBounds, wallPoint, wallProjectionDistance } from '../core/roomGeometry';
 import { formatLength } from '../core/units';
 import type { FloorFinish, PlanCameraView, MeasurementSystem, PlannerSnapshot, PlacedObject, RoomOpening, SnapFeedback, Vec2 } from '../core/types';
+import { themeHex, themeMetric } from '../theme';
 
 export interface SceneSnapshot extends PlannerSnapshot {
   selectedId?: string | null;
@@ -45,11 +46,16 @@ interface SceneOptions {
   interactiveArchitecture: boolean;
 }
 
-const DIMENSION_COLOR = 0x686868;
-const SELECTION_COLOR = 0xffd800;
-const PRODUCT_DIMENSION_COLOR = 0x3f3f46;
-const CLEARANCE_COLOR = 0xffd54a;
-const SPACING_COLOR = 0x8a5a00;
+const DIMENSION_COLOR = themeHex('dimension-line');
+const SELECTION_COLOR = themeHex('interaction');
+const INTERACTION_STRONG_COLOR = themeHex('interaction-strong');
+const PRODUCT_DIMENSION_COLOR = themeHex('product-dimension-line');
+const CLEARANCE_COLOR = themeHex('clearance-fill');
+const CLEARANCE_EDGE_COLOR = themeHex('clearance-edge');
+const SPACING_COLOR = themeHex('spacing-line');
+const DIMENSION_TEXT_COLOR = themeHex('dimension-text');
+const DIMENSION_CARD_BACKGROUND = themeHex('dimension-card-background');
+const DIMENSION_CARD_BORDER = themeHex('dimension-card-border');
 const TRIM_COLOR = 0xffffff;
 const JUNCTION_COLOR = 0xffffff;
 const WALL_THICKNESS = 0.05;
@@ -1347,15 +1353,15 @@ export class PlannerScene {
             mat.transparent = true;
             mat.depthWrite = false;
           } else {
-            mat.color.setHex(active ? 0xffd54a : 0xffffff);
+            mat.color.setHex(active ? SELECTION_COLOR : 0xffffff);
             mat.opacity = active ? 0.18 : 0;
             mat.transparent = true;
           }
         } else if (mat instanceof THREE.MeshPhysicalMaterial) {
-          mat.emissive.setHex(active ? 0xd7a300 : 0x000000);
+          mat.emissive.setHex(active ? INTERACTION_STRONG_COLOR : 0x000000);
           mat.emissiveIntensity = active ? 0.16 : 0;
         } else if (mat instanceof THREE.MeshStandardMaterial) {
-          mat.emissive.setHex(active ? 0xd7a300 : 0x000000);
+          mat.emissive.setHex(active ? INTERACTION_STRONG_COLOR : 0x000000);
           mat.emissiveIntensity = active ? 0.18 : 0;
         }
       }
@@ -1624,8 +1630,11 @@ export class PlannerScene {
     widthPx = 1.5,
     dashed = false,
     overlay = true,
-    labelHeight = 0.12,
-    alignLabelToLine = false
+    labelHeight = themeMetric('dimension-label-height'),
+    labelStyle = 'world',
+    keepUpright = true,
+    textOutlinePx = themeMetric('dimension-text-outline-px'),
+    targetPixelHeight = themeMetric('dimension-label-screen-px')
   }: {
     parent?: THREE.Group;
     start: THREE.Vector3;
@@ -1636,12 +1645,17 @@ export class PlannerScene {
     dashed?: boolean;
     overlay?: boolean;
     labelHeight?: number;
-    alignLabelToLine?: boolean;
+    labelStyle?: 'world' | 'camera-card';
+    keepUpright?: boolean;
+    textOutlinePx?: number;
+    targetPixelHeight?: number;
   }) {
-    const label = this.createMeasurementTextSprite(text, labelHeight, color);
+    const label = labelStyle === 'camera-card'
+      ? this.createProductDimensionBadge(text, labelHeight, textOutlinePx, targetPixelHeight)
+      : this.createMeasurementTextPlane(text, labelHeight, textOutlinePx, targetPixelHeight);
     const worldWidth = typeof label.userData.labelWorldWidth === 'number' ? label.userData.labelWorldWidth : labelHeight * 1.4;
     const length = start.distanceTo(end);
-    const gap = Math.min(Math.max(worldWidth + 0.06, 0.12), length * 0.7);
+    const gap = Math.min(Math.max(worldWidth + 0.055, 0.12), length * 0.7);
     const destination = parent ?? this.helperGroup;
     const draw = (points: THREE.Vector3[]) => {
       if (parent) this.makeLocalLine(parent, points, color, 0.92, dashed, overlay, widthPx);
@@ -1660,101 +1674,209 @@ export class PlannerScene {
     }
 
     label.position.copy(start).add(end).multiplyScalar(0.5);
-    if (alignLabelToLine) {
-      label.userData.alignToDimensionLine = { start: start.clone(), end: end.clone() };
+    if (labelStyle === 'world') {
+      this.orientMeasurementLabel(label, start, end);
+      if (keepUpright) {
+        label.userData.keepMeasurementUpright = true;
+        label.userData.measurementStart = start.clone();
+        label.userData.measurementEnd = end.clone();
+        label.userData.measurementBaseQuaternion = label.quaternion.clone();
+        label.userData.measurementFlipped = false;
+      }
     }
     destination.add(label);
     return label;
   }
 
-  private createUiLabelSprite(text: string, height: number, tone: 'neutral' | 'warning' = 'neutral') {
-    const canvas = document.createElement('canvas');
-    canvas.width = 420;
-    canvas.height = 104;
-    const ctx = canvas.getContext('2d')!;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.font = '600 35px system-ui, -apple-system, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
+  /**
+   * World labels remain attached to the dimension direction. They never billboard;
+   * the only camera-dependent change is a 180° baseline flip handled below so text
+   * is not read upside-down when the orbit camera crosses to the opposite side.
+   */
+  private orientMeasurementLabel(label: THREE.Object3D, start: THREE.Vector3, end: THREE.Vector3) {
+    const xAxis = end.clone().sub(start).normalize();
+    if (xAxis.lengthSq() < 1e-8) return;
 
-    const measured = ctx.measureText(text).width;
-    const boxWidth = Math.min(390, Math.max(118, Math.ceil(measured + 42)));
-    const boxHeight = 62;
-    const x = (canvas.width - boxWidth) / 2;
-    const y = (canvas.height - boxHeight) / 2;
-    const radius = 13;
+    // PlaneGeometry's local X is the text baseline and local Z is its face normal.
+    // Horizontal room/spacing annotations face upward; near-vertical labels use a
+    // fixed horizontal face. Neither orientation tracks the camera.
+    let zAxis = Math.abs(xAxis.y) > 0.78
+      ? new THREE.Vector3(0, 0, 1)
+      : new THREE.Vector3(0, 1, 0);
+    if (Math.abs(zAxis.dot(xAxis)) > 0.96) zAxis = new THREE.Vector3(1, 0, 0);
 
-    ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,.12)';
-    ctx.shadowBlur = 10;
-    ctx.shadowOffsetY = 2;
-    ctx.beginPath();
-    ctx.roundRect(x, y, boxWidth, boxHeight, radius);
-    ctx.fillStyle = 'rgba(255,255,255,.97)';
-    ctx.fill();
-    ctx.restore();
-
-    ctx.beginPath();
-    ctx.roundRect(x, y, boxWidth, boxHeight, radius);
-    ctx.strokeStyle = tone === 'warning' ? 'rgba(183,121,31,.38)' : 'rgba(24,24,27,.16)';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    ctx.fillStyle = tone === 'warning' ? '#854d0e' : '#18181b';
-    ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 1);
-
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false }));
-    const visibleAspect = boxWidth / boxHeight;
-    sprite.scale.set(height * visibleAspect, height, 1);
-    sprite.renderOrder = 30;
-    return sprite;
+    const yAxis = zAxis.clone().cross(xAxis).normalize();
+    zAxis = xAxis.clone().cross(yAxis).normalize();
+    const basis = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis);
+    label.quaternion.setFromRotationMatrix(basis);
   }
 
-  private createMeasurementTextSprite(text: string, height: number, color = DIMENSION_COLOR) {
+  private createMeasurementTextPlane(text: string, height: number, outlinePx: number = themeMetric('dimension-text-outline-px'), targetPixelHeight: number = themeMetric('dimension-label-screen-px')) {
+    const fontPx = themeMetric('dimension-texture-font-px');
+    const probe = document.createElement('canvas').getContext('2d')!;
+    probe.font = `700 ${fontPx}px Inter, system-ui, sans-serif`;
+    const measuredWidth = Math.ceil(probe.measureText(text).width);
+    const paddingX = 14 + outlinePx * 2;
+    const paddingY = 10 + outlinePx * 2;
+
     const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 128;
+    canvas.width = Math.max(72, measuredWidth + paddingX * 2);
+    canvas.height = Math.max(84, fontPx + paddingY * 2);
     const ctx = canvas.getContext('2d')!;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.font = '700 50px Inter, system-ui, sans-serif';
+    ctx.font = `700 ${fontPx}px Inter, system-ui, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    const hex = `#${color.toString(16).padStart(6, '0')}`;
-    ctx.strokeStyle = 'rgba(255,255,255,0.92)';
-    ctx.lineWidth = 7;
+    const textHex = `#${DIMENSION_TEXT_COLOR.toString(16).padStart(6, '0')}`;
+    ctx.strokeStyle = 'rgba(255,255,255,0.96)';
+    ctx.lineWidth = outlinePx;
     ctx.strokeText(text, canvas.width / 2, canvas.height / 2 + 1);
-    ctx.fillStyle = hex;
+    ctx.fillStyle = textHex;
     ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 1);
 
-    const metrics = ctx.measureText(text).width;
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
-    const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false });
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+
+    const aspect = canvas.width / canvas.height;
+    const geometry = new THREE.PlaneGeometry(aspect, 1);
+    const material = new THREE.MeshBasicMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      toneMapped: false
+    });
+    const plane = new THREE.Mesh(geometry, material);
+    plane.scale.set(height, height, 1);
+    plane.userData.measurementLabel = true;
+    plane.userData.labelAspect = aspect;
+    plane.userData.labelWorldWidth = height * aspect;
+    plane.userData.targetPixelHeight = targetPixelHeight;
+    plane.renderOrder = 30;
+    return plane;
+  }
+
+  /** Product dimensions intentionally use a Sprite: the compact card always faces
+   * the camera while its measured line/bounding-box geometry remains world-aligned. */
+  private createProductDimensionBadge(text: string, height: number, outlinePx: number = themeMetric('dimension-text-outline-px'), targetPixelHeight: number = themeMetric('product-dimension-label-screen-px')) {
+    const fontPx = themeMetric('dimension-texture-font-px');
+    const paddingX = themeMetric('product-dimension-card-padding-x-px');
+    const paddingY = themeMetric('product-dimension-card-padding-y-px');
+    const radius = themeMetric('product-dimension-card-radius-px');
+    const probe = document.createElement('canvas').getContext('2d')!;
+    probe.font = `700 ${fontPx}px Inter, system-ui, sans-serif`;
+    const measuredWidth = Math.ceil(probe.measureText(text).width);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(88, measuredWidth + paddingX * 2 + outlinePx * 2);
+    canvas.height = Math.max(84, fontPx + paddingY * 2 + outlinePx * 2);
+    const ctx = canvas.getContext('2d')!;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const cardInset = 2;
+    ctx.beginPath();
+    ctx.roundRect(cardInset, cardInset, canvas.width - cardInset * 2, canvas.height - cardInset * 2, radius);
+    ctx.fillStyle = `#${DIMENSION_CARD_BACKGROUND.toString(16).padStart(6, '0')}f2`;
+    ctx.fill();
+    ctx.strokeStyle = `#${DIMENSION_CARD_BORDER.toString(16).padStart(6, '0')}`;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.font = `700 ${fontPx}px Inter, system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(255,255,255,0.96)';
+    ctx.lineWidth = outlinePx;
+    ctx.strokeText(text, canvas.width / 2, canvas.height / 2 + 1);
+    ctx.fillStyle = `#${DIMENSION_TEXT_COLOR.toString(16).padStart(6, '0')}`;
+    ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 1);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    const aspect = canvas.width / canvas.height;
+    const material = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false
+    });
     const sprite = new THREE.Sprite(material);
-    const visibleWidth = Math.max(88, Math.min(canvas.width - 16, Math.ceil(metrics + 18)));
-    const visibleHeight = 74;
-    const aspect = visibleWidth / visibleHeight;
     sprite.scale.set(height * aspect, height, 1);
+    sprite.userData.measurementLabel = true;
+    sprite.userData.labelAspect = aspect;
     sprite.userData.labelWorldWidth = height * aspect;
-    sprite.renderOrder = 30;
+    sprite.userData.targetPixelHeight = targetPixelHeight;
+    sprite.renderOrder = 31;
     return sprite;
   }
 
-  private createTextSprite(text: string, scale = 0.42, tone: 'neutral' | 'blue' | 'amber' = 'neutral') {
-    const color = tone === 'amber' ? SPACING_COLOR : tone === 'blue' ? SELECTION_COLOR : DIMENSION_COLOR;
-    return this.createMeasurementTextSprite(text, scale * 0.44, color);
+  /**
+   * Keep world-oriented room/spacing text readable as the orbit camera crosses a
+   * dimension line. This flips only the text baseline by 180°; it does not make
+   * the plane face the camera, so the annotation remains geometrically static.
+   */
+  private updateMeasurementLabelOrientation() {
+    const projectedStart = new THREE.Vector3();
+    const projectedEnd = new THREE.Vector3();
+    this.camera.updateMatrixWorld();
+
+    this.helperGroup.traverse((object) => {
+      if (!object.userData.keepMeasurementUpright) return;
+      const start = object.userData.measurementStart as THREE.Vector3 | undefined;
+      const end = object.userData.measurementEnd as THREE.Vector3 | undefined;
+      const base = object.userData.measurementBaseQuaternion as THREE.Quaternion | undefined;
+      if (!start || !end || !base) return;
+
+      projectedStart.copy(start).project(this.camera);
+      projectedEnd.copy(end).project(this.camera);
+      const screenDx = projectedEnd.x - projectedStart.x;
+      let flipped = Boolean(object.userData.measurementFlipped);
+      // Small hysteresis prevents labels rapidly switching when their baseline is
+      // almost perfectly vertical on screen.
+      if (screenDx > 0.012) flipped = false;
+      else if (screenDx < -0.012) flipped = true;
+
+      object.quaternion.copy(base);
+      if (flipped) object.rotateZ(Math.PI);
+      object.userData.measurementFlipped = flipped;
+    });
   }
 
-  private createArchitecturalDimensionText(text: string, scale = 0.34) {
-    return this.createMeasurementTextSprite(text, scale * 0.44, DIMENSION_COLOR);
-  }
+  /**
+   * Keep labels legible while dollying without changing the world orientation of
+   * room/spacing planes. Camera-facing product Sprite cards use the same size rule.
+   */
+  private updateMeasurementLabelScale() {
+    this.camera.updateMatrixWorld();
+    const viewportHeight = Math.max(1, this.container.clientHeight);
+    const halfFov = THREE.MathUtils.degToRad(this.camera.fov * 0.5);
+    const cameraSpace = new THREE.Vector3();
+    const worldPosition = new THREE.Vector3();
+    const minHeight = themeMetric('dimension-label-min-world-height');
+    const maxHeight = themeMetric('dimension-label-max-world-height');
 
-  private createDimensionBadge(text: string, height = 0.215) {
-    return this.createMeasurementTextSprite(text, height, PRODUCT_DIMENSION_COLOR);
+    this.helperGroup.updateWorldMatrix(true, true);
+    this.helperGroup.traverse((object) => {
+      if (!object.userData.measurementLabel) return;
+      object.getWorldPosition(worldPosition);
+      cameraSpace.copy(worldPosition).applyMatrix4(this.camera.matrixWorldInverse);
+      const depth = Math.max(0.12, -cameraSpace.z);
+      const worldPerPixel = (2 * depth * Math.tan(halfFov)) / viewportHeight;
+      const targetPixels = Number(object.userData.targetPixelHeight) || themeMetric('dimension-label-screen-px');
+      const worldHeight = THREE.MathUtils.clamp(worldPerPixel * targetPixels, minHeight, maxHeight);
+      const aspect = Number(object.userData.labelAspect) || 1;
+      if (object instanceof THREE.Sprite) object.scale.set(worldHeight * aspect, worldHeight, 1);
+      else object.scale.set(worldHeight, worldHeight, 1);
+    });
   }
 
   private annotationLength(metres: number, system: MeasurementSystem) {
@@ -1857,7 +1979,7 @@ export class PlannerScene {
 
       const edge = new THREE.LineSegments(
         new THREE.EdgesGeometry(new THREE.PlaneGeometry(region.width, region.depth)),
-        new THREE.LineDashedMaterial({ color: 0xd09100, transparent: true, opacity: 0.96, dashSize: 0.08, gapSize: 0.045 })
+        new THREE.LineDashedMaterial({ color: CLEARANCE_EDGE_COLOR, transparent: true, opacity: 0.96, dashSize: 0.08, gapSize: 0.045 })
       );
       edge.computeLineDistances();
       edge.rotation.x = -Math.PI / 2;
@@ -1885,8 +2007,7 @@ export class PlannerScene {
         widthPx: 1.55,
         dashed: false,
         overlay: true,
-        labelHeight: 0.115,
-        alignLabelToLine: false
+        labelHeight: themeMetric('dimension-label-height')
       });
 
       const witness = outward.clone().multiplyScalar(0.068);
@@ -1944,7 +2065,9 @@ export class PlannerScene {
       widthPx: lineWidth,
       dashed: true,
       overlay: true,
-      labelHeight: 0.115
+      labelHeight: themeMetric('product-dimension-label-height'),
+      labelStyle: 'camera-card',
+      targetPixelHeight: themeMetric('product-dimension-label-screen-px')
     });
     this.addLabelledMeasurementLine({
       parent,
@@ -1955,7 +2078,9 @@ export class PlannerScene {
       widthPx: lineWidth,
       dashed: true,
       overlay: true,
-      labelHeight: 0.115
+      labelHeight: themeMetric('product-dimension-label-height'),
+      labelStyle: 'camera-card',
+      targetPixelHeight: themeMetric('product-dimension-label-screen-px')
     });
     this.addLabelledMeasurementLine({
       parent,
@@ -1966,7 +2091,9 @@ export class PlannerScene {
       widthPx: lineWidth,
       dashed: true,
       overlay: true,
-      labelHeight: 0.115
+      labelHeight: themeMetric('product-dimension-label-height'),
+      labelStyle: 'camera-card',
+      targetPixelHeight: themeMetric('product-dimension-label-screen-px')
     });
 
     this.helperGroup.add(parent);
@@ -1983,32 +2110,15 @@ export class PlannerScene {
         text: formatLength(measurement.distance, system),
         color: SPACING_COLOR,
         widthPx: 1.65,
-        dashed: true,
+        dashed: false,
         overlay: true,
-        labelHeight: 0.11,
-        alignLabelToLine: false
+        labelHeight: themeMetric('dimension-label-height'),
+        textOutlinePx: themeMetric('spacing-dimension-text-outline-px')
       });
       const perpendicular = new THREE.Vector3(-measurement.direction.z, 0, measurement.direction.x).multiplyScalar(0.05);
       this.makeLine([origin.clone().sub(perpendicular), origin.clone().add(perpendicular)], SPACING_COLOR, 0.92, false, true, 1.35);
       this.makeLine([end.clone().sub(perpendicular), end.clone().add(perpendicular)], SPACING_COLOR, 0.92, false, true, 1.35);
     }
-  }
-
-  private orientDimensionLabels() {
-    const a = new THREE.Vector3();
-    const b = new THREE.Vector3();
-    this.helperGroup.traverse((object) => {
-      if (!(object instanceof THREE.Sprite)) return;
-      const alignment = object.userData.alignToDimensionLine as { start?: THREE.Vector3; end?: THREE.Vector3 } | undefined;
-      if (!alignment?.start || !alignment.end || !(object.material instanceof THREE.SpriteMaterial)) return;
-      a.copy(alignment.start).project(this.camera);
-      b.copy(alignment.end).project(this.camera);
-      let angle = Math.atan2(b.y - a.y, b.x - a.x);
-      // Keep drafting text upright even when the camera crosses to the opposite side.
-      if (angle > Math.PI / 2) angle -= Math.PI;
-      if (angle < -Math.PI / 2) angle += Math.PI;
-      object.material.rotation = angle;
-    });
   }
 
   private findObjectId(object: THREE.Object3D | null): string | null {
@@ -2220,7 +2330,8 @@ export class PlannerScene {
   private animate = () => {
     this.controls.update();
     this.updateCutawayWalls();
-    this.orientDimensionLabels();
+    this.updateMeasurementLabelOrientation();
+    this.updateMeasurementLabelScale();
     this.composer.render();
     this.animationFrame = requestAnimationFrame(this.animate);
   };

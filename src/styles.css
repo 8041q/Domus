@@ -3,6 +3,7 @@
   font-synthesis: none;
   color-scheme: light;
 
+  /* Interaction and planner annotation tokens are injected from src/theme.ts. */
   /* shadcn-style semantic theme tokens */
   --radius: 0.625rem;
   --background: oklch(0.985 0 0);
@@ -11,7 +12,7 @@
   --card-foreground: oklch(0.145 0 0);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.84 0.16 86);
+  --primary: var(--interaction);
   --primary-foreground: oklch(0.22 0 0);
   --secondary: oklch(0.97 0.008 90);
   --secondary-foreground: oklch(0.205 0 0);
@@ -22,14 +23,11 @@
   --destructive: oklch(0.577 0.245 27.325);
   --border: oklch(0.922 0.004 90);
   --input: oklch(0.922 0.004 90);
-  --ring: oklch(0.82 0.17 86);
+  --ring: var(--interaction-strong);
   --success: oklch(0.55 0.12 150);
   --warning: oklch(0.67 0.14 70);
 
-  /* Compatibility aliases for the planner drawing/UI code. */
-  --blue: var(--primary);
-  --blue-dark: oklch(0.145 0 0);
-  --blue-soft: var(--secondary);
+  /* Planner semantic aliases used throughout the app shell. */
   --ink: var(--foreground);
   --danger: var(--destructive);
   --panel: var(--card);
@@ -52,7 +50,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 }
 .ui-button svg { flex: 0 0 auto; }
 .ui-button-default { background: var(--primary); color: var(--primary-foreground); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
-.ui-button-default:hover { background: oklch(0.79 0.15 84); }
+.ui-button-default:hover { background: var(--interaction-strong); }
 .ui-button-secondary { background: var(--secondary); color: var(--secondary-foreground); }
 .ui-button-secondary:hover { background: color-mix(in oklch, var(--primary) 12%, white); }
 .ui-button-outline { border-color: var(--border); background: var(--card); }
@@ -184,7 +182,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 
 .builder-continue { margin-top: auto; padding: 14px 22px 20px; border-top: 1px solid var(--border); position: sticky; bottom: 0; background: rgba(255,255,255,.94); backdrop-filter: blur(10px); }
 .primary-button { width: 100%; min-height: 42px; border: 1px solid var(--primary); border-radius: calc(var(--radius) - 2px); background: var(--primary); color: var(--primary-foreground); font-size: 11px; font-weight: 650; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
-.primary-button:hover { background: oklch(0.79 0.15 84); }
+.primary-button:hover { background: var(--interaction-strong); }
 
 /* Builder workspace: outer UI changed, drafting checker/wall/corner system remains canvas-driven. */
 .workspace-panel { min-width: 0; min-height: 0; display: grid; grid-template-rows: 56px minmax(0, 1fr); padding: 12px 14px 14px; gap: 8px; }

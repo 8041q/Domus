@@ -227,7 +227,7 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
       {opening.type !== 'door' && opening.variant !== 'full-height-window' && opening.variant !== 'sliding-window' && (
         <DimensionField label={opening.type === 'opening' ? 'Bottom from floor' : 'Sill height'} value={opening.sillHeight} min={0} max={Math.max(0.3, room.height - opening.height)} system={system} metricStep={0.01} onCommit={(sillHeight) => updateOpening(opening.id, { sillHeight })} />
       )}
-      <p className="hint">Drag this element directly in either the 2D plan or 3D view. Width, height and style remain editable here.</p>
+      <p className="hint">Drag this element directly in either the 2D or 3D view. Width, height and style remain editable here.</p>
     </div>
   );
 }
@@ -378,7 +378,7 @@ export function BuildRoom() {
           <div className="workspace-toolbar-actions">
             <span className="workspace-area-badge"><small>Room area</small><strong>{formatArea(roomArea, system)}</strong></span>
             <div className="segmented-control" role="group" aria-label="Room builder view">
-              <button className={buildView === 'plan' ? 'active' : ''} onClick={() => setBuildView('plan')}>2D plan</button>
+              <button className={buildView === 'plan' ? 'active' : ''} onClick={() => setBuildView('plan')}>2D</button>
               <button className={buildView === '3d' ? 'active' : ''} onClick={() => setBuildView('3d')}>3D</button>
             </div>
           </div>
