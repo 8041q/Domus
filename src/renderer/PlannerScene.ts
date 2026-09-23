@@ -15,7 +15,7 @@ import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeome
 import { PRODUCTS } from '../core/products';
 import { floorFinishDefinition, type FloorFinishDefinition } from '../core/roomFinishes';
 import { clearanceRegions, resolvePlacement, spacingMeasurements, type SpacingMeasurement } from '../core/placement';
-import { getRoomWalls, roomBounds, wallPoint, wallProjectionDistance } from '../core/roomGeometry';
+import { getRoomWalls, pointInRoom, roomBounds, wallPoint, wallProjectionDistance } from '../core/roomGeometry';
 import { formatLength } from '../core/units';
 import type { FloorFinish, PlanCameraView, MeasurementSystem, PlannerSnapshot, PlacedObject, RoomOpening, SnapFeedback, Vec2 } from '../core/types';
 import { themeHex, themeMetric } from '../theme';
@@ -115,6 +115,8 @@ export class PlannerScene {
   private floorGroup = new THREE.Group();
   private wallsGroup = new THREE.Group();
   private ceilingGroup = new THREE.Group();
+  private lightFixtureGroup = new THREE.Group();
+  private lightIlluminationGroup = new THREE.Group();
   private objectGroup = new THREE.Group();
   private helperGroup = new THREE.Group();
   private objectModels = new Map<string, THREE.Group>();
@@ -147,7 +149,10 @@ export class PlannerScene {
   private currentCameraView: PlanCameraView = 'perspective';
   private ceilingVisible = false;
   private environmentTexture: THREE.Texture | null = null;
+  private hemiLight: THREE.HemisphereLight;
+  private ambientLight: THREE.AmbientLight;
   private mainLight: THREE.DirectionalLight;
+  private fillLight: THREE.DirectionalLight;
   private wallHiddenState = new Map<string, boolean>();
   private floorTextureReady: Promise<void> = Promise.resolve();
   private floorMaterial: THREE.MeshStandardMaterial | null = null;
@@ -179,7 +184,7 @@ export class PlannerScene {
     // Start open by construction. The first camera evaluation may opt into the
     // ceiling, but there is never a one-frame closed-room flash while Plan Room mounts.
     this.ceilingGroup.visible = false;
-    this.scene.add(this.floorGroup, this.wallsGroup, this.ceilingGroup, this.objectGroup, this.helperGroup);
+    this.scene.add(this.floorGroup, this.wallsGroup, this.ceilingGroup, this.lightFixtureGroup, this.lightIlluminationGroup, this.objectGroup, this.helperGroup);
 
     // Screen-space silhouette outlining matches the reference planner: the selected
     // product gets one crisp yellow contour, independent of its component meshes.
@@ -243,10 +248,12 @@ export class PlannerScene {
     this.controls.addEventListener('start', this.onControlsStart);
     this.controls.addEventListener('end', this.onControlsEnd);
 
-    // Fast, artifact-free studio lighting. Contact depth now comes from real shadows instead of SSAO.
-    const hemi = new THREE.HemisphereLight(0xffffff, 0x777b80, 0.78);
-    const ambient = new THREE.AmbientLight(0xffffff, 0.18);
-    this.mainLight = new THREE.DirectionalLight(0xfffdf8, 1.72);
+    // Neutral base lighting plus optional interior ceiling lighting. Real shadowing
+    // stays concentrated in one directional light for performance; ceiling fixtures
+    // add the room mood and local brightness without multiplying shadow maps.
+    this.hemiLight = new THREE.HemisphereLight(0xf7f8fa, 0x666a70, 0.78);
+    this.ambientLight = new THREE.AmbientLight(0xffffff, 0.18);
+    this.mainLight = new THREE.DirectionalLight(0xfff6eb, 1.72);
     this.mainLight.position.set(4.2, 7.2, 4.8);
     this.mainLight.castShadow = true;
     this.mainLight.shadow.mapSize.set(2048, 2048);
@@ -254,9 +261,9 @@ export class PlannerScene {
     this.mainLight.shadow.camera.far = 34;
     this.mainLight.shadow.bias = -0.00012;
     this.mainLight.shadow.normalBias = 0.012;
-    const fill = new THREE.DirectionalLight(0xe5e9ed, 0.34);
-    fill.position.set(-4.5, 5.2, -4.2);
-    this.scene.add(hemi, ambient, this.mainLight, this.mainLight.target, fill);
+    this.fillLight = new THREE.DirectionalLight(0xd7dde2, 0.34);
+    this.fillLight.position.set(-4.5, 5.2, -4.2);
+    this.scene.add(this.hemiLight, this.ambientLight, this.mainLight, this.mainLight.target, this.fillLight);
 
     // Capture pointer-down before OrbitControls. Furniture drags disable controls
     // before they enter a camera gesture. Shift+empty-space is allowed through so
@@ -289,6 +296,8 @@ export class PlannerScene {
     this.disposeGroup(this.floorGroup);
     this.disposeGroup(this.wallsGroup);
     this.disposeGroup(this.ceilingGroup);
+    this.disposeGroup(this.lightFixtureGroup);
+    this.disposeGroup(this.lightIlluminationGroup);
     this.disposeGroup(this.objectGroup);
     this.disposeGroup(this.helperGroup);
     for (const texture of this.floorMapAssets) texture.dispose();
@@ -749,15 +758,22 @@ export class PlannerScene {
     const cz = (bounds.minZ + bounds.maxZ) / 2;
     const span = Math.max(bounds.width, bounds.depth, 4);
     const radius = span * 0.72 + 1.1;
-    this.mainLight.target.position.set(cx, 0.4, cz);
-    this.mainLight.position.set(cx + span * 0.55, Math.max(6.5, span * 0.72), cz + span * 0.48);
+    const interiorLighting = snapshot.room.lighting.enabled;
+    this.mainLight.target.position.set(cx, 0.45, cz);
+    if (interiorLighting) {
+      this.mainLight.position.set(cx + span * 0.22, Math.max(snapshot.room.height - 0.12, 2.1), cz + span * 0.18);
+      this.fillLight.position.set(cx - span * 0.28, Math.max(snapshot.room.height - 0.35, 1.8), cz - span * 0.24);
+    } else {
+      this.mainLight.position.set(cx + span * 0.55, Math.max(6.5, span * 0.72), cz + span * 0.48);
+      this.fillLight.position.set(cx - span * 0.6, Math.max(5.1, span * 0.58), cz - span * 0.52);
+    }
     const shadow = this.mainLight.shadow.camera as THREE.OrthographicCamera;
     shadow.left = -radius;
     shadow.right = radius;
     shadow.top = radius;
     shadow.bottom = -radius;
     shadow.near = 0.25;
-    shadow.far = Math.max(24, span * 4);
+    shadow.far = interiorLighting ? Math.max(8, snapshot.room.height + span * 1.6) : Math.max(24, span * 4);
     shadow.updateProjectionMatrix();
     this.mainLight.shadow.needsUpdate = true;
   }
@@ -1108,6 +1124,8 @@ export class PlannerScene {
 
     this.rebuildWalls(snapshot);
     this.rebuildCeiling(snapshot);
+    this.rebuildCeilingLighting(snapshot);
+    this.applyRoomLighting(snapshot);
   }
 
   private rebuildCeiling(snapshot: PlannerSnapshot) {
@@ -1149,6 +1167,109 @@ export class PlannerScene {
     this.updateCeilingVisibility();
   }
 
+  private updateLightFixtureVisibility(snapshot: PlannerSnapshot) {
+    const lighting = snapshot.room.lighting;
+    this.lightFixtureGroup.visible = lighting.enabled && (lighting.showWithoutCeiling || this.ceilingVisible);
+  }
+
+  private ceilingLightPositions(snapshot: PlannerSnapshot) {
+    const bounds = roomBounds(snapshot.room.vertices);
+    const width = Math.max(2.2, bounds.width);
+    const depth = Math.max(2.2, bounds.depth);
+    const cols = THREE.MathUtils.clamp(Math.round(width / 1.9), 2, 4);
+    const rows = THREE.MathUtils.clamp(Math.round(depth / 1.9), 2, 4);
+    const marginX = Math.max(0.55, width * 0.16);
+    const marginZ = Math.max(0.55, depth * 0.16);
+    const positions: THREE.Vector3[] = [];
+    for (let r = 0; r < rows; r += 1) {
+      const tz = rows === 1 ? 0.5 : r / (rows - 1);
+      const z = THREE.MathUtils.lerp(bounds.minZ + marginZ, bounds.maxZ - marginZ, tz);
+      for (let c = 0; c < cols; c += 1) {
+        const tx = cols === 1 ? 0.5 : c / (cols - 1);
+        const x = THREE.MathUtils.lerp(bounds.minX + marginX, bounds.maxX - marginX, tx);
+        if (!pointInRoom({ x, z }, snapshot.room, true)) continue;
+        positions.push(new THREE.Vector3(x, snapshot.room.height - 0.02, z));
+      }
+    }
+    if (!positions.length) positions.push(new THREE.Vector3((bounds.minX + bounds.maxX) / 2, snapshot.room.height - 0.02, (bounds.minZ + bounds.maxZ) / 2));
+    return positions;
+  }
+
+  private createSurfaceFixture() {
+    const group = new THREE.Group();
+    const body = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.14, 0.14, 0.025, 26),
+      new THREE.MeshStandardMaterial({ color: 0xf9f8f4, roughness: 0.78, metalness: 0.02 })
+    );
+    body.castShadow = true;
+    body.receiveShadow = true;
+    body.position.y = -0.012;
+    group.add(body);
+
+    const diffuser = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.11, 0.11, 0.008, 26),
+      new THREE.MeshStandardMaterial({ color: 0xfff5df, roughness: 0.18, emissive: 0xffefcf, emissiveIntensity: 0.75 })
+    );
+    diffuser.position.y = -0.028;
+    group.add(diffuser);
+    return group;
+  }
+
+  private createRecessedFixture() {
+    const group = new THREE.Group();
+    const trim = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.12, 0.12, 0.01, 26),
+      new THREE.MeshStandardMaterial({ color: 0xfbfbfb, roughness: 0.72, metalness: 0.01 })
+    );
+    trim.position.y = -0.005;
+    trim.castShadow = true;
+    trim.receiveShadow = true;
+    group.add(trim);
+
+    const lens = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.085, 0.085, 0.015, 24),
+      new THREE.MeshStandardMaterial({ color: 0xfff3db, roughness: 0.22, emissive: 0xffeac4, emissiveIntensity: 0.92 })
+    );
+    lens.position.y = -0.016;
+    group.add(lens);
+    return group;
+  }
+
+  private rebuildCeilingLighting(snapshot: PlannerSnapshot) {
+    this.disposeGroup(this.lightFixtureGroup);
+    this.disposeGroup(this.lightIlluminationGroup);
+    const lighting = snapshot.room.lighting;
+    if (!lighting.enabled) {
+      this.updateLightFixtureVisibility(snapshot);
+      return;
+    }
+
+    const positions = this.ceilingLightPositions(snapshot);
+    for (const position of positions) {
+      const fixture = lighting.fixtureType === 'recessed' ? this.createRecessedFixture() : this.createSurfaceFixture();
+      fixture.position.copy(position);
+      fixture.name = lighting.fixtureType === 'recessed' ? 'Recessed Downlight' : 'Surface Mounted Light';
+      fixture.traverse((node) => { node.userData.roomLightFixture = true; });
+      this.lightFixtureGroup.add(fixture);
+
+      const glow = new THREE.PointLight(0xfff0d8, lighting.fixtureType === 'recessed' ? 0.72 : 0.65, 3.6, 2);
+      glow.position.set(position.x, snapshot.room.height - 0.16, position.z);
+      glow.castShadow = false;
+      this.lightIlluminationGroup.add(glow);
+    }
+
+    this.updateLightFixtureVisibility(snapshot);
+  }
+
+  private applyRoomLighting(snapshot: PlannerSnapshot) {
+    const enabled = snapshot.room.lighting.enabled;
+    this.hemiLight.intensity = enabled ? 0.44 : 0.78;
+    this.ambientLight.intensity = enabled ? 0.08 : 0.18;
+    this.mainLight.intensity = enabled ? 1.08 : 1.72;
+    this.fillLight.intensity = enabled ? 0.18 : 0.34;
+    this.scene.background = new THREE.Color(enabled ? 0xc6c6c6 : 0xd2d2d2);
+  }
+
   private updateCeilingVisibility(force = false) {
     const sidePreset = this.currentCameraView === 'front'
       || this.currentCameraView === 'back'
@@ -1172,6 +1293,7 @@ export class PlannerScene {
     if (!force && visible === this.ceilingVisible) return;
     this.ceilingVisible = visible;
     this.ceilingGroup.visible = visible;
+    this.updateLightFixtureVisibility(this.bridge.getSnapshot());
     this.updateRoomDimensionVisibility();
   }
 
@@ -2253,7 +2375,9 @@ export class PlannerScene {
       const hidden = this.wallHiddenState.get(wall.id) ?? false;
       const outward = new THREE.Vector3(-wall.inward.x, 0, -wall.inward.z);
       const tangent = new THREE.Vector3(wall.tangent.x, 0, wall.tangent.z);
-      const offset = hidden ? 0.34 : 0.32;
+      // Keep room dimensions tucked close to the wall shell so the diagonal end
+      // marks nearly kiss the face, matching the product references more closely.
+      const offset = hidden ? 0.11 : 0.095;
       const dimensionY = hidden ? 0.052 : snapshot.room.height + 0.045;
       const start = new THREE.Vector3(wall.start.x + outward.x * offset, dimensionY, wall.start.z + outward.z * offset);
       const end = new THREE.Vector3(wall.end.x + outward.x * offset, dimensionY, wall.end.z + outward.z * offset);

@@ -345,6 +345,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .view-options-popover input { width: 14px; height: 14px; margin: 1px 0 0; accent-color: var(--primary); }
 .view-options-popover label > span { display: grid; color: var(--foreground); font-size: 9.5px; font-weight: 600; }
 .view-options-popover small { margin-top: 2px; color: var(--muted-foreground); font-size: 8.3px; font-weight: 500; line-height: 1.3; }
+.view-options-section { margin-top: 6px; padding-top: 7px; border-top: 1px solid var(--border); }
+.view-options-section > strong { display: block; margin: 0 6px 6px; font-size: 9px; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: .08em; }
+.view-options-section label { grid-template-columns: 18px minmax(0,1fr); }
+.view-options-section label:has(select) { grid-template-columns: 1fr; cursor: default; }
+.view-options-section select { width: 100%; min-height: 32px; margin-top: 6px; border: 1px solid var(--input); border-radius: 7px; background: var(--card); color: var(--foreground); font: inherit; font-size: 9px; font-weight: 600; padding: 0 8px; }
 
 .interaction-status { min-height: 36px; border: 1px solid var(--border); border-radius: 7px; background: var(--card); display: flex; align-items: center; gap: 8px; padding: 0 10px; color: var(--muted-foreground); font-size: 9.5px; }
 .status-indicator { width: 6px; height: 6px; border-radius: 50%; background: var(--muted-foreground); }

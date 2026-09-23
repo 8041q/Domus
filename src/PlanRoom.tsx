@@ -3,7 +3,7 @@ import { PRODUCT_LIST, PRODUCTS } from './core/products';
 import { clearanceIssues } from './core/placement';
 import { polygonArea } from './core/roomGeometry';
 import { formatArea, formatLength } from './core/units';
-import type { PlanCameraView, ProductCategory } from './core/types';
+import type { CeilingLightFixtureType, PlanCameraView, ProductCategory } from './core/types';
 import { FLOOR_FINISHES, WALL_FINISHES } from './core/roomFinishes';
 import { getSnapshot, usePlannerStore } from './store';
 import { Icon } from './ui';
@@ -197,6 +197,8 @@ export function PlanRoom() {
   const setShowRoomDimensions = usePlannerStore((s) => s.setShowRoomDimensions);
   const setShowProductDimensions = usePlannerStore((s) => s.setShowProductDimensions);
   const setShowSpacingDimensions = usePlannerStore((s) => s.setShowSpacingDimensions);
+  const lighting = usePlannerStore((s) => s.room.lighting);
+  const setRoomLighting = usePlannerStore((s) => s.setRoomLighting);
   const planView = usePlannerStore((s) => s.planView);
   const setPlanView = usePlannerStore((s) => s.setPlanView);
   const addObject = usePlannerStore((s) => s.addObject);
@@ -250,6 +252,18 @@ export function PlanRoom() {
                   <label><input type="checkbox" checked={showRoomDimensions} onChange={(e) => setShowRoomDimensions(e.target.checked)} /><span>Room dimensions<small>Perimeter measurements</small></span></label>
                   <label><input type="checkbox" checked={showProductDimensions} onChange={(e) => setShowProductDimensions(e.target.checked)} /><span>Product dimensions<small>Bounding-box width, depth and height</small></span></label>
                   <label><input type="checkbox" checked={showSpacingDimensions} onChange={(e) => setShowSpacingDimensions(e.target.checked)} /><span>Item spacing<small>Nearest free-space measurements</small></span></label>
+                  <div className="view-options-section">
+                    <strong>Ceiling lighting</strong>
+                    <label><input type="checkbox" checked={lighting.enabled} onChange={(e) => setRoomLighting({ enabled: e.target.checked })} /><span>Enable room lights<small>Add ceiling fixtures and darker interior lighting</small></span></label>
+                    <label>
+                      <span>Fixture type<small>Choose the ceiling light family</small></span>
+                      <select value={lighting.fixtureType} onChange={(e) => setRoomLighting({ fixtureType: e.target.value as CeilingLightFixtureType })}>
+                        <option value="surface-mounted">Surface-mounted / Slim wafers</option>
+                        <option value="recessed">Recessed downlights / Cans</option>
+                      </select>
+                    </label>
+                    <label><input type="checkbox" checked={lighting.showWithoutCeiling} onChange={(e) => setRoomLighting({ showWithoutCeiling: e.target.checked })} /><span>Show fixtures without ceiling<small>Keep fixtures visible when the ceiling is hidden</small></span></label>
+                  </div>
                 </div>
               )}
             </div>

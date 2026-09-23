@@ -28,7 +28,8 @@ import type {
   SnapFeedback,
   BuildWorkspaceView,
   PlanCameraView,
-  MeasurementSystem
+  MeasurementSystem,
+  RoomLighting
 } from './core/types';
 
 interface PlannerStore extends PlannerSnapshot {
@@ -55,6 +56,7 @@ interface PlannerStore extends PlannerSnapshot {
   setShowRoomDimensions: (show: boolean) => void;
   setShowProductDimensions: (show: boolean) => void;
   setShowSpacingDimensions: (show: boolean) => void;
+  setRoomLighting: (patch: Partial<RoomLighting>) => void;
 
   addObject: (productId: ProductKind) => void;
   duplicateSelected: () => void;
@@ -93,6 +95,11 @@ const defaultRoom: RoomState = {
   height: 2.6,
   wallColor: '#eeeae1',
   floorFinish: 'light-oak',
+  lighting: {
+    enabled: true,
+    fixtureType: 'surface-mounted',
+    showWithoutCeiling: false
+  },
   shapeKind: 'rectangle',
   vertices: initialVertices
 };
@@ -265,6 +272,11 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
   setShowRoomDimensions: (showRoomDimensions) => set({ showRoomDimensions }),
   setShowProductDimensions: (showProductDimensions) => set({ showProductDimensions }),
   setShowSpacingDimensions: (showSpacingDimensions) => set({ showSpacingDimensions }),
+  setRoomLighting: (patch) => {
+    const before = snapshotOf(get());
+    set((state) => ({ room: ensureRoom({ ...state.room, lighting: { ...state.room.lighting, ...patch } }) }));
+    history.push(before);
+  },
 
   addObject: (productId) => {
     const before = snapshotOf(get());

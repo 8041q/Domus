@@ -20,6 +20,13 @@ export type OpeningVariant =
   | 'wall-opening';
 export type FloorFinish = 'light-oak' | 'warm-oak' | 'stone' | 'concrete';
 export type RoomShapeKind = 'rectangle' | 'l-shape' | 'recess' | 'custom';
+export type CeilingLightFixtureType = 'surface-mounted' | 'recessed';
+
+export interface RoomLighting {
+  enabled: boolean;
+  fixtureType: CeilingLightFixtureType;
+  showWithoutCeiling: boolean;
+}
 
 export interface RoomVertex extends Vec2 {
   id: string;
@@ -33,6 +40,7 @@ export interface RoomState {
   height: number;
   wallColor: string;
   floorFinish: FloorFinish;
+  lighting: RoomLighting;
   shapeKind: RoomShapeKind;
   /** Ordered simple room perimeter. Walls may be orthogonal or angled. */
   vertices: RoomVertex[];
