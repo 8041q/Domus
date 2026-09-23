@@ -249,7 +249,15 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
   showProductDimensions: false,
   showSpacingDimensions: false,
 
-  setMode: (mode) => set({ mode, selectedId: null, selectedOpeningId: null, selectedWallId: null, activeSnap: { kind: 'none' }, collisionId: null }),
+  setMode: (mode) => set((state) => ({
+    mode,
+    planView: mode === 'plan' && state.mode !== 'plan' ? 'perspective' : state.planView,
+    selectedId: null,
+    selectedOpeningId: null,
+    selectedWallId: null,
+    activeSnap: { kind: 'none' },
+    collisionId: null
+  })),
   setBuildView: (buildView) => set({ buildView }),
   setPlanView: (planView) => set({ planView }),
   setMeasurementSystem: (measurementSystem) => set({ measurementSystem }),

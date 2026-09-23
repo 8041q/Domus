@@ -101,9 +101,9 @@ export function Viewport3D({
 
   useEffect(() => {
     if (!view) return;
-    // When PlannerScene itself changes the active preset to Dollhouse after manual
+    // When PlannerScene itself changes the active preset to Cutaway after manual
     // navigation, update the UI/store without snapping the camera to the default
-    // dollhouse position. Explicit button clicks still call setCameraView normally.
+    // Cutaway view position. Explicit button clicks still call setCameraView normally.
     if (internallyChangedViewRef.current === view) {
       internallyChangedViewRef.current = null;
       return;

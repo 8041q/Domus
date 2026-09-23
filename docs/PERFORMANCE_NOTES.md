@@ -141,22 +141,22 @@ Measurement glyphs remain in their existing 3D orientation (room and spacing lab
 The first annotation-overlay implementation rendered the same Scene a second time with `renderer.autoClear = false`, but Three.js `WebGLBackground` still force-clears whenever `Scene.background` is a `Color`. That erased the already-composited 3D frame before the text-only layer was drawn. The overlay pass now temporarily suppresses only `scene.background`, explicitly renders to the default framebuffer, and restores the previous camera-layer mask/background/auto-clear state in a `finally` block. No scene geometry, controls, demand-driven scheduling, or FXAA settings were changed by this regression fix.
 
 
-### Annotation and dollhouse tuning (v6)
+### Annotation and cutaway tuning (v6)
 
 - Room/spacing labels remain line-aligned and keep the camera-dependent 180° upright flip. They now pitch only around their local X axis toward the camera; dimension lines never rotate with the text.
 - Visible annotation size is controlled in `src/theme.ts` by `dimension-label-screen-px` (room/spacing) and `product-dimension-label-screen-px` (product badges). `dimension-texture-font-px` is mainly raster source quality, not the primary visible-size control.
-- Dollhouse side-wall hiding is controlled in `src/renderer/PlannerScene.ts` by `CUTAWAY_ENTER_FACING` and `CUTAWAY_EXIT_FACING`. Lower `CUTAWAY_ENTER_FACING` values hide walls sooner at shallow angles; `CUTAWAY_EXIT_FACING` should remain lower to retain hysteresis and avoid flicker.
+- Cutaway side-wall hiding is controlled in `src/renderer/PlannerScene.ts` by `CUTAWAY_ENTER_FACING` and `CUTAWAY_EXIT_FACING`. Lower `CUTAWAY_ENTER_FACING` values hide walls sooner at shallow angles; `CUTAWAY_EXIT_FACING` should remain lower to retain hysteresis and avoid flicker.
 
 ## v8 camera/annotation tuning
 
 - Room-dimension and item-spacing label screen sizes are now independent (`room-dimension-label-screen-px` and `spacing-dimension-label-screen-px`).
-- Ceiling visibility in free Dollhouse mode is event-driven from camera elevation with hysteresis (11° enter / 15° exit); it does not add a continuous render loop.
+- Ceiling visibility in free Cutaway view mode is event-driven from camera elevation with hysteresis (11° enter / 15° exit); it does not add a continuous render loop.
 - When the ceiling is visible, only the room-dimension helper group is hidden. Product dimensions, spacing, clearance, and furniture rendering are unaffected.
-- Side-view presets force the ceiling on. The first actual OrbitControls camera change returns the view state to Dollhouse without snapping the camera position; low-angle automatic ceiling behavior is re-armed after the camera is raised past the exit threshold.
+- Side-view presets force the ceiling on. The first actual OrbitControls camera change returns the view state to Cutaway view without snapping the camera position; low-angle automatic ceiling behavior is re-armed after the camera is raised past the exit threshold.
 
 ### Preset navigation + tighter ceiling threshold (v9)
 
-- Front/back/left/right presets now remain active during wheel zoom and panning; only a real camera-direction change (orbit) exits to Dollhouse.
+- Front/back/left/right presets now remain active during wheel zoom and panning; only a real camera-direction change (orbit) exits to Cutaway view.
 - Preset exit uses camera direction rather than mouse-button assumptions, so touch/alternate OrbitControls inputs behave consistently.
-- Automatic Dollhouse ceiling thresholds are now 4° enter / 6° exit elevation, requiring a nearly horizontal view.
+- Automatic Cutaway view ceiling thresholds are now 4° enter / 6° exit elevation, requiring a nearly horizontal view.
 - No continuous render loop was added; these checks run only on existing OrbitControls render events.

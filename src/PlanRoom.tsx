@@ -12,7 +12,7 @@ const Viewport3D = lazy(() => import('./Viewport3D').then((module) => ({ default
 
 const CATEGORIES: Array<'All' | ProductCategory> = ['All', 'Seating', 'Tables', 'Storage', 'Decor'];
 const VIEW_PRESETS: Array<{ id: PlanCameraView; label: string }> = [
-  { id: 'perspective', label: 'Dollhouse' },
+  { id: 'perspective', label: 'Cutaway' },
   { id: 'top', label: 'Top' },
   { id: 'front', label: 'Front' },
   { id: 'right', label: 'Right' },

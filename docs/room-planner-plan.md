@@ -694,7 +694,7 @@ The 2D builder now keeps a stable drafting transform across geometry edits. Its 
 
 ### Camera crossing model
 
-The renderer no longer projects the camera away from wall geometry. Instead, wall-level visibility has a camera-crossing hysteresis zone around the 0.10 m structural core. While crossing, the complete wall assembly is hidden; once clearly on either side, regular dollhouse cutaway classification applies. Camera coordinates remain untouched, eliminating OrbitControls jitter while still preventing the camera-inside-wall colour-fill failure.
+The renderer no longer projects the camera away from wall geometry. Instead, wall-level visibility has a camera-crossing hysteresis zone around the 0.10 m structural core. While crossing, the complete wall assembly is hidden; once clearly on either side, regular Cutaway view classification applies. Camera coordinates remain untouched, eliminating OrbitControls jitter while still preventing the camera-inside-wall colour-fill failure.
 
 ### Openings and floor junction
 

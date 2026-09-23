@@ -21,14 +21,14 @@ The interface now uses one semantic design language inspired by shadcn/ui rather
 The project intentionally does not add Tailwind/Radix dependencies just for appearance. The current Vite app keeps its existing runtime stack while adopting shadcn's semantic-token/component principles, which keeps the room-planning engine isolated from a framework migration.
 
 
-## Phase 9 - reference-style dollhouse interaction
+## Phase 9 - reference-style cutaway interaction
 
 This pass brings the 3D workspace closer to the supplied reference images/video:
 
-- **Dollhouse dimensions** now follow the visible room silhouette: far/visible walls dimension above the wall top, while cut-away foreground walls dimension around the floor edge. Metric drafting labels use centimetres.
+- **Cutaway dimensions** now follow the visible room silhouette: far/visible walls dimension above the wall top, while cut-away foreground walls dimension around the floor edge. Metric drafting labels use centimetres.
 - **Selected products** use a crisp yellow screen-space silhouette rather than a blue bounding box.
 - **Product dimensions** use a neutral dashed measurement cage, matching extension lines, and the same white bordered measurement badges used by the rest of the annotation UI while keeping the scene selection outline visible.
-- **Wall junctions** overlap their structural cores, finish faces and skirting slightly at true wall ends to remove hairline corner gaps in the dollhouse view.
+- **Wall junctions** overlap their structural cores, finish faces and skirting slightly at true wall ends to remove hairline corner gaps in the cutaway view.
 - **Furniture dragging** is more magnetic: wall-affinity products auto-rotate and settle on the visible interior wall face, object-edge snaps have practical enter/exit hysteresis, rotated collision tests use the real oriented footprint, and Shift still provides immediate free-move/overlap.
 - Perspective framing/background were tuned toward the lighter reference presentation, and furniture now exposes a move cursor while draggable.
 
@@ -67,7 +67,7 @@ Phase 8 removes camera collision entirely. Instead:
 - Camera motion remains continuous.
 - Each wall has a small hysteresis-based **crossing transition zone** around its structural core.
 - While the camera is physically crossing that zone, the complete wall assembly is cut away temporarily.
-- After the camera is clearly inside or outside, normal dollhouse cutaway logic resumes.
+- After the camera is clearly inside or outside, normal cutaway logic resumes.
 - Wall body, interior finish, frames and attached opening visuals share the same wall-level visibility state.
 
 This prevents both the all-wall-colour failure and the camera snapping/jitter introduced by the earlier protection.
@@ -113,8 +113,8 @@ This means a custom opening can be a floating hole, a low opening, a floor-level
 ## Existing Plan Room baseline
 
 - Procedural placeholder furniture; GLBs are not required.
-- Dollhouse, Top, Front, Right, Back and Left views.
-- Sectional dollhouse cutaway.
+- Cutaway, Top, Front, Right, Back and Left views.
+- Sectional Cutaway.
 - Direct furniture dragging and arbitrary rotation.
 - Light snapping plus Shift free-move.
 - Spatial wall auto-alignment.
@@ -168,7 +168,7 @@ npm run build
 
 ## Blender / GLB export organization
 
-`Export GLB` now builds a semantic export scene rather than serializing the live dollhouse view.
+`Export GLB` now builds a semantic export scene rather than serializing the live cutaway view.
 Camera cutaways and `helperGroup` UI are therefore irrelevant to the output.
 
 The portable glTF hierarchy is:

@@ -66,14 +66,14 @@ const WALL_THICKNESS = 0.05;
 const FLOOR_THICKNESS = WALL_THICKNESS;
 const CEILING_THICKNESS = WALL_THICKNESS;
 
-// Dollhouse cutaway thresholds. `facing` is the horizontal dot product between a
+// Cutaway thresholds. `facing` is the horizontal dot product between a
 // wall's outward normal and the direction from that wall to the camera. Smaller
 // ENTER values make side walls disappear sooner at shallow viewing angles. EXIT
 // stays lower than ENTER to prevent flicker while orbiting around the threshold.
 const CUTAWAY_ENTER_FACING = 0.08;
 const CUTAWAY_EXIT_FACING = 0.02;
 
-// Automatic ceiling behavior for the free dollhouse camera. When the camera is
+// Automatic ceiling behavior for the free Cutaway view camera. When the camera is
 // almost level with its target (small elevation angle), the room reads as an
 // enclosed eye-level view, so show the ceiling. The threshold is intentionally
 // tight: the camera must be nearly horizontal. EXIT stays slightly wider to avoid
@@ -133,7 +133,6 @@ export class PlannerScene {
   private lastHelperKey = '';
   private currentCameraView: PlanCameraView = 'perspective';
   private ceilingVisible = false;
-  private suppressAutoCeilingUntilRaised = false;
   private environmentTexture: THREE.Texture | null = null;
   private mainLight: THREE.DirectionalLight;
   private wallHiddenState = new Map<string, boolean>();
@@ -161,6 +160,9 @@ export class PlannerScene {
     // noticeably darker than the shell is important: white chamfers and selection
     // annotations should remain readable without making the room itself look greyed out.
     this.scene.background = new THREE.Color(0xd2d2d2);
+    // Start open by construction. The first camera evaluation may opt into the
+    // ceiling, but there is never a one-frame closed-room flash while Plan Room mounts.
+    this.ceilingGroup.visible = false;
     this.scene.add(this.floorGroup, this.wallsGroup, this.ceilingGroup, this.objectGroup, this.helperGroup);
 
     // Screen-space silhouette outlining matches the reference planner: the selected
@@ -542,7 +544,7 @@ export class PlannerScene {
     // Give the active finish maps a chance to arrive before GLTFExporter serialises
     // the floor material. Failed requests resolve too, so export never hangs offline.
     await this.floorTextureReady;
-    // Export semantic data, not the current dollhouse view. Camera cutaways,
+    // Export semantic data, not the current Cutaway view. Camera cutaways,
     // dimensions, selection outlines and other helper/UI state are never part of
     // this export tree.
     const exportRoot = new THREE.Group();
@@ -597,24 +599,26 @@ export class PlannerScene {
 
   setCameraView(view: PlanCameraView) {
     this.currentCameraView = view;
-    this.suppressAutoCeilingUntilRaised = false;
     const room = this.bridge.getSnapshot().room;
     const bounds = roomBounds(room.vertices);
     const cx = (bounds.minX + bounds.maxX) / 2;
     const cz = (bounds.minZ + bounds.maxZ) / 2;
     const size = Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ, 2);
-    const targetY = Math.min(0.95, room.height * 0.38);
-    const isDollhouse = view === 'perspective';
-    this.camera.fov = isDollhouse ? 39 : 32;
+    // Aim at the room volume centre rather than below it. This keeps the room
+    // visually centered in both perspective and orthographic-like preset views.
+    const targetY = room.height * 0.5;
+    const isCutaway = view === 'perspective';
+    this.camera.fov = isCutaway ? 39 : 32;
     this.camera.updateProjectionMatrix();
-    const distance = Math.max(4.2, size * (isDollhouse ? 1.72 : 2.2));
+    const distance = Math.max(3.8, size * (isCutaway ? 1.72 : 1.3));
     this.controls.maxDistance = Math.max(20, size * 4.5);
     this.controls.target.set(cx, targetY, cz);
 
     switch (view) {
       case 'top':
-        this.camera.position.set(cx + 0.01, Math.max(room.height + 4, size * 2.2), cz + 0.01);
-        this.controls.target.set(cx, 0, cz);
+        // Keep a tiny Z-only offset so lookAt/OrbitControls never hit the exact
+        // pole singularity. Offsetting both X and Z rotated the plan diagonally.
+        this.camera.position.set(cx, Math.max(room.height + 4, size * 2.0), cz + 0.01);
         break;
       case 'front':
         this.camera.position.set(cx, targetY, bounds.minZ - distance);
@@ -652,7 +656,7 @@ export class PlannerScene {
       this.lastFloorFinish = floorFinish;
       this.lastOpeningsKey = openingsKey;
       const bounds = roomBounds(snapshot.room.vertices);
-      this.controls.target.set((bounds.minX + bounds.maxX) / 2, Math.min(0.95, snapshot.room.height * 0.38), (bounds.minZ + bounds.maxZ) / 2);
+      this.controls.target.set((bounds.minX + bounds.maxX) / 2, snapshot.room.height * 0.5, (bounds.minZ + bounds.maxZ) / 2);
       this.updateShadowBounds(snapshot);
     } else if (floorFinish !== this.lastFloorFinish) {
       // Finish changes are deliberately decoupled from geometry rebuilds. Keep the
@@ -1096,18 +1100,12 @@ export class PlannerScene {
       const horizontal = Math.hypot(offset.x, offset.z);
       const elevation = Math.atan2(Math.abs(offset.y), Math.max(horizontal, 1e-6));
 
-      // After leaving a preset by hand, keep the ceiling open until the user has
-      // clearly raised the camera. This makes the preset -> dollhouse transition
-      // immediate even if the preset began at exactly eye level.
-      if (this.suppressAutoCeilingUntilRaised && elevation > CEILING_EXIT_ELEVATION) {
-        this.suppressAutoCeilingUntilRaised = false;
-      }
-
-      if (!this.suppressAutoCeilingUntilRaised) {
-        visible = this.ceilingVisible
-          ? elevation <= CEILING_EXIT_ELEVATION
-          : elevation <= CEILING_ENTER_ELEVATION;
-      }
+      // Once a preset is left, evaluate the *current* elevation immediately.
+      // If the orbit lands inside the ceiling range, the ceiling stays/appears in
+      // that same motion instead of requiring a later exit-and-reentry cycle.
+      visible = this.ceilingVisible
+        ? elevation <= CEILING_EXIT_ELEVATION
+        : elevation <= CEILING_ENTER_ELEVATION;
     }
 
     if (!force && visible === this.ceilingVisible) return;
@@ -1505,8 +1503,8 @@ export class PlannerScene {
         && along > -0.12
         && along < wall.length + 0.12
         && Math.abs(signed) < transitionLimit;
-      const dollhouseCutaway = previousHidden ? facing > CUTAWAY_EXIT_FACING : facing > CUTAWAY_ENTER_FACING;
-      nextState.set(wall.id, crossingWall || dollhouseCutaway);
+      const viewCutaway = previousHidden ? facing > CUTAWAY_EXIT_FACING : facing > CUTAWAY_ENTER_FACING;
+      nextState.set(wall.id, crossingWall || viewCutaway);
     }
 
     const cutawayChanged = [...nextState.entries()].some(([id, hidden]) => this.wallHiddenState.get(id) !== hidden)
@@ -1519,7 +1517,7 @@ export class PlannerScene {
         : wallId ? [wallId] : [];
       if (!wallIds.length) return;
       // A junction belongs to every adjoining wall; hide it whenever one of those
-      // walls is cut away so no white seam is left floating in the dollhouse opening.
+      // walls is cut away so no white seam is left floating in the Cutaway view opening.
       const hidden = wallIds.some((id) => nextState.get(id) ?? false);
       if (force || object.visible === hidden) object.visible = !hidden;
     });
@@ -1734,7 +1732,8 @@ export class PlannerScene {
     labelStyle = 'world',
     keepUpright = true,
     textOutlinePx = themeMetric('dimension-text-outline-px'),
-    targetPixelHeight = themeMetric('room-dimension-label-screen-px')
+    targetPixelHeight = themeMetric('room-dimension-label-screen-px'),
+    fontWeight = 700
   }: {
     parent?: THREE.Group;
     start: THREE.Vector3;
@@ -1749,10 +1748,11 @@ export class PlannerScene {
     keepUpright?: boolean;
     textOutlinePx?: number;
     targetPixelHeight?: number;
+    fontWeight?: number;
   }) {
     const label = labelStyle === 'camera-card'
       ? this.createProductDimensionBadge(text, labelHeight, textOutlinePx, targetPixelHeight)
-      : this.createMeasurementTextPlane(text, labelHeight, textOutlinePx, targetPixelHeight);
+      : this.createMeasurementTextPlane(text, labelHeight, textOutlinePx, targetPixelHeight, fontWeight);
     const worldWidth = typeof label.userData.labelWorldWidth === 'number' ? label.userData.labelWorldWidth : labelHeight * 1.4;
     const length = start.distanceTo(end);
     const gap = Math.min(Math.max(worldWidth + 0.11, 0.16), length * 0.7);
@@ -1842,11 +1842,11 @@ export class PlannerScene {
     ctx.fillText(text, x, y);
   }
 
-  private createMeasurementTextPlane(text: string, height: number, outlinePx: number = themeMetric('dimension-text-outline-px'), targetPixelHeight: number = themeMetric('room-dimension-label-screen-px')) {
+  private createMeasurementTextPlane(text: string, height: number, outlinePx: number = themeMetric('dimension-text-outline-px'), targetPixelHeight: number = themeMetric('room-dimension-label-screen-px'), fontWeight = 700) {
     const fontPx = themeMetric('dimension-texture-font-px');
     const textureScale = 2;
     const probe = document.createElement('canvas').getContext('2d')!;
-    probe.font = `700 ${fontPx}px Inter, system-ui, sans-serif`;
+    probe.font = `${fontWeight} ${fontPx}px Inter, system-ui, sans-serif`;
     const measuredWidth = Math.ceil(probe.measureText(text).width);
     const paddingX = 14 + outlinePx * 2;
     const paddingY = 10 + outlinePx * 2;
@@ -1859,7 +1859,7 @@ export class PlannerScene {
     const ctx = canvas.getContext('2d')!;
     ctx.scale(textureScale, textureScale);
     ctx.clearRect(0, 0, logicalWidth, logicalHeight);
-    ctx.font = `700 ${fontPx}px Inter, system-ui, sans-serif`;
+    ctx.font = `${fontWeight} ${fontPx}px Inter, system-ui, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.lineJoin = 'round';
@@ -2170,7 +2170,8 @@ export class PlannerScene {
         // Room dimensions are intentionally plain dark text. Spacing/product
         // dimensions retain their white halo for contrast over furniture/floors.
         textOutlinePx: 0,
-        targetPixelHeight: themeMetric('room-dimension-label-screen-px')
+        targetPixelHeight: themeMetric('room-dimension-label-screen-px'),
+        fontWeight: 500
       });
 
       const witness = outward.clone().multiplyScalar(0.068);
@@ -2323,7 +2324,7 @@ export class PlannerScene {
       const camDz = this.camera.position.z - centre.z;
       const camLen = Math.hypot(camDx, camDz) || 1;
       const facing = outwardX * (camDx / camLen) + outwardZ * (camDz / camLen);
-      // The dollhouse system hides these foreground walls; don't let their invisible planes steal dragging.
+      // The Cutaway view system hides these foreground walls; don't let their invisible planes steal dragging.
       if (facing > 0.18 && this.currentCameraView !== 'top') continue;
       const normal = new THREE.Vector3(wall.inward.x, 0, wall.inward.z);
       const plane = new THREE.Plane(normal, -(normal.x * wall.start.x + normal.z * wall.start.z));
@@ -2500,15 +2501,10 @@ export class PlannerScene {
 
   private leavePresetForManualNavigation() {
     if (this.currentCameraView === 'perspective') return;
-    // Camera presets are transient presentation views. The first actual camera
-    // change caused by orbit/pan/zoom returns to free dollhouse behavior without
-    // moving the camera to the default dollhouse position. Waiting for `change`
-    // (rather than pointer-down) means clicking/dragging furniture does not exit a
-    // preset merely because OrbitControls saw the same pointer event first.
+    // Camera presets are transient presentation views. An actual orbit returns
+    // to free Cutaway view behavior without moving the camera to the default position.
+    // Zoom/pan preserve the preset; pointer interaction with furniture cannot exit it.
     this.currentCameraView = 'perspective';
-    this.suppressAutoCeilingUntilRaised = true;
-    this.camera.fov = 39;
-    this.camera.updateProjectionMatrix();
     this.bridge.cameraViewChanged?.('perspective');
     this.updateCeilingVisibility(true);
     this.updateCutawayWalls(true);
