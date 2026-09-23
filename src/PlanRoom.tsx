@@ -1,5 +1,4 @@
-import { useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from 'react';
-import { Viewport3D } from './Viewport3D';
+import { lazy, Suspense, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from 'react';
 import { PRODUCT_LIST, PRODUCTS } from './core/products';
 import { clearanceIssues } from './core/placement';
 import { polygonArea } from './core/roomGeometry';
@@ -8,6 +7,8 @@ import type { PlanCameraView, ProductCategory } from './core/types';
 import { FLOOR_FINISHES, WALL_FINISHES } from './core/roomFinishes';
 import { getSnapshot, usePlannerStore } from './store';
 import { Icon } from './ui';
+
+const Viewport3D = lazy(() => import('./Viewport3D').then((module) => ({ default: module.Viewport3D })));
 
 const CATEGORIES: Array<'All' | ProductCategory> = ['All', 'Seating', 'Tables', 'Storage', 'Decor'];
 const VIEW_PRESETS: Array<{ id: PlanCameraView; label: string }> = [
@@ -257,7 +258,9 @@ export function PlanRoom() {
         </div>
 
         <div className="designer-stage">
-          <Viewport3D furniture interactive view={planView} exportable />
+          <Suspense fallback={<div className="viewport-loading">Loading 3D room…</div>}>
+            <Viewport3D furniture interactive view={planView} exportable />
+          </Suspense>
           {showFinishes && <FinishesPanel onClose={() => setShowFinishes(false)} />}
           {selectedId && <SelectionPanel />}
         </div>

@@ -22,12 +22,13 @@ const PAD = 64;
 type Purpose = 'build' | 'plan';
 
 type ViewTransform = { scale: number; ox: number; oz: number };
+type DragView = ViewTransform & { rect: { left: number; top: number; width: number; height: number } };
 
 type DragState =
-  | { type: 'wall'; id: string; before: PlannerSnapshot; view: ViewTransform }
-  | { type: 'corner'; id: string; before: PlannerSnapshot; view: ViewTransform }
+  | { type: 'wall'; id: string; before: PlannerSnapshot; view: DragView }
+  | { type: 'corner'; id: string; before: PlannerSnapshot; view: DragView }
   | { type: 'object'; id: string; before: PlannerSnapshot; snap: SnapFeedback }
-  | { type: 'opening'; id: string; before: PlannerSnapshot; view: ViewTransform };
+  | { type: 'opening'; id: string; before: PlannerSnapshot; view: DragView };
 
 type HoverTarget = { type: 'wall' | 'corner' | 'opening' | 'split'; id: string } | null;
 
@@ -203,8 +204,10 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
 
   const metrics = () => {
     const canvas = canvasRef.current!;
+    // Build drags pin the view transform and canvas rect at pointer-down. This avoids a
+    // synchronous layout read on every pointermove and keeps world/screen mapping stable.
+    if (drag && drag.type !== 'object') return { rect: drag.view.rect, scale: drag.view.scale, ox: drag.view.ox, oz: drag.view.oz };
     const rect = canvas.getBoundingClientRect();
-    if (drag && drag.type !== 'object') return { rect, ...drag.view };
 
     // The drafting viewport is intentionally stable while dimensions change. Grid cells
     // represent world units, so growing a room makes it cover more cells instead of
@@ -245,8 +248,13 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
     if (!canvas) return;
     const { rect, scale, ox, oz } = metrics();
     const dpr = Math.min(window.devicePixelRatio, 2);
-    canvas.width = Math.max(1, Math.round(rect.width * dpr));
-    canvas.height = Math.max(1, Math.round(rect.height * dpr));
+    const targetWidth = Math.max(1, Math.round(rect.width * dpr));
+    const targetHeight = Math.max(1, Math.round(rect.height * dpr));
+    // Reassigning canvas.width/height reallocates and clears the backing store. During
+    // dragging this effect can run every frame, so only resize when the CSS size/DPR
+    // actually changed.
+    if (canvas.width !== targetWidth) canvas.width = targetWidth;
+    if (canvas.height !== targetHeight) canvas.height = targetHeight;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const interaction = themeColor('interaction');
@@ -524,100 +532,118 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
         const maxHorizontalSteps = Math.max(1, Math.ceil(maxHorizontal / horizontalStep) + 1);
         const maxVerticalSteps = Math.max(1, Math.ceil(maxVertical / verticalStep) + 1);
 
-        // Search the whole usable viewport, not just a small fixed neighbourhood.
-        // That gives dense notches somewhere safe to go without ever needing to stack
-        // two wall labels on top of each other.
-        for (let verticalIndex = -maxVerticalSteps; verticalIndex <= maxVerticalSteps; verticalIndex += 1) {
-          for (let horizontalIndex = -maxHorizontalSteps; horizontalIndex <= maxHorizontalSteps; horizontalIndex += 1) {
-            const rawX = baseX + horizontalIndex * horizontalStep;
-            const rawY = baseY + verticalIndex * verticalStep;
-            const x = Math.max(usableLeft, Math.min(usableRight, rawX));
-            const y = Math.max(usableTop, Math.min(usableBottom, rawY));
-            const key = `${Math.round(x)}:${Math.round(y)}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
+        const addCandidate = (horizontalIndex: number, verticalIndex: number) => {
+          const rawX = baseX + horizontalIndex * horizontalStep;
+          const rawY = baseY + verticalIndex * verticalStep;
+          const x = Math.max(usableLeft, Math.min(usableRight, rawX));
+          const y = Math.max(usableTop, Math.min(usableBottom, rawY));
+          const key = `${Math.round(x)}:${Math.round(y)}`;
+          if (seen.has(key)) return;
+          seen.add(key);
 
-            const candidateRect = { x: x - halfWidth, y: y - halfHeight, width: boxWidth, height: boxHeight };
+          const candidateRect = { x: x - halfWidth, y: y - halfHeight, width: boxWidth, height: boxHeight };
 
-            // Existing wall labels and angle text are text geometry, not soft hints.
-            // They may never overlap. Corners are hard too because hiding a vertex
-            // makes editing ambiguous. Split buttons are softer because their own pass
-            // can move them deeper into the room after labels are committed.
-            const textBlocked = [...placedLabelRects, ...angleBlockers]
-              .some((blocker) => rectsOverlap(candidateRect, blocker, WALL_LABEL_PADDING));
-            const cornerBlocked = cornerBlockers
-              .some((blocker) => rectsOverlap(candidateRect, blocker, 3));
-            const labelCutsLeader = placedLeaderSegments
-              .some((existing) => segmentIntersectsRect(existing, candidateRect, 3));
-            const boxBlocked = textBlocked || cornerBlocked || labelCutsLeader;
-            const softCollisions = naturalSplitBlockers.reduce(
-              (count, blocker) => count + (rectsOverlap(candidateRect, blocker, 4) ? 1 : 0),
-              0
-            );
+          // Existing wall labels and angle text are text geometry, not soft hints.
+          // They may never overlap. Corners are hard too because hiding a vertex
+          // makes editing ambiguous. Split buttons are softer because their own pass
+          // can move them deeper into the room after labels are committed.
+          const textBlocked = [...placedLabelRects, ...angleBlockers]
+            .some((blocker) => rectsOverlap(candidateRect, blocker, WALL_LABEL_PADDING));
+          const cornerBlocked = cornerBlockers
+            .some((blocker) => rectsOverlap(candidateRect, blocker, 3));
+          const labelCutsLeader = placedLeaderSegments
+            .some((existing) => segmentIntersectsRect(existing, candidateRect, 3));
+          const boxBlocked = textBlocked || cornerBlocked || labelCutsLeader;
+          const softCollisions = naturalSplitBlockers.reduce(
+            (count, blocker) => count + (rectsOverlap(candidateRect, blocker, 4) ? 1 : 0),
+            0
+          );
 
-            const dx = x - baseX;
-            const dy = y - baseY;
-            const travel = Math.hypot(dx, dy);
+          const dx = x - baseX;
+          const dy = y - baseY;
+          const travel = Math.hypot(dx, dy);
 
-            // Keep measurement labels on the semantic exterior of their wall. The
-            // candidate search spans the whole canvas, so distance alone is not enough:
-            // without this half-plane test a short route can jump through the wall and
-            // place an exterior measurement inside the room. For an axis-aligned label
-            // rectangle, project its half extents onto the wall's outward normal to know
-            // whether the *whole box* is outside, not merely its centre.
-            const outwardDistance = (x - midpoint.x) * outwardX + (y - midpoint.y) * outwardY;
-            const projectedHalfExtent = Math.abs(outwardX) * halfWidth + Math.abs(outwardY) * halfHeight;
-            const exteriorClearance = outwardDistance - projectedHalfExtent;
-            const sideTier: 0 | 1 | 2 = exteriorClearance >= 4
-              ? 0
-              : outwardDistance > 0
-                ? 1
-                : 2;
+          // Keep measurement labels on the semantic exterior of their wall. The
+          // candidate search spans the whole canvas, so distance alone is not enough:
+          // without this half-plane test a short route can jump through the wall and
+          // place an exterior measurement inside the room. For an axis-aligned label
+          // rectangle, project its half extents onto the wall's outward normal to know
+          // whether the *whole box* is outside, not merely its centre.
+          const outwardDistance = (x - midpoint.x) * outwardX + (y - midpoint.y) * outwardY;
+          const projectedHalfExtent = Math.abs(outwardX) * halfWidth + Math.abs(outwardY) * halfHeight;
+          const exteriorClearance = outwardDistance - projectedHalfExtent;
+          const sideTier: 0 | 1 | 2 = exteriorClearance >= 4
+            ? 0
+            : outwardDistance > 0
+              ? 1
+              : 2;
 
-            // Horizontal movement is only mildly preferred. A substantially shorter
-            // vertical or diagonal move should still win *within the same semantic side*.
-            const movementCost = travel + Math.abs(dy) * 0.22;
-            const needsLeader = travel > 2 || Math.hypot(x - midpoint.x, y - midpoint.y) > 42;
-            const leader = needsLeader ? { start: leaderStart, end: nearestPointOnRect(leaderStart, candidateRect) } : null;
-            const leaderLength = leader ? Math.hypot(leader.end.x - leader.start.x, leader.end.y - leader.start.y) : 0;
+          // Horizontal movement is only mildly preferred. A substantially shorter
+          // vertical or diagonal move should still win *within the same semantic side*.
+          const movementCost = travel + Math.abs(dy) * 0.22;
+          const needsLeader = travel > 2 || Math.hypot(x - midpoint.x, y - midpoint.y) > 42;
+          const leader = needsLeader ? { start: leaderStart, end: nearestPointOnRect(leaderStart, candidateRect) } : null;
+          const leaderLength = leader ? Math.hypot(leader.end.x - leader.start.x, leader.end.y - leader.start.y) : 0;
 
-            const crossesLeader = leader != null && placedLeaderSegments.some((existing) => segmentsIntersect(leader, existing));
-            const leaderThroughLabel = leader != null && placedLabelRects.some((placed) => segmentIntersectsRect(leader, placed, 3));
-            const leaderThroughAngle = leader != null && angleBlockers.some((blocker) => segmentIntersectsRect(leader, blocker, 2));
-            const leaderBlocked = crossesLeader || leaderThroughLabel || leaderThroughAngle;
+          const crossesLeader = leader != null && placedLeaderSegments.some((existing) => segmentsIntersect(leader, existing));
+          const leaderThroughLabel = leader != null && placedLabelRects.some((placed) => segmentIntersectsRect(leader, placed, 3));
+          const leaderThroughAngle = leader != null && angleBlockers.some((blocker) => segmentIntersectsRect(leader, blocker, 2));
+          const leaderBlocked = crossesLeader || leaderThroughLabel || leaderThroughAngle;
 
-            candidates.push({
-              x,
-              y,
-              rect: candidateRect,
-              leader,
-              softCollisions,
-              boxBlocked,
-              leaderBlocked,
-              sideTier,
-              score: movementCost + leaderLength * 0.04 + softCollisions * 120
-            });
-          }
-        }
-
-        candidates.sort((a, b) => a.score - b.score);
-
-        // Side semantics outrank distance. First exhaust candidates whose complete
-        // text box stays outside the room, then allow an exterior-centred box that
-        // slightly straddles the wall half-plane. Crossing to the room side is only an
-        // emergency fallback when there is literally no collision-free exterior slot.
-        // Within each tier, retain the connector/split-control preferences from v4.
-        const chooseFromSideTier = (sideTier: 0 | 1 | 2) => {
-          const tier = candidates.filter((candidate) => candidate.sideTier === sideTier);
-          return tier.find((candidate) => !candidate.boxBlocked && !candidate.leaderBlocked && candidate.softCollisions === 0)
-            ?? tier.find((candidate) => !candidate.boxBlocked && !candidate.leaderBlocked)
-            ?? tier.find((candidate) => !candidate.boxBlocked && candidate.softCollisions === 0)
-            ?? tier.find((candidate) => !candidate.boxBlocked);
+          candidates.push({
+            x,
+            y,
+            rect: candidateRect,
+            leader,
+            softCollisions,
+            boxBlocked,
+            leaderBlocked,
+            sideTier,
+            score: movementCost + leaderLength * 0.04 + softCollisions * 120
+          });
         };
 
-        let label = chooseFromSideTier(0)
-          ?? chooseFromSideTier(1)
-          ?? chooseFromSideTier(2);
+        // Most rooms have a collision-free label within a few grid steps of the wall.
+        // Try that compact neighbourhood first; only pathological/dense layouts pay for
+        // the previous whole-viewport search.
+        const localRadius = 4;
+        for (let verticalIndex = -localRadius; verticalIndex <= localRadius; verticalIndex += 1) {
+          for (let horizontalIndex = -localRadius; horizontalIndex <= localRadius; horizontalIndex += 1) {
+            addCandidate(horizontalIndex, verticalIndex);
+          }
+        }
+        candidates.sort((a, b) => a.score - b.score);
+        let label = candidates.find((candidate) => candidate.sideTier === 0
+          && !candidate.boxBlocked
+          && !candidate.leaderBlocked
+          && candidate.softCollisions === 0);
+
+        if (!label) {
+          // Dense custom rooms can still need distant placements. Expand to the whole
+          // usable viewport only when the fast local search could not find an ideal slot.
+          for (let verticalIndex = -maxVerticalSteps; verticalIndex <= maxVerticalSteps; verticalIndex += 1) {
+            for (let horizontalIndex = -maxHorizontalSteps; horizontalIndex <= maxHorizontalSteps; horizontalIndex += 1) {
+              addCandidate(horizontalIndex, verticalIndex);
+            }
+          }
+          candidates.sort((a, b) => a.score - b.score);
+
+          // Side semantics outrank distance. First exhaust candidates whose complete
+          // text box stays outside the room, then allow an exterior-centred box that
+          // slightly straddles the wall half-plane. Crossing to the room side is only an
+          // emergency fallback when there is literally no collision-free exterior slot.
+          const chooseFromSideTier = (sideTier: 0 | 1 | 2) => {
+            const tier = candidates.filter((candidate) => candidate.sideTier === sideTier);
+            return tier.find((candidate) => !candidate.boxBlocked && !candidate.leaderBlocked && candidate.softCollisions === 0)
+              ?? tier.find((candidate) => !candidate.boxBlocked && !candidate.leaderBlocked)
+              ?? tier.find((candidate) => !candidate.boxBlocked && candidate.softCollisions === 0)
+              ?? tier.find((candidate) => !candidate.boxBlocked);
+          };
+
+          label = chooseFromSideTier(0)
+            ?? chooseFromSideTier(1)
+            ?? chooseFromSideTier(2);
+        }
 
         if (!label) {
           // A tiny canvas can theoretically run out of legal label space. In that
@@ -836,7 +862,12 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
     const px = e.clientX - rect.left;
     const py = e.clientY - rect.top;
     const before = getSnapshot();
-    const view = { scale, ox, oz };
+    const view: DragView = {
+      scale,
+      ox,
+      oz,
+      rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height }
+    };
 
     if (purpose === 'build') {
       const corner = hitCorner(px, py, scale, ox, oz);

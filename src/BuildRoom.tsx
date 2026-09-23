@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
 import { Plan2D } from './Plan2D';
-import { Viewport3D } from './Viewport3D';
 import { getRoomWalls, getWall, polygonArea } from './core/roomGeometry';
 import { dimensionStepMetres, displayLengthValue, displayValueToMetres, formatArea, formatLength, lengthInputSuffix } from './core/units';
 import type { MeasurementSystem, OpeningVariant, RoomOpening, RoomShapeKind } from './core/types';
 import { getSnapshot, usePlannerStore } from './store';
 import { Icon } from './ui';
+
+const Viewport3D = lazy(() => import('./Viewport3D').then((module) => ({ default: module.Viewport3D })));
 
 
 const OPENING_VARIANTS: Record<RoomOpening['type'], Array<{ id: OpeningVariant; label: string }>> = {
@@ -384,7 +385,11 @@ export function BuildRoom() {
           </div>
         </div>
         <div className="workspace-content">
-          {buildView === 'plan' ? <Plan2D purpose="build" /> : <Viewport3D furniture={false} interactive={false} architectureInteractive />}
+          {buildView === 'plan' ? <Plan2D purpose="build" /> : (
+            <Suspense fallback={<div className="viewport-loading">Loading 3D preview…</div>}>
+              <Viewport3D furniture={false} interactive={false} architectureInteractive />
+            </Suspense>
+          )}
         </div>
       </section>
     </div>

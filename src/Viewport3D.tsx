@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { PlannerScene } from './renderer/PlannerScene';
 import type { PlanCameraView } from './core/types';
-import { getSnapshot, usePlannerStore } from './store';
+import { usePlannerStore } from './store';
 
 export function Viewport3D({
   furniture = true,
@@ -36,17 +36,25 @@ export function Viewport3D({
   useEffect(() => {
     if (!ref.current) return;
     const scene = new PlannerScene(ref.current, {
-      getSnapshot: () => ({
-        ...getSnapshot(),
-        selectedId: usePlannerStore.getState().selectedId,
-        selectedOpeningId: usePlannerStore.getState().selectedOpeningId,
-        activeSnap: usePlannerStore.getState().activeSnap,
-        showClearance: usePlannerStore.getState().showClearance,
-        showRoomDimensions: usePlannerStore.getState().showRoomDimensions,
-        showProductDimensions: usePlannerStore.getState().showProductDimensions,
-        showSpacingDimensions: usePlannerStore.getState().showSpacingDimensions,
-        measurementSystem: usePlannerStore.getState().measurementSystem
-      }),
+      // The renderer treats snapshots as read-only. Returning live immutable Zustand
+      // references here avoids structuredClone() of the entire project on every render
+      // frame; history/drag snapshots still clone explicitly at interaction boundaries.
+      getSnapshot: () => {
+        const state = usePlannerStore.getState();
+        return {
+          room: state.room,
+          openings: state.openings,
+          objects: state.objects,
+          selectedId: state.selectedId,
+          selectedOpeningId: state.selectedOpeningId,
+          activeSnap: state.activeSnap,
+          showClearance: state.showClearance,
+          showRoomDimensions: state.showRoomDimensions,
+          showProductDimensions: state.showProductDimensions,
+          showSpacingDimensions: state.showSpacingDimensions,
+          measurementSystem: state.measurementSystem
+        };
+      },
       select: (id) => usePlannerStore.getState().select(id),
       selectOpening: (id) => usePlannerStore.getState().selectOpening(id),
       updateObject: (id, patch) => usePlannerStore.getState().updateObject(id, patch),
@@ -57,8 +65,19 @@ export function Viewport3D({
     sceneRef.current = scene;
     if (view) scene.setCameraView(view);
     let syncFrame = 0;
-    const unsubscribe = usePlannerStore.subscribe(() => {
-      if (syncFrame) return;
+    const unsubscribe = usePlannerStore.subscribe((state, previous) => {
+      const sceneStateChanged = state.room !== previous.room
+        || state.openings !== previous.openings
+        || (furniture && state.objects !== previous.objects)
+        || (furniture && state.selectedId !== previous.selectedId)
+        || (architectureInteractive && state.selectedOpeningId !== previous.selectedOpeningId)
+        || (furniture && state.activeSnap !== previous.activeSnap)
+        || state.showClearance !== previous.showClearance
+        || state.showRoomDimensions !== previous.showRoomDimensions
+        || state.showProductDimensions !== previous.showProductDimensions
+        || state.showSpacingDimensions !== previous.showSpacingDimensions
+        || state.measurementSystem !== previous.measurementSystem;
+      if (!sceneStateChanged || syncFrame) return;
       syncFrame = requestAnimationFrame(() => {
         syncFrame = 0;
         scene.renderFromState();

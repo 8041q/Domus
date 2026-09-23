@@ -409,3 +409,21 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .finish-toggle { padding-inline: 7px; }
   .view-options-popover { right: -48px; width: 230px; }
 }
+
+/* Lightweight Suspense placeholders used while deferred planner chunks load. */
+.viewport-loading,
+.mode-loading {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  color: #71717a;
+  background: #f8f8f6;
+  font-size: 13px;
+}
+
+.designer-stage > .viewport-loading {
+  position: absolute;
+  inset: 0;
+}

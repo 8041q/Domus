@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { OutlinePass } from 'three/examples/jsm/postprocessing/OutlinePass.js';
@@ -104,8 +103,11 @@ export class PlannerScene {
   private hoverOpeningId: string | null = null;
   private resizeObserver: ResizeObserver;
   private animationFrame = 0;
+  private disposed = false;
+  private controlsInteracting = false;
   private lastRoomKey = '';
   private lastOpeningsKey = '';
+  private lastOpeningHighlightKey = '';
   private lastHelperKey = '';
   private currentCameraView: PlanCameraView = 'perspective';
   private environmentTexture: THREE.Texture | null = null;
@@ -163,6 +165,9 @@ export class PlannerScene {
     this.controls.minDistance = 1.8;
     this.controls.maxDistance = 20;
     this.controls.screenSpacePanning = false;
+    this.controls.addEventListener('change', this.onControlsChange);
+    this.controls.addEventListener('start', this.onControlsStart);
+    this.controls.addEventListener('end', this.onControlsEnd);
 
     // Fast, artifact-free studio lighting. Contact depth now comes from real shadows instead of SSAO.
     const hemi = new THREE.HemisphereLight(0xffffff, 0x777b80, 0.78);
@@ -188,15 +193,21 @@ export class PlannerScene {
     this.resize();
     this.resetCamera();
     this.renderFromState();
-    this.animate();
   }
 
   dispose() {
-    cancelAnimationFrame(this.animationFrame);
+    if (this.disposed) return;
+    this.disposed = true;
+    this.floorFinishRequest += 1;
+    if (this.animationFrame) cancelAnimationFrame(this.animationFrame);
+    this.animationFrame = 0;
     this.resizeObserver.disconnect();
     this.renderer.domElement.removeEventListener('pointerdown', this.onPointerDown);
     window.removeEventListener('pointermove', this.onPointerMove);
     window.removeEventListener('pointerup', this.onPointerUp);
+    this.controls.removeEventListener('change', this.onControlsChange);
+    this.controls.removeEventListener('start', this.onControlsStart);
+    this.controls.removeEventListener('end', this.onControlsEnd);
     this.controls.dispose();
     this.disposeGroup(this.floorGroup);
     this.disposeGroup(this.wallsGroup);
@@ -209,9 +220,13 @@ export class PlannerScene {
     this.floorMapResults.clear();
     this.outlinePass.dispose();
     this.composer.dispose();
+    this.scene.environment = null;
     this.environmentTexture?.dispose();
+    this.environmentTexture = null;
+    this.floorMaterial = null;
     this.renderer.dispose();
-    this.container.removeChild(this.renderer.domElement);
+    this.renderer.forceContextLoss();
+    if (this.renderer.domElement.parentNode === this.container) this.container.removeChild(this.renderer.domElement);
   }
 
   resetCamera() {
@@ -526,6 +541,8 @@ export class PlannerScene {
     }
 
     exportRoot.updateMatrixWorld(true);
+    // Export support is only loaded when requested, keeping the normal 3D path smaller.
+    const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js');
     const exporter = new GLTFExporter();
     const result = await exporter.parseAsync(exportRoot, {
       binary: true,
@@ -585,15 +602,19 @@ export class PlannerScene {
     this.controls.update();
     this.updateCeilingVisibility();
     this.updateCutawayWalls(true);
+    this.requestRender();
   }
 
   renderFromState() {
+    if (this.disposed) return;
     const snapshot = this.bridge.getSnapshot();
     const { floorFinish, ...roomWithoutFloorFinish } = snapshot.room;
     const roomKey = JSON.stringify(roomWithoutFloorFinish);
     const openingsKey = JSON.stringify(snapshot.openings);
+    let architectureChanged = false;
     if (roomKey !== this.lastRoomKey) {
       this.rebuildRoom(snapshot);
+      architectureChanged = true;
       this.lastRoomKey = roomKey;
       this.lastFloorFinish = floorFinish;
       this.lastOpeningsKey = openingsKey;
@@ -608,6 +629,7 @@ export class PlannerScene {
       this.lastFloorFinish = floorFinish;
     } else if (openingsKey !== this.lastOpeningsKey) {
       this.rebuildWalls(snapshot);
+      architectureChanged = true;
       this.lastOpeningsKey = openingsKey;
     }
     this.syncObjects(snapshot);
@@ -618,7 +640,9 @@ export class PlannerScene {
       this.rebuildHelpers(snapshot);
       this.lastHelperKey = helperKey;
     }
-    this.updateCutawayWalls(true);
+    // Cutaway visibility depends on architecture/camera, not furniture/selection state.
+    if (architectureChanged) this.updateCutawayWalls(true);
+    this.requestRender();
   }
 
   private updateShadowBounds(snapshot: PlannerSnapshot) {
@@ -837,6 +861,10 @@ export class PlannerScene {
     loader.setCrossOrigin('anonymous');
     try {
       const texture = await loader.loadAsync(url);
+      if (this.disposed) {
+        texture.dispose();
+        return null;
+      }
       this.floorMapAssets.add(texture);
       return this.configureFloorMap(texture, name, textureWidthMetres, srgb);
     } catch {
@@ -854,6 +882,7 @@ export class PlannerScene {
       this.loadFloorMap(definition.maps.normal, `${definition.name} Normal`, definition.textureWidthMetres, false),
       this.loadFloorMap(definition.maps.roughness, `${definition.name} Roughness`, definition.textureWidthMetres, false)
     ]).then(([loadedColor, normal, roughness]) => {
+      if (this.disposed) return { color: null, normal: null, roughness: null };
       let color = loadedColor;
       if (color && definition.colorTreatment === 'dark-grey-carpet') {
         const treated = this.makeDarkGreyCarpetTexture(color);
@@ -934,8 +963,9 @@ export class PlannerScene {
     // Crucially, do not clear or replace the current material here. During a user
     // selection the old finish stays rendered until all three new channels settle.
     this.floorTextureReady = this.loadFloorFinishMaps(definition).then((maps) => {
-      if (request !== this.floorFinishRequest || this.floorMaterial !== target) return;
+      if (this.disposed || request !== this.floorFinishRequest || this.floorMaterial !== target) return;
       this.applyFloorMaps(target, definition, maps);
+      this.requestRender();
     });
   }
 
@@ -1030,6 +1060,7 @@ export class PlannerScene {
 
   private rebuildWalls(snapshot: PlannerSnapshot) {
     this.disposeGroup(this.wallsGroup);
+    this.lastOpeningHighlightKey = '';
     const { height, wallColor } = snapshot.room;
     const thickness = WALL_THICKNESS;
 
@@ -1339,6 +1370,9 @@ export class PlannerScene {
 
   private syncOpeningHighlight(snapshot: SceneSnapshot) {
     const selected = snapshot.selectedOpeningId ?? null;
+    const highlightKey = `${selected ?? '-'}|${this.hoverOpeningId ?? '-'}`;
+    if (highlightKey === this.lastOpeningHighlightKey) return;
+    this.lastOpeningHighlightKey = highlightKey;
     this.wallsGroup.traverse((object) => {
       const openingId = typeof object.userData.openingId === 'string' ? object.userData.openingId : null;
       if (!openingId || !(object instanceof THREE.Mesh)) return;
@@ -2267,6 +2301,7 @@ export class PlannerScene {
       if (model) {
         model.position.set(resolved.x, 0, resolved.z);
         model.rotation.y = resolved.rotationY ?? moving.rotationY;
+        this.requestRender();
       }
       this.bridge.updateObject(moving.id, patch);
       this.bridge.feedback(
@@ -2284,6 +2319,7 @@ export class PlannerScene {
         this.hoverOpeningId = openingId;
         this.renderer.domElement.style.cursor = openingId ? 'pointer' : '';
         this.syncOpeningHighlight(this.bridge.getSnapshot());
+        this.requestRender();
       }
       return;
     }
@@ -2325,14 +2361,34 @@ export class PlannerScene {
         if (item instanceof LineMaterial) item.resolution.set(width, height);
       });
     });
+    this.requestRender();
   }
 
+  private onControlsChange = () => this.requestRender();
+  private onControlsStart = () => {
+    this.controlsInteracting = true;
+    this.requestRender();
+  };
+  private onControlsEnd = () => {
+    this.controlsInteracting = false;
+    this.requestRender();
+  };
+
+  private requestRender = () => {
+    if (this.disposed || this.animationFrame) return;
+    this.animationFrame = requestAnimationFrame(this.animate);
+  };
+
   private animate = () => {
-    this.controls.update();
+    this.animationFrame = 0;
+    if (this.disposed) return;
+    const controlsChanged = this.controls.update();
     this.updateCutawayWalls();
     this.updateMeasurementLabelOrientation();
     this.updateMeasurementLabelScale();
     this.composer.render();
-    this.animationFrame = requestAnimationFrame(this.animate);
+    // OrbitControls damping needs a few follow-up frames, but an idle scene should do
+    // no RAF/GPU work at all. `change` events also schedule a frame during interaction.
+    if (this.controlsInteracting || controlsChanged) this.requestRender();
   };
 }

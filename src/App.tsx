@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { BuildRoom } from './BuildRoom';
-import { PlanRoom } from './PlanRoom';
 import { usePlannerStore } from './store';
 import { Button, Icon } from './ui';
+
+const PlanRoom = lazy(() => import('./PlanRoom').then((module) => ({ default: module.PlanRoom })));
 
 export default function App() {
   const mode = usePlannerStore((s) => s.mode);
@@ -15,6 +16,7 @@ export default function App() {
   const loadLocal = usePlannerStore((s) => s.loadLocal);
   const resetProject = usePlannerStore((s) => s.resetProject);
   const [notice, setNotice] = useState('');
+  const noticeTimer = useRef<number | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -32,9 +34,17 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [mode, redo, remove, rotate, undo]);
 
+  useEffect(() => () => {
+    if (noticeTimer.current != null) window.clearTimeout(noticeTimer.current);
+  }, []);
+
   const flash = (message: string) => {
     setNotice(message);
-    window.setTimeout(() => setNotice(''), 1800);
+    if (noticeTimer.current != null) window.clearTimeout(noticeTimer.current);
+    noticeTimer.current = window.setTimeout(() => {
+      noticeTimer.current = null;
+      setNotice('');
+    }, 1800);
   };
 
   return (
@@ -74,7 +84,11 @@ export default function App() {
       </header>
 
       <main className="app-main">
-        {mode === 'build' ? <BuildRoom /> : <PlanRoom />}
+        {mode === 'build' ? <BuildRoom /> : (
+          <Suspense fallback={<div className="mode-loading">Loading room planner…</div>}>
+            <PlanRoom />
+          </Suspense>
+        )}
       </main>
 
       {notice && <div className="toast" role="status"><Icon name="check" />{notice}</div>}

@@ -411,7 +411,10 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
     set({ selectedOpeningId: id, selectedWallId: opening?.wallId ?? null, selectedId: null });
   },
   updateOpening: (id, patch, recordHistory = true) => {
-    const before = snapshotOf(get());
+    // Live opening drags/sliders call this with recordHistory=false. Avoid cloning the
+    // complete project on every pointer event; the interaction already captured one
+    // snapshot at drag start and commits it once on pointer-up.
+    const before = recordHistory ? snapshotOf(get()) : null;
     set((state) => ({ openings: state.openings.map((o) => {
       if (o.id !== id) return o;
       const nextType = patch.type ?? o.type;
@@ -420,7 +423,7 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
       const preset = shouldPreset ? openingPreset(nextType, nextVariant, state.room) : {};
       return normalizeOpening({ ...o, ...preset, ...patch, type: nextType, variant: nextVariant }, state.room);
     }) }));
-    if (recordHistory) history.push(before);
+    if (before) history.push(before);
   },
   removeOpening: (id) => {
     const before = snapshotOf(get());
