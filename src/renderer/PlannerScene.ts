@@ -45,11 +45,11 @@ interface SceneOptions {
   interactiveArchitecture: boolean;
 }
 
-const DIMENSION_COLOR = 0x27272a;
+const DIMENSION_COLOR = 0x686868;
 const SELECTION_COLOR = 0xffd800;
-const PRODUCT_DIMENSION_COLOR = 0x27272a;
-const CLEARANCE_COLOR = 0xb7791f;
-const SPACING_COLOR = 0x71717a;
+const PRODUCT_DIMENSION_COLOR = 0x3f3f46;
+const CLEARANCE_COLOR = 0xffd54a;
+const SPACING_COLOR = 0x8a5a00;
 const TRIM_COLOR = 0xffffff;
 const JUNCTION_COLOR = 0xffffff;
 const WALL_THICKNESS = 0.05;
@@ -1347,16 +1347,16 @@ export class PlannerScene {
             mat.transparent = true;
             mat.depthWrite = false;
           } else {
-            mat.color.setHex(active ? 0x00e5ff : 0xffffff);
-            mat.opacity = active ? 0.16 : 0;
+            mat.color.setHex(active ? 0xffd54a : 0xffffff);
+            mat.opacity = active ? 0.18 : 0;
             mat.transparent = true;
           }
         } else if (mat instanceof THREE.MeshPhysicalMaterial) {
-          mat.emissive.setHex(active ? 0x00a9bd : 0x000000);
-          mat.emissiveIntensity = active ? 0.12 : 0;
-        } else if (mat instanceof THREE.MeshStandardMaterial) {
-          mat.emissive.setHex(active ? 0x00a9bd : 0x000000);
+          mat.emissive.setHex(active ? 0xd7a300 : 0x000000);
           mat.emissiveIntensity = active ? 0.16 : 0;
+        } else if (mat instanceof THREE.MeshStandardMaterial) {
+          mat.emissive.setHex(active ? 0xd7a300 : 0x000000);
+          mat.emissiveIntensity = active ? 0.18 : 0;
         }
       }
     });
@@ -1609,13 +1609,62 @@ export class PlannerScene {
     return line;
   }
 
-  private makeLocalMeasurementLine(parent: THREE.Group, points: THREE.Vector3[], widthPx = 2.0) {
-    // Product measurements should read as clean screen-space drafting strokes.
-    // A single antialiased white stroke avoids the chunky/pixelated double-line
-    // effect caused by the old black under-stroke.
-    const line = this.makeLocalLine(parent, points, PRODUCT_DIMENSION_COLOR, 0.88, false, true, widthPx);
+  private makeLocalMeasurementLine(parent: THREE.Group, points: THREE.Vector3[], widthPx = 2.0, dashed = false, color = PRODUCT_DIMENSION_COLOR) {
+    const line = this.makeLocalLine(parent, points, color, 0.92, dashed, true, widthPx);
     line.renderOrder = 25;
     return line;
+  }
+
+  private addLabelledMeasurementLine({
+    parent,
+    start,
+    end,
+    text,
+    color = DIMENSION_COLOR,
+    widthPx = 1.5,
+    dashed = false,
+    overlay = true,
+    labelHeight = 0.12,
+    alignLabelToLine = false
+  }: {
+    parent?: THREE.Group;
+    start: THREE.Vector3;
+    end: THREE.Vector3;
+    text: string;
+    color?: number;
+    widthPx?: number;
+    dashed?: boolean;
+    overlay?: boolean;
+    labelHeight?: number;
+    alignLabelToLine?: boolean;
+  }) {
+    const label = this.createMeasurementTextSprite(text, labelHeight, color);
+    const worldWidth = typeof label.userData.labelWorldWidth === 'number' ? label.userData.labelWorldWidth : labelHeight * 1.4;
+    const length = start.distanceTo(end);
+    const gap = Math.min(Math.max(worldWidth + 0.06, 0.12), length * 0.7);
+    const destination = parent ?? this.helperGroup;
+    const draw = (points: THREE.Vector3[]) => {
+      if (parent) this.makeLocalLine(parent, points, color, 0.92, dashed, overlay, widthPx);
+      else this.makeLine(points, color, 0.92, dashed, overlay, widthPx);
+    };
+
+    if (length > gap + 0.04) {
+      const direction = end.clone().sub(start).normalize();
+      const mid = start.clone().add(end).multiplyScalar(0.5);
+      const firstEnd = mid.clone().addScaledVector(direction, -gap / 2);
+      const secondStart = mid.clone().addScaledVector(direction, gap / 2);
+      draw([start, firstEnd]);
+      draw([secondStart, end]);
+    } else {
+      draw([start, end]);
+    }
+
+    label.position.copy(start).add(end).multiplyScalar(0.5);
+    if (alignLabelToLine) {
+      label.userData.alignToDimensionLine = { start: start.clone(), end: end.clone() };
+    }
+    destination.add(label);
+    return label;
   }
 
   private createUiLabelSprite(text: string, height: number, tone: 'neutral' | 'warning' = 'neutral') {
@@ -1663,16 +1712,49 @@ export class PlannerScene {
     return sprite;
   }
 
+  private createMeasurementTextSprite(text: string, height: number, color = DIMENSION_COLOR) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d')!;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.font = '700 50px Inter, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    const hex = `#${color.toString(16).padStart(6, '0')}`;
+    ctx.strokeStyle = 'rgba(255,255,255,0.92)';
+    ctx.lineWidth = 7;
+    ctx.strokeText(text, canvas.width / 2, canvas.height / 2 + 1);
+    ctx.fillStyle = hex;
+    ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 1);
+
+    const metrics = ctx.measureText(text).width;
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false });
+    const sprite = new THREE.Sprite(material);
+    const visibleWidth = Math.max(88, Math.min(canvas.width - 16, Math.ceil(metrics + 18)));
+    const visibleHeight = 74;
+    const aspect = visibleWidth / visibleHeight;
+    sprite.scale.set(height * aspect, height, 1);
+    sprite.userData.labelWorldWidth = height * aspect;
+    sprite.renderOrder = 30;
+    return sprite;
+  }
+
   private createTextSprite(text: string, scale = 0.42, tone: 'neutral' | 'blue' | 'amber' = 'neutral') {
-    return this.createUiLabelSprite(text, scale * 0.44, tone === 'amber' ? 'warning' : 'neutral');
+    const color = tone === 'amber' ? SPACING_COLOR : tone === 'blue' ? SELECTION_COLOR : DIMENSION_COLOR;
+    return this.createMeasurementTextSprite(text, scale * 0.44, color);
   }
 
   private createArchitecturalDimensionText(text: string, scale = 0.34) {
-    return this.createUiLabelSprite(text, scale * 0.44, 'neutral');
+    return this.createMeasurementTextSprite(text, scale * 0.44, DIMENSION_COLOR);
   }
 
   private createDimensionBadge(text: string, height = 0.215) {
-    return this.createUiLabelSprite(text, height, 'neutral');
+    return this.createMeasurementTextSprite(text, height, PRODUCT_DIMENSION_COLOR);
   }
 
   private annotationLength(metres: number, system: MeasurementSystem) {
@@ -1764,7 +1846,7 @@ export class PlannerScene {
       const mat = new THREE.MeshBasicMaterial({
         color: CLEARANCE_COLOR,
         transparent: true,
-        opacity: region.side === 'front' ? 0.105 : 0.07,
+        opacity: region.side === 'front' ? 0.18 : 0.13,
         side: THREE.DoubleSide,
         depthWrite: false
       });
@@ -1775,7 +1857,7 @@ export class PlannerScene {
 
       const edge = new THREE.LineSegments(
         new THREE.EdgesGeometry(new THREE.PlaneGeometry(region.width, region.depth)),
-        new THREE.LineDashedMaterial({ color: CLEARANCE_COLOR, transparent: true, opacity: 0.78, dashSize: 0.055, gapSize: 0.035 })
+        new THREE.LineDashedMaterial({ color: 0xd09100, transparent: true, opacity: 0.96, dashSize: 0.08, gapSize: 0.045 })
       );
       edge.computeLineDistances();
       edge.rotation.x = -Math.PI / 2;
@@ -1791,29 +1873,29 @@ export class PlannerScene {
       const outward = new THREE.Vector3(-wall.inward.x, 0, -wall.inward.z);
       const tangent = new THREE.Vector3(wall.tangent.x, 0, wall.tangent.z);
       const offset = hidden ? 0.34 : 0.32;
-      // IKEA's dollhouse dimensions read like a clean architectural annotation:
-      // one offset string, short witness marks and 45° slash ticks. Keeping the
-      // witness marks local to the string avoids the long perspective diagonals
-      // that made the previous version look skewed away from the wall.
       const dimensionY = hidden ? 0.052 : snapshot.room.height + 0.045;
       const start = new THREE.Vector3(wall.start.x + outward.x * offset, dimensionY, wall.start.z + outward.z * offset);
       const end = new THREE.Vector3(wall.end.x + outward.x * offset, dimensionY, wall.end.z + outward.z * offset);
 
-      this.makeLine([start, end], DIMENSION_COLOR, 1, false, true, 2.65);
-      const witness = outward.clone().multiplyScalar(0.082);
-      this.makeLine([start.clone().sub(witness), start.clone().add(witness)], DIMENSION_COLOR, 0.98, false, true, 2.2);
-      this.makeLine([end.clone().sub(witness), end.clone().add(witness)], DIMENSION_COLOR, 0.98, false, true, 2.2);
+      this.addLabelledMeasurementLine({
+        start,
+        end,
+        text: this.annotationLength(wall.length, system),
+        color: DIMENSION_COLOR,
+        widthPx: 1.55,
+        dashed: false,
+        overlay: true,
+        labelHeight: 0.115,
+        alignLabelToLine: false
+      });
 
-      const tickDirection = tangent.clone().add(outward).normalize().multiplyScalar(0.064);
-      this.makeLine([start.clone().sub(tickDirection), start.clone().add(tickDirection)], DIMENSION_COLOR, 1, false, true, 2.8);
-      this.makeLine([end.clone().sub(tickDirection), end.clone().add(tickDirection)], DIMENSION_COLOR, 1, false, true, 2.8);
+      const witness = outward.clone().multiplyScalar(0.068);
+      this.makeLine([start.clone().sub(witness), start.clone().add(witness)], DIMENSION_COLOR, 0.95, false, true, 1.3);
+      this.makeLine([end.clone().sub(witness), end.clone().add(witness)], DIMENSION_COLOR, 0.95, false, true, 1.3);
 
-      const centre = start.clone().add(end).multiplyScalar(0.5).add(outward.clone().multiplyScalar(0.038));
-      centre.y += hidden ? 0.052 : 0.062;
-      const label = this.createArchitecturalDimensionText(this.annotationLength(wall.length, system), 0.62);
-      label.position.copy(centre);
-      label.userData.alignToDimensionLine = { start: start.clone(), end: end.clone() };
-      this.helperGroup.add(label);
+      const tickDirection = tangent.clone().add(outward).normalize().multiplyScalar(0.052);
+      this.makeLine([start.clone().sub(tickDirection), start.clone().add(tickDirection)], DIMENSION_COLOR, 0.95, false, true, 1.45);
+      this.makeLine([end.clone().sub(tickDirection), end.clone().add(tickDirection)], DIMENSION_COLOR, 0.95, false, true, 1.45);
     }
   }
 
@@ -1824,67 +1906,68 @@ export class PlannerScene {
     parent.userData.objectId = selected.id;
     parent.position.set(selected.x, 0, selected.z);
     parent.rotation.y = selected.rotationY;
+
     const x0 = -p.width / 2;
     const x1 = p.width / 2;
     const z0 = -p.depth / 2;
     const z1 = p.depth / 2;
-    const floorY = 0.028;
-    const widthZ = z1 + 0.16;
-    const depthX = x0 - 0.16;
-    const heightX = x0 - 0.16;
-    const heightZ = z0 - 0.04;
+    const y0 = 0.028;
+    const y1 = p.height;
+    const lineWidth = 1.35;
 
-    // White dashed measurement volume, while the selected product keeps the yellow
-    // screen-space silhouette from OutlinePass.
-    const boxMaterial = new LineMaterial({
+    const bfl = new THREE.Vector3(x0, y0, z1);
+    const bfr = new THREE.Vector3(x1, y0, z1);
+    const bbl = new THREE.Vector3(x0, y0, z0);
+    const bbr = new THREE.Vector3(x1, y0, z0);
+    const tfl = new THREE.Vector3(x0, y1, z1);
+    const tfr = new THREE.Vector3(x1, y1, z1);
+    const tbl = new THREE.Vector3(x0, y1, z0);
+    const tbr = new THREE.Vector3(x1, y1, z0);
+
+    const edge = (a: THREE.Vector3, b: THREE.Vector3) => this.makeLocalMeasurementLine(parent, [a, b], lineWidth, true, PRODUCT_DIMENSION_COLOR);
+    edge(bfr, bbr);
+    edge(bbl, bbr);
+    edge(tfl, tfr);
+    edge(tfr, tbr);
+    edge(tbr, tbl);
+    edge(tbl, tfl);
+    edge(bbr, tbr);
+    edge(bbl, tbl);
+    edge(bfr, tfr);
+
+    this.addLabelledMeasurementLine({
+      parent,
+      start: bfl,
+      end: bfr,
+      text: this.annotationLength(p.width, system),
       color: PRODUCT_DIMENSION_COLOR,
-      linewidth: 1.7,
-      transparent: true,
-      opacity: 0.82,
+      widthPx: lineWidth,
       dashed: true,
-      dashSize: 0.082,
-      gapSize: 0.050,
-      depthTest: false,
-      depthWrite: false,
-      worldUnits: false
+      overlay: true,
+      labelHeight: 0.115
     });
-    this.lineResolution(boxMaterial);
-    const sourceEdges = new THREE.EdgesGeometry(new THREE.BoxGeometry(p.width, p.height, p.depth));
-    const boxGeometry = new LineSegmentsGeometry().fromEdgesGeometry(sourceEdges);
-    sourceEdges.dispose();
-
-    const box = new LineSegments2(boxGeometry, boxMaterial);
-    box.computeLineDistances();
-    box.position.y = p.height / 2;
-    box.renderOrder = 25;
-    parent.add(box);
-
-    const widthA = new THREE.Vector3(x0, floorY, widthZ);
-    const widthB = new THREE.Vector3(x1, floorY, widthZ);
-    const depthA = new THREE.Vector3(depthX, floorY, z0);
-    const depthB = new THREE.Vector3(depthX, floorY, z1);
-    const heightA = new THREE.Vector3(heightX, 0, heightZ);
-    const heightB = new THREE.Vector3(heightX, p.height, heightZ);
-
-    this.makeLocalMeasurementLine(parent, [widthA, widthB], 2.35);
-    this.makeLocalMeasurementLine(parent, [new THREE.Vector3(x0, floorY, z1), widthA], 1.8);
-    this.makeLocalMeasurementLine(parent, [new THREE.Vector3(x1, floorY, z1), widthB], 1.8);
-    this.makeLocalMeasurementLine(parent, [depthA, depthB], 2.35);
-    this.makeLocalMeasurementLine(parent, [new THREE.Vector3(x0, floorY, z0), depthA], 1.8);
-    this.makeLocalMeasurementLine(parent, [new THREE.Vector3(x0, floorY, z1), depthB], 1.8);
-    this.makeLocalMeasurementLine(parent, [heightA, heightB], 2.35);
-    this.makeLocalMeasurementLine(parent, [new THREE.Vector3(x0, 0, z0), heightA], 1.8);
-    this.makeLocalMeasurementLine(parent, [new THREE.Vector3(x0, p.height, z0), heightB], 1.8);
-
-    const widthLabel = this.createDimensionBadge(this.annotationLength(p.width, system), 0.18);
-    widthLabel.position.set(0, 0.16, widthZ + 0.015);
-    parent.add(widthLabel);
-    const depthLabel = this.createDimensionBadge(this.annotationLength(p.depth, system), 0.18);
-    depthLabel.position.set(depthX - 0.015, 0.16, 0);
-    parent.add(depthLabel);
-    const heightLabel = this.createDimensionBadge(this.annotationLength(p.height, system), 0.18);
-    heightLabel.position.set(heightX - 0.02, p.height / 2, heightZ);
-    parent.add(heightLabel);
+    this.addLabelledMeasurementLine({
+      parent,
+      start: bbl,
+      end: bfl,
+      text: this.annotationLength(p.depth, system),
+      color: PRODUCT_DIMENSION_COLOR,
+      widthPx: lineWidth,
+      dashed: true,
+      overlay: true,
+      labelHeight: 0.115
+    });
+    this.addLabelledMeasurementLine({
+      parent,
+      start: bfl,
+      end: tfl,
+      text: this.annotationLength(p.height, system),
+      color: PRODUCT_DIMENSION_COLOR,
+      widthPx: lineWidth,
+      dashed: true,
+      overlay: true,
+      labelHeight: 0.115
+    });
 
     this.helperGroup.add(parent);
   }
@@ -1894,14 +1977,20 @@ export class PlannerScene {
     for (const measurement of spacingMeasurements(selected, snapshot.room, others)) {
       const origin = new THREE.Vector3(measurement.origin.x, 0.075, measurement.origin.z);
       const end = new THREE.Vector3(measurement.end.x, 0.075, measurement.end.z);
-      this.makeLine([origin, end], SPACING_COLOR, 0.78, true, true, 1.8);
-      const perpendicular = new THREE.Vector3(-measurement.direction.z, 0, measurement.direction.x).multiplyScalar(0.055);
-      this.makeLine([origin.clone().sub(perpendicular), origin.clone().add(perpendicular)], SPACING_COLOR, 0.76, false, true, 1.7);
-      this.makeLine([end.clone().sub(perpendicular), end.clone().add(perpendicular)], SPACING_COLOR, 0.76, false, true, 1.7);
-      const label = this.createTextSprite(formatLength(measurement.distance, system), 0.34, 'neutral');
-      label.position.copy(origin).add(end).multiplyScalar(0.5);
-      label.position.y = 0.2;
-      this.helperGroup.add(label);
+      this.addLabelledMeasurementLine({
+        start: origin,
+        end,
+        text: formatLength(measurement.distance, system),
+        color: SPACING_COLOR,
+        widthPx: 1.65,
+        dashed: true,
+        overlay: true,
+        labelHeight: 0.11,
+        alignLabelToLine: false
+      });
+      const perpendicular = new THREE.Vector3(-measurement.direction.z, 0, measurement.direction.x).multiplyScalar(0.05);
+      this.makeLine([origin.clone().sub(perpendicular), origin.clone().add(perpendicular)], SPACING_COLOR, 0.92, false, true, 1.35);
+      this.makeLine([end.clone().sub(perpendicular), end.clone().add(perpendicular)], SPACING_COLOR, 0.92, false, true, 1.35);
     }
   }
 

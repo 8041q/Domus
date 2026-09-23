@@ -64,12 +64,12 @@ export default function App() {
           <Button variant="ghost" size="sm" onClick={() => { loadLocal(); flash('Saved design loaded'); }}><Icon name="folder" />Load</Button>
           <Button size="sm" onClick={() => { saveLocal(); flash('Design saved locally'); }}><Icon name="save" />Save</Button>
           <Button
-            variant="ghost"
-            size="icon"
+            variant="outline"
+            size="sm"
             title="Start a new room"
             aria-label="Start a new room"
             onClick={() => { if (window.confirm('Start a new room? Your current unsaved changes will be replaced.')) resetProject(); }}
-          ><Icon name="more" /></Button>
+          ><Icon name="plus" />New</Button>
         </div>
       </header>
 

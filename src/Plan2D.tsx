@@ -30,7 +30,9 @@ type DragState =
 
 type HoverTarget = { type: 'wall' | 'corner' | 'opening' | 'split'; id: string } | null;
 
-const HOVER_CYAN = '#2563eb';
+const HOVER_CYAN = '#facc15';
+const ACTIVE_YELLOW = '#eab308';
+const SOFT_YELLOW = '#fef3c7';
 
 type RoomWall = ReturnType<typeof getRoomWalls>[number];
 type LabelRect = { x: number; y: number; width: number; height: number };
@@ -330,8 +332,8 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
         const y = oz + (obj.z - size.depth / 2) * scale;
         const w = size.width * scale;
         const h = size.depth * scale;
-        ctx.fillStyle = obj.id === selectedId ? '#eff6ff' : p.swatch;
-        ctx.strokeStyle = obj.id === selectedId ? '#2563eb' : '#71717a';
+        ctx.fillStyle = obj.id === selectedId ? SOFT_YELLOW : p.swatch;
+        ctx.strokeStyle = obj.id === selectedId ? ACTIVE_YELLOW : '#71717a';
         ctx.lineWidth = obj.id === selectedId ? 2.5 : 1.25;
         ctx.beginPath();
         ctx.roundRect(x, y, w, h, Math.min(7, w * 0.12, h * 0.12));
@@ -350,7 +352,7 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
       const selectedWall = purpose === 'build' && wall.id === selectedWallId;
       const hoveredWall = purpose === 'build' && hover?.type === 'wall' && hover.id === wall.id;
       const draggingWall = purpose === 'build' && drag?.type === 'wall' && drag.id === wall.id;
-      ctx.strokeStyle = (hoveredWall || draggingWall) ? HOVER_CYAN : selectedWall ? '#2563eb' : '#27272a';
+      ctx.strokeStyle = (hoveredWall || draggingWall) ? HOVER_CYAN : selectedWall ? ACTIVE_YELLOW : '#27272a';
       ctx.lineWidth = (hoveredWall || draggingWall) ? 7.5 : selectedWall ? 7 : (purpose === 'build' ? 5 : 3);
       ctx.lineCap = 'round';
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
@@ -369,8 +371,8 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
       const hoveredOpening = purpose === 'build' && hover?.type === 'opening' && hover.id === opening.id;
       const draggingOpening = purpose === 'build' && drag?.type === 'opening' && drag.id === opening.id;
-      const baseOpeningColor = opening.type === 'window' ? '#2563eb' : opening.type === 'door' ? '#52525b' : '#71717a';
-      ctx.strokeStyle = (hoveredOpening || draggingOpening) ? HOVER_CYAN : baseOpeningColor;
+      const baseOpeningColor = opening.type === 'window' ? '#71717a' : opening.type === 'door' ? '#52525b' : '#71717a';
+      ctx.strokeStyle = (hoveredOpening || draggingOpening) ? HOVER_CYAN : isSelected ? ACTIVE_YELLOW : baseOpeningColor;
       ctx.lineWidth = (hoveredOpening || draggingOpening) ? 5.8 : isSelected ? 5.5 : 3.5;
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
 
@@ -401,7 +403,7 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
     if (purpose === 'plan' && activeSnap.kind !== 'none') {
       ctx.save();
       ctx.setLineDash([5, 5]);
-      ctx.strokeStyle = '#2563eb';
+      ctx.strokeStyle = ACTIVE_YELLOW;
       ctx.lineWidth = 1.4;
       if (activeSnap.x) {
         const x = ox + activeSnap.x.value * scale;
@@ -669,7 +671,7 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
         ctx.restore();
       }
 
-      // Corner handles: neutral by default, electric cyan on hover/drag.
+      // Corner handles: neutral by default, highlighted yellow on hover/drag.
       for (const vertex of room.vertices) {
         const point = toPx(vertex.x, vertex.z);
         const active = (hover?.type === 'corner' && hover.id === vertex.id) || (drag?.type === 'corner' && drag.id === vertex.id);

@@ -246,9 +246,9 @@ export function PlanRoom() {
               {showViewOptions && (
                 <div className="view-options-popover">
                   <strong>Annotations</strong>
-                  <label><input type="checkbox" checked={showRoomDimensions} onChange={(e) => setShowRoomDimensions(e.target.checked)} /><span>Room dimensions<small>Dollhouse perimeter dimensions</small></span></label>
-                  <label><input type="checkbox" checked={showProductDimensions} onChange={(e) => setShowProductDimensions(e.target.checked)} /><span>Product dimensions<small>Width, depth and height overlay</small></span></label>
-                  <label><input type="checkbox" checked={showSpacingDimensions} onChange={(e) => setShowSpacingDimensions(e.target.checked)} /><span>Item spacing<small>Nearest free space badges</small></span></label>
+                  <label><input type="checkbox" checked={showRoomDimensions} onChange={(e) => setShowRoomDimensions(e.target.checked)} /><span>Room dimensions<small>Perimeter measurements</small></span></label>
+                  <label><input type="checkbox" checked={showProductDimensions} onChange={(e) => setShowProductDimensions(e.target.checked)} /><span>Product dimensions<small>Bounding-box width, depth and height</small></span></label>
+                  <label><input type="checkbox" checked={showSpacingDimensions} onChange={(e) => setShowSpacingDimensions(e.target.checked)} /><span>Item spacing<small>Nearest free-space measurements</small></span></label>
                 </div>
               )}
             </div>
