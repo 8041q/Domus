@@ -16,7 +16,7 @@ import { floorFinishDefinition, type FloorFinishDefinition } from '../core/roomF
 import { clearanceRegions, resolvePlacement, spacingMeasurements } from '../core/placement';
 import { getRoomWalls, roomBounds, wallPoint, wallProjectionDistance } from '../core/roomGeometry';
 import { formatLength } from '../core/units';
-import type { FloorFinish, FurnishCameraView, MeasurementSystem, PlannerSnapshot, PlacedObject, RoomOpening, SnapFeedback, Vec2 } from '../core/types';
+import type { FloorFinish, PlanCameraView, MeasurementSystem, PlannerSnapshot, PlacedObject, RoomOpening, SnapFeedback, Vec2 } from '../core/types';
 
 export interface SceneSnapshot extends PlannerSnapshot {
   selectedId?: string | null;
@@ -45,10 +45,11 @@ interface SceneOptions {
   interactiveArchitecture: boolean;
 }
 
-const DIMENSION_COLOR = 0x4a4a4a;
+const DIMENSION_COLOR = 0x27272a;
 const SELECTION_COLOR = 0xffd800;
-const DIMENSION_WHITE = 0xffffff;
-const CLEARANCE_COLOR = 0xc28c3d;
+const PRODUCT_DIMENSION_COLOR = 0x27272a;
+const CLEARANCE_COLOR = 0xb7791f;
+const SPACING_COLOR = 0x71717a;
 const TRIM_COLOR = 0xffffff;
 const JUNCTION_COLOR = 0xffffff;
 const WALL_THICKNESS = 0.05;
@@ -100,7 +101,7 @@ export class PlannerScene {
   private lastRoomKey = '';
   private lastOpeningsKey = '';
   private lastHelperKey = '';
-  private currentCameraView: FurnishCameraView = 'perspective';
+  private currentCameraView: PlanCameraView = 'perspective';
   private environmentTexture: THREE.Texture | null = null;
   private mainLight: THREE.DirectionalLight;
   private wallHiddenState = new Map<string, boolean>();
@@ -539,7 +540,7 @@ export class PlannerScene {
     URL.revokeObjectURL(url);
   }
 
-  setCameraView(view: FurnishCameraView) {
+  setCameraView(view: PlanCameraView) {
     this.currentCameraView = view;
     const room = this.bridge.getSnapshot().room;
     const bounds = roomBounds(room.vertices);
@@ -1612,87 +1613,47 @@ export class PlannerScene {
     // Product measurements should read as clean screen-space drafting strokes.
     // A single antialiased white stroke avoids the chunky/pixelated double-line
     // effect caused by the old black under-stroke.
-    const line = this.makeLocalLine(parent, points, DIMENSION_WHITE, 0.98, false, true, widthPx);
+    const line = this.makeLocalLine(parent, points, PRODUCT_DIMENSION_COLOR, 0.88, false, true, widthPx);
     line.renderOrder = 25;
     return line;
   }
 
-  private createTextSprite(text: string, scale = 0.42, tone: 'neutral' | 'blue' | 'amber' = 'neutral') {
+  private createUiLabelSprite(text: string, height: number, tone: 'neutral' | 'warning' = 'neutral') {
     const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 112;
+    canvas.width = 420;
+    canvas.height = 104;
     const ctx = canvas.getContext('2d')!;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    const fg = tone === 'blue' ? '#245f8e' : tone === 'amber' ? '#7a5727' : '#55595b';
-    ctx.font = '600 40px system-ui, -apple-system, sans-serif';
+    ctx.font = '600 35px system-ui, -apple-system, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.lineJoin = 'round';
-    ctx.strokeStyle = 'rgba(242,242,240,0.92)';
-    ctx.lineWidth = 8;
-    ctx.strokeText(text, 256, 56);
-    ctx.fillStyle = fg;
-    ctx.fillText(text, 256, 56);
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false }));
-    sprite.scale.set(scale * 2.0, scale * 0.44, 1);
-    sprite.renderOrder = 28;
-    return sprite;
-  }
 
-  private createArchitecturalDimensionText(text: string, scale = 0.34) {
-    const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 112;
-    const ctx = canvas.getContext('2d')!;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.font = '600 40px system-ui, -apple-system, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.lineJoin = 'round';
-    ctx.strokeStyle = 'rgba(245,245,243,0.98)';
-    ctx.lineWidth = 9;
-    ctx.strokeText(text, 256, 56);
-    ctx.fillStyle = '#3f4142';
-    ctx.fillText(text, 256, 56);
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false }));
-    sprite.scale.set(scale * 2.0, scale * 0.44, 1);
-    sprite.renderOrder = 30;
-    return sprite;
-  }
-
-  private createDimensionBadge(text: string, height = 0.215) {
-    const canvas = document.createElement('canvas');
-    canvas.width = 320;
-    canvas.height = 96;
-    const ctx = canvas.getContext('2d')!;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.font = '800 37px system-ui, -apple-system, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    const boxWidth = Math.min(294, Math.max(120, Math.ceil(ctx.measureText(text).width + 46)));
-    const boxHeight = 66;
+    const measured = ctx.measureText(text).width;
+    const boxWidth = Math.min(390, Math.max(118, Math.ceil(measured + 42)));
+    const boxHeight = 62;
     const x = (canvas.width - boxWidth) / 2;
     const y = (canvas.height - boxHeight) / 2;
-    const r = 12;
+    const radius = 13;
+
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,.12)';
+    ctx.shadowBlur = 10;
+    ctx.shadowOffsetY = 2;
     ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.lineTo(x + boxWidth - r, y);
-    ctx.quadraticCurveTo(x + boxWidth, y, x + boxWidth, y + r);
-    ctx.lineTo(x + boxWidth, y + boxHeight - r);
-    ctx.quadraticCurveTo(x + boxWidth, y + boxHeight, x + boxWidth - r, y + boxHeight);
-    ctx.lineTo(x + r, y + boxHeight);
-    ctx.quadraticCurveTo(x, y + boxHeight, x, y + boxHeight - r);
-    ctx.lineTo(x, y + r);
-    ctx.quadraticCurveTo(x, y, x + r, y);
-    ctx.closePath();
-    ctx.fillStyle = 'rgba(28,29,28,0.98)';
+    ctx.roundRect(x, y, boxWidth, boxHeight, radius);
+    ctx.fillStyle = 'rgba(255,255,255,.97)';
     ctx.fill();
-    ctx.fillStyle = '#ffffff';
+    ctx.restore();
+
+    ctx.beginPath();
+    ctx.roundRect(x, y, boxWidth, boxHeight, radius);
+    ctx.strokeStyle = tone === 'warning' ? 'rgba(183,121,31,.38)' : 'rgba(24,24,27,.16)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.fillStyle = tone === 'warning' ? '#854d0e' : '#18181b';
     ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 1);
+
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false }));
@@ -1700,6 +1661,18 @@ export class PlannerScene {
     sprite.scale.set(height * visibleAspect, height, 1);
     sprite.renderOrder = 30;
     return sprite;
+  }
+
+  private createTextSprite(text: string, scale = 0.42, tone: 'neutral' | 'blue' | 'amber' = 'neutral') {
+    return this.createUiLabelSprite(text, scale * 0.44, tone === 'amber' ? 'warning' : 'neutral');
+  }
+
+  private createArchitecturalDimensionText(text: string, scale = 0.34) {
+    return this.createUiLabelSprite(text, scale * 0.44, 'neutral');
+  }
+
+  private createDimensionBadge(text: string, height = 0.215) {
+    return this.createUiLabelSprite(text, height, 'neutral');
   }
 
   private annotationLength(metres: number, system: MeasurementSystem) {
@@ -1864,10 +1837,10 @@ export class PlannerScene {
     // White dashed measurement volume, while the selected product keeps the yellow
     // screen-space silhouette from OutlinePass.
     const boxMaterial = new LineMaterial({
-      color: DIMENSION_WHITE,
-      linewidth: 1.9,
+      color: PRODUCT_DIMENSION_COLOR,
+      linewidth: 1.7,
       transparent: true,
-      opacity: 0.98,
+      opacity: 0.82,
       dashed: true,
       dashSize: 0.082,
       gapSize: 0.050,
@@ -1921,11 +1894,11 @@ export class PlannerScene {
     for (const measurement of spacingMeasurements(selected, snapshot.room, others)) {
       const origin = new THREE.Vector3(measurement.origin.x, 0.075, measurement.origin.z);
       const end = new THREE.Vector3(measurement.end.x, 0.075, measurement.end.z);
-      this.makeLine([origin, end], CLEARANCE_COLOR, 0.82);
+      this.makeLine([origin, end], SPACING_COLOR, 0.78, true, true, 1.8);
       const perpendicular = new THREE.Vector3(-measurement.direction.z, 0, measurement.direction.x).multiplyScalar(0.055);
-      this.makeLine([origin.clone().sub(perpendicular), origin.clone().add(perpendicular)], CLEARANCE_COLOR, 0.72);
-      this.makeLine([end.clone().sub(perpendicular), end.clone().add(perpendicular)], CLEARANCE_COLOR, 0.72);
-      const label = this.createTextSprite(formatLength(measurement.distance, system), 0.32, 'amber');
+      this.makeLine([origin.clone().sub(perpendicular), origin.clone().add(perpendicular)], SPACING_COLOR, 0.76, false, true, 1.7);
+      this.makeLine([end.clone().sub(perpendicular), end.clone().add(perpendicular)], SPACING_COLOR, 0.76, false, true, 1.7);
+      const label = this.createTextSprite(formatLength(measurement.distance, system), 0.34, 'neutral');
       label.position.copy(origin).add(end).multiplyScalar(0.5);
       label.position.y = 0.2;
       this.helperGroup.add(label);

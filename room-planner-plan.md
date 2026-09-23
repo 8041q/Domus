@@ -33,7 +33,7 @@ The renderer should visualize state, not own business logic.
 The user experience is deliberately split into two focused workspaces that share the same semantic project state:
 
 1. **Build Room** - dimensions, wall manipulation, doors/windows, ceiling height, wall finish, and flooring. Furniture is hidden here so architectural editing stays calm and unambiguous.
-2. **Furnish Room** - product catalogue, drag/drop placement, snapping, collision response, clearance guidance, rotation, duplication, and layout work. Room geometry becomes read-only here, with a clear **Edit room** path back to the builder.
+2. **Plan Room** - product catalogue, drag/drop placement, snapping, collision response, clearance guidance, rotation, duplication, and layout work. Room geometry becomes read-only here, with a clear **Edit room** path back to the builder.
 
 This separation is a UX decision, not a data split. Both workspaces operate on one project model, so future room scanning, AI recommendations, quoting, and collaboration can use the same underlying geometry.
 
@@ -657,7 +657,7 @@ Phase 7 keeps the two-workspace architecture and focuses on Build Room precision
 
 - Screen-anchored checker/grid during direct room manipulation.
 - Pointer cursor on moveable architectural targets; grabbing cursor during active drag.
-- Electric-cyan hover state independent of selection state.
+- Selection-blue hover state independent of selection state.
 - Live interior-angle readout while moving corners, including reflex angles.
 - Mid-wall split handles that insert a semantic vertex and remap openings from the old wall ID onto the new wall segments.
 - Selected-wall numeric/slider resizing around the wall midpoint.

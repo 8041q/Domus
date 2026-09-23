@@ -3,9 +3,22 @@
 TypeScript-first browser room planner with two focused workflows:
 
 1. **Build Room** - room geometry, dimensions and architectural openings.
-2. **Furnish Room** - finishes, product placement, snapping, views and spatial guidance.
+2. **Plan Room** - finishes, product placement, snapping, views and spatial guidance.
 
 Both workflows share one semantic room state. Three.js renders that state; it is not the source of truth.
+
+## UI refactor - unified shadcn-style system
+
+The interface now uses one semantic design language inspired by shadcn/ui rather than screen-specific styling:
+
+- `src/styles.css` owns the global semantic tokens (`background`, `foreground`, `card`, `primary`, `secondary`, `muted`, `border`, `input`, `ring`, `radius`) and the reusable layout/component styling.
+- `src/ui.tsx` contains dependency-free shared TypeScript/React UI primitives and icons so common buttons, badges, cards and helpers do not get reimplemented per page.
+- The former **Furnish Room** workflow is now **Plan Room** throughout the app model, store, types, component names and documentation.
+- Build Room keeps its world-anchored checker grid plus the existing thick-wall / corner-dot interaction model. Its labels, controls, cards, selection states and toolbar now use the shared UI language.
+- Plan Room keeps the existing 3D work/view scene. The catalogue, inspectors, view controls, finish controls and status UI are redesigned, while room/product/spacing annotations now use a consistent neutral line-and-badge system.
+- Desktop and compact layouts share the same component shapes, focus treatment, spacing scale and typography rather than switching to unrelated mobile styles.
+
+The project intentionally does not add Tailwind/Radix dependencies just for appearance. The current Vite app keeps its existing runtime stack while adopting shadcn's semantic-token/component principles, which keeps the room-planning engine isolated from a framework migration.
 
 
 ## Phase 9 - reference-style dollhouse interaction
@@ -14,7 +27,7 @@ This pass brings the 3D workspace closer to the supplied reference images/video:
 
 - **Dollhouse dimensions** now follow the visible room silhouette: far/visible walls dimension above the wall top, while cut-away foreground walls dimension around the floor edge. Metric drafting labels use centimetres.
 - **Selected products** use a crisp yellow screen-space silhouette rather than a blue bounding box.
-- **Product dimensions** use a white dashed 3D measurement cage, white extension lines/anchor points, and dark centimetre badges while keeping the yellow selection outline visible.
+- **Product dimensions** use a neutral dashed measurement cage, matching extension lines, and the same white bordered measurement badges used by the rest of the annotation UI while keeping the scene selection outline visible.
 - **Wall junctions** overlap their structural cores, finish faces and skirting slightly at true wall ends to remove hairline corner gaps in the dollhouse view.
 - **Furniture dragging** is more magnetic: wall-affinity products auto-rotate and settle on the visible interior wall face, object-edge snaps have practical enter/exit hysteresis, rotated collision tests use the real oriented footprint, and Shift still provides immediate free-move/overlap.
 - Perspective framing/background were tuned toward the lighter reference presentation, and furniture now exposes a move cursor while draggable.
@@ -43,7 +56,7 @@ The Build Room checker is now world-anchored and represents physical dimensions:
 
 ### Persistent corner angles
 
-Every room corner now keeps its interior-angle annotation visible. Hovering or dragging a corner promotes that label to electric cyan, but the numeric angle remains available at rest as drafting information.
+Every room corner now keeps its interior-angle annotation visible. Hovering or dragging a corner promotes that label to the shared selection blue, but the numeric angle remains available at rest as drafting information.
 
 ### Camera / wall crossing without jitter
 
@@ -88,7 +101,7 @@ This means a custom opening can be a floating hole, a low opening, a floor-level
 - Rectangle, L-shape and recessed templates.
 - Arbitrary simple polygons and angled walls.
 - Direct wall and corner dragging.
-- Electric-cyan hover feedback and pointer/grabbing cursors.
+- Shared selection-blue hover feedback and pointer/grabbing cursors.
 - Mid-wall `+` control to insert a real corner and split the wall.
 - Metric / Imperial presentation.
 - Up to 20 m overall span / selected-wall length.
@@ -97,7 +110,7 @@ This means a custom opening can be a floating hole, a low opening, a floor-level
 - 2D and 3D opening dragging.
 - Window/door architectural variants.
 
-## Existing Furnish Room baseline
+## Existing Plan Room baseline
 
 - Procedural placeholder furniture; GLBs are not required.
 - Dollhouse, Top, Front, Right, Back and Left views.

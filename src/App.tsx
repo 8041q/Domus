@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { BuildRoom } from './BuildRoom';
-import { FurnishRoom } from './FurnishRoom';
+import { PlanRoom } from './PlanRoom';
 import { usePlannerStore } from './store';
+import { Button, Icon } from './ui';
 
 export default function App() {
   const mode = usePlannerStore((s) => s.mode);
@@ -24,8 +25,8 @@ export default function App() {
         e.shiftKey ? redo() : undo();
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); }
-      if (mode === 'furnish' && e.key.toLowerCase() === 'r') rotate();
-      if (mode === 'furnish' && (e.key === 'Delete' || e.key === 'Backspace')) remove();
+      if (mode === 'plan' && e.key.toLowerCase() === 'r') rotate();
+      if (mode === 'plan' && (e.key === 'Delete' || e.key === 'Backspace')) remove();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -39,41 +40,44 @@ export default function App() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <div className="brand-block">
-          <div className="brand-mark">S</div>
-          <div><strong>Domus</strong><span>Room planner prototype</span></div>
+        <div className="brand-block" aria-label="Domus room planner">
+          <div className="brand-mark">D</div>
+          <div><strong>Domus</strong><span>Room planning workspace</span></div>
         </div>
 
-        <nav className="mode-stepper" aria-label="Design steps">
+        <nav className="mode-stepper" aria-label="Planning workflow">
           <button type="button" className={mode === 'build' ? 'active' : ''} onClick={() => setMode('build')}>
-            <span>1</span><div><strong>Build room</strong><small>Shape & dimensions</small></div>
+            <span className="step-number">1</span>
+            <div><strong>Build room</strong><small>Shape & architecture</small></div>
           </button>
-          <span className="step-line" />
-          <button type="button" className={mode === 'furnish' ? 'active' : ''} onClick={() => setMode('furnish')}>
-            <span>2</span><div><strong>Furnish</strong><small>Products & layout</small></div>
+          <span className="step-line" aria-hidden="true" />
+          <button type="button" className={mode === 'plan' ? 'active' : ''} onClick={() => setMode('plan')}>
+            <span className="step-number">2</span>
+            <div><strong>Plan room</strong><small>Products & layout</small></div>
           </button>
         </nav>
 
         <div className="header-actions">
-          <button type="button" title="Undo" onClick={undo}>↶ <span>Undo</span></button>
-          <button type="button" title="Redo" onClick={redo}>↷ <span>Redo</span></button>
+          <Button variant="ghost" size="icon" title="Undo (Ctrl/Cmd+Z)" aria-label="Undo" onClick={undo}><Icon name="undo" /></Button>
+          <Button variant="ghost" size="icon" title="Redo (Ctrl/Cmd+Y)" aria-label="Redo" onClick={redo}><Icon name="redo" /></Button>
           <span className="header-divider" />
-          <button type="button" onClick={() => { loadLocal(); flash('Saved design loaded'); }}>Load</button>
-          <button type="button" className="save-button" onClick={() => { saveLocal(); flash('Design saved locally'); }}>Save</button>
-          <button
-            type="button"
-            className="more-button"
+          <Button variant="ghost" size="sm" onClick={() => { loadLocal(); flash('Saved design loaded'); }}><Icon name="folder" />Load</Button>
+          <Button size="sm" onClick={() => { saveLocal(); flash('Design saved locally'); }}><Icon name="save" />Save</Button>
+          <Button
+            variant="ghost"
+            size="icon"
             title="Start a new room"
+            aria-label="Start a new room"
             onClick={() => { if (window.confirm('Start a new room? Your current unsaved changes will be replaced.')) resetProject(); }}
-          >•••</button>
+          ><Icon name="more" /></Button>
         </div>
       </header>
 
       <main className="app-main">
-        {mode === 'build' ? <BuildRoom /> : <FurnishRoom />}
+        {mode === 'build' ? <BuildRoom /> : <PlanRoom />}
       </main>
 
-      {notice && <div className="toast" role="status">✓ {notice}</div>}
+      {notice && <div className="toast" role="status"><Icon name="check" />{notice}</div>}
     </div>
   );
 }

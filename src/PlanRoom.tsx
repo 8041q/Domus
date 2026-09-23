@@ -4,12 +4,13 @@ import { PRODUCT_LIST, PRODUCTS } from './core/products';
 import { clearanceIssues } from './core/placement';
 import { polygonArea } from './core/roomGeometry';
 import { formatArea, formatLength } from './core/units';
-import type { FurnishCameraView, ProductCategory } from './core/types';
+import type { PlanCameraView, ProductCategory } from './core/types';
 import { FLOOR_FINISHES, WALL_FINISHES } from './core/roomFinishes';
 import { getSnapshot, usePlannerStore } from './store';
+import { Icon } from './ui';
 
 const CATEGORIES: Array<'All' | ProductCategory> = ['All', 'Seating', 'Tables', 'Storage', 'Decor'];
-const VIEW_PRESETS: Array<{ id: FurnishCameraView; label: string }> = [
+const VIEW_PRESETS: Array<{ id: PlanCameraView; label: string }> = [
   { id: 'perspective', label: 'Dollhouse' },
   { id: 'top', label: 'Top' },
   { id: 'front', label: 'Front' },
@@ -115,10 +116,10 @@ function SelectionPanel() {
       </div>
 
       <div className="action-grid">
-        <button type="button" onClick={() => rotate(-1)}><span>↶</span>90° left</button>
-        <button type="button" onClick={() => rotate(1)}><span>↷</span>90° right</button>
-        <button type="button" onClick={duplicate}><span>⧉</span>Duplicate</button>
-        <button type="button" className="danger-action" onClick={remove}><span>×</span>Remove</button>
+        <button type="button" onClick={() => rotate(-1)}><span><Icon name="rotateLeft" /></span>90° left</button>
+        <button type="button" onClick={() => rotate(1)}><span><Icon name="rotateRight" /></span>90° right</button>
+        <button type="button" onClick={duplicate}><span><Icon name="copy" /></span>Duplicate</button>
+        <button type="button" className="danger-action" onClick={remove}><span><Icon name="x" /></span>Remove</button>
       </div>
       <label className="toggle-row">
         <input type="checkbox" checked={showClearance} onChange={(e: ChangeEvent<HTMLInputElement>) => setShowClearance(e.target.checked)} />
@@ -140,7 +141,7 @@ function FinishesPanel({ onClose }: { onClose: () => void }) {
   const updateRoom = usePlannerStore((s) => s.updateRoom);
   return (
     <aside className="finish-panel">
-      <div className="finish-panel-heading"><div><span className="eyebrow">Room</span><h2>Finishes</h2></div><button type="button" onClick={onClose} aria-label="Close finishes">×</button></div>
+      <div className="finish-panel-heading"><div><span className="eyebrow">Room</span><h2>Finishes</h2></div><button type="button" onClick={onClose} aria-label="Close finishes"><Icon name="x" /></button></div>
       <span className="sub-label">Wall colour</span>
       <div className="swatch-row">
         {WALL_FINISHES.map((swatch) => (
@@ -177,7 +178,7 @@ function FinishesPanel({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function FurnishRoom() {
+export function PlanRoom() {
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState<'All' | ProductCategory>('All');
   const [showFinishes, setShowFinishes] = useState(false);
@@ -195,8 +196,8 @@ export function FurnishRoom() {
   const setShowRoomDimensions = usePlannerStore((s) => s.setShowRoomDimensions);
   const setShowProductDimensions = usePlannerStore((s) => s.setShowProductDimensions);
   const setShowSpacingDimensions = usePlannerStore((s) => s.setShowSpacingDimensions);
-  const furnishView = usePlannerStore((s) => s.furnishView);
-  const setFurnishView = usePlannerStore((s) => s.setFurnishView);
+  const planView = usePlannerStore((s) => s.planView);
+  const setPlanView = usePlannerStore((s) => s.setPlanView);
   const addObject = usePlannerStore((s) => s.addObject);
   const setMode = usePlannerStore((s) => s.setMode);
 
@@ -207,14 +208,14 @@ export function FurnishRoom() {
   }), [category, search]);
 
   return (
-    <div className="mode-layout furnish-layout">
+    <div className="mode-layout plan-room-layout">
       <aside className="catalog-panel">
         <div className="catalog-heading">
-          <div><span className="eyebrow">Step 2</span><h1>Furnish your room</h1></div>
-          <button type="button" className="edit-room-link" onClick={() => setMode('build')}>Edit room</button>
+          <div><span className="eyebrow">Step 2</span><h1>Plan your room</h1></div>
+          <button type="button" className="edit-room-link" onClick={() => setMode('build')}><Icon name="arrowLeft" />Edit room</button>
         </div>
         <label className="search-box">
-          <span>⌕</span>
+          <span><Icon name="search" /></span>
           <input value={search} onChange={(e: ChangeEvent<HTMLInputElement>) => setSearch(e.target.value)} placeholder="Search furniture" />
         </label>
         <div className="category-tabs" role="tablist" aria-label="Product categories">
@@ -236,12 +237,12 @@ export function FurnishRoom() {
       <section className="designer-canvas">
         <div className="designer-topbar">
           <div className="view-preset-bar" role="group" aria-label="3D room view">
-            {VIEW_PRESETS.map((view) => <button key={view.id} type="button" className={furnishView === view.id ? 'active' : ''} onClick={() => setFurnishView(view.id)}>{view.label}</button>)}
+            {VIEW_PRESETS.map((view) => <button key={view.id} type="button" className={planView === view.id ? 'active' : ''} onClick={() => setPlanView(view.id)}>{view.label}</button>)}
           </div>
           <div className="designer-meta">
             <div className="room-count">{objects.length} item{objects.length === 1 ? '' : 's'} · {formatArea(Math.abs(polygonArea(room.vertices)), measurementSystem)} · {room.vertices.length} walls</div>
             <div className="view-options-wrap">
-              <button type="button" className={`finish-toggle ${showViewOptions ? 'active' : ''}`} onClick={() => setShowViewOptions((value) => !value)}>View options</button>
+              <button type="button" className={`finish-toggle ${showViewOptions ? 'active' : ''}`} onClick={() => setShowViewOptions((value) => !value)}><Icon name="eye" />View options</button>
               {showViewOptions && (
                 <div className="view-options-popover">
                   <strong>Annotations</strong>
@@ -251,12 +252,12 @@ export function FurnishRoom() {
                 </div>
               )}
             </div>
-            <button type="button" className={`finish-toggle ${showFinishes ? 'active' : ''}`} onClick={() => setShowFinishes((value) => !value)}>Room finishes</button>
+            <button type="button" className={`finish-toggle ${showFinishes ? 'active' : ''}`} onClick={() => setShowFinishes((value) => !value)}><Icon name="palette" />Room finishes</button>
           </div>
         </div>
 
         <div className="designer-stage">
-          <Viewport3D furniture interactive view={furnishView} exportable />
+          <Viewport3D furniture interactive view={planView} exportable />
           {showFinishes && <FinishesPanel onClose={() => setShowFinishes(false)} />}
           {selectedId && <SelectionPanel />}
         </div>

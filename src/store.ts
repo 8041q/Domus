@@ -27,14 +27,14 @@ import type {
   RoomWall,
   SnapFeedback,
   BuildWorkspaceView,
-  FurnishCameraView,
+  PlanCameraView,
   MeasurementSystem
 } from './core/types';
 
 interface PlannerStore extends PlannerSnapshot {
   mode: AppMode;
   buildView: BuildWorkspaceView;
-  furnishView: FurnishCameraView;
+  planView: PlanCameraView;
   measurementSystem: MeasurementSystem;
   selectedId: string | null;
   selectedOpeningId: string | null;
@@ -49,7 +49,7 @@ interface PlannerStore extends PlannerSnapshot {
 
   setMode: (mode: AppMode) => void;
   setBuildView: (view: BuildWorkspaceView) => void;
-  setFurnishView: (view: FurnishCameraView) => void;
+  setPlanView: (view: PlanCameraView) => void;
   setMeasurementSystem: (system: MeasurementSystem) => void;
   setShowClearance: (show: boolean) => void;
   setShowRoomDimensions: (show: boolean) => void;
@@ -236,7 +236,7 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
   objects: defaultObjects,
   mode: 'build',
   buildView: 'plan',
-  furnishView: 'perspective',
+  planView: 'perspective',
   measurementSystem: 'metric',
   selectedId: null,
   selectedOpeningId: null,
@@ -251,7 +251,7 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
 
   setMode: (mode) => set({ mode, selectedId: null, selectedOpeningId: null, selectedWallId: null, activeSnap: { kind: 'none' }, collisionId: null }),
   setBuildView: (buildView) => set({ buildView }),
-  setFurnishView: (furnishView) => set({ furnishView }),
+  setPlanView: (planView) => set({ planView }),
   setMeasurementSystem: (measurementSystem) => set({ measurementSystem }),
   setShowClearance: (showClearance) => set({ showClearance }),
   setShowRoomDimensions: (showRoomDimensions) => set({ showRoomDimensions }),
@@ -263,7 +263,7 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
     const id = `${productId}-${crypto.randomUUID().slice(0, 8)}`;
     const pos = findSpawnPosition(productId, before);
     const object: PlacedObject = { id, productId, x: pos.x, z: pos.z, rotationY: 0 };
-    set((state) => ({ objects: [...state.objects, object], selectedId: id, furnishView: 'perspective' }));
+    set((state) => ({ objects: [...state.objects, object], selectedId: id, planView: 'perspective' }));
     history.push(before);
   },
 
@@ -481,7 +481,7 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
       collisionPush: false,
       mode: 'build',
       buildView: 'plan',
-      furnishView: 'perspective'
+      planView: 'perspective'
     });
     history.push(before);
   }

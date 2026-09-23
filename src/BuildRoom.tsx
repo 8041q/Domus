@@ -5,6 +5,7 @@ import { getRoomWalls, getWall, polygonArea } from './core/roomGeometry';
 import { dimensionStepMetres, displayLengthValue, displayValueToMetres, formatArea, formatLength, lengthInputSuffix } from './core/units';
 import type { MeasurementSystem, OpeningVariant, RoomOpening, RoomShapeKind } from './core/types';
 import { getSnapshot, usePlannerStore } from './store';
+import { Icon } from './ui';
 
 
 const OPENING_VARIANTS: Record<RoomOpening['type'], Array<{ id: OpeningVariant; label: string }>> = {
@@ -364,7 +365,7 @@ export function BuildRoom() {
         </section>
 
         <div className="builder-continue">
-          <button className="primary-button" type="button" onClick={() => setMode('furnish')}>Design this room <span>→</span></button>
+          <button className="primary-button" type="button" onClick={() => setMode('plan')}>Continue to Plan Room <Icon name="chevronRight" /></button>
         </div>
       </aside>
 

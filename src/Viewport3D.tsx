@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { PlannerScene } from './renderer/PlannerScene';
-import type { FurnishCameraView } from './core/types';
+import type { PlanCameraView } from './core/types';
 import { getSnapshot, usePlannerStore } from './store';
 
 export function Viewport3D({
@@ -13,7 +13,7 @@ export function Viewport3D({
   furniture?: boolean;
   interactive?: boolean;
   architectureInteractive?: boolean;
-  view?: FurnishCameraView;
+  view?: PlanCameraView;
   exportable?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);

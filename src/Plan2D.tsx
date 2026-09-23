@@ -18,7 +18,7 @@ import { getSnapshot, usePlannerStore } from './store';
 
 const PAD = 64;
 
-type Purpose = 'build' | 'furnish';
+type Purpose = 'build' | 'plan';
 
 type ViewTransform = { scale: number; ox: number; oz: number };
 
@@ -30,7 +30,7 @@ type DragState =
 
 type HoverTarget = { type: 'wall' | 'corner' | 'opening' | 'split'; id: string } | null;
 
-const HOVER_CYAN = '#00e5ff';
+const HOVER_CYAN = '#2563eb';
 
 type RoomWall = ReturnType<typeof getRoomWalls>[number];
 type LabelRect = { x: number; y: number; width: number; height: number };
@@ -306,7 +306,7 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
     ctx.fillStyle = '#ffffff';
     ctx.fill(roomPath);
 
-    if (purpose === 'furnish' && selected && showClearance) {
+    if (purpose === 'plan' && selected && showClearance) {
       const zone = clearanceAabb(selected);
       ctx.save();
       ctx.setLineDash([6, 5]);
@@ -322,7 +322,7 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
       ctx.restore();
     }
 
-    if (purpose === 'furnish') {
+    if (purpose === 'plan') {
       for (const obj of objects) {
         const p = PRODUCTS[obj.productId];
         const size = rotatedFootprint(p, obj.rotationY);
@@ -330,13 +330,13 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
         const y = oz + (obj.z - size.depth / 2) * scale;
         const w = size.width * scale;
         const h = size.depth * scale;
-        ctx.fillStyle = obj.id === selectedId ? '#dbe7f4' : p.swatch;
-        ctx.strokeStyle = obj.id === selectedId ? '#1769aa' : '#6f746f';
+        ctx.fillStyle = obj.id === selectedId ? '#eff6ff' : p.swatch;
+        ctx.strokeStyle = obj.id === selectedId ? '#2563eb' : '#71717a';
         ctx.lineWidth = obj.id === selectedId ? 2.5 : 1.25;
         ctx.beginPath();
         ctx.roundRect(x, y, w, h, Math.min(7, w * 0.12, h * 0.12));
         ctx.fill(); ctx.stroke();
-        ctx.fillStyle = '#26302d';
+        ctx.fillStyle = '#27272a';
         ctx.font = '600 11px system-ui, sans-serif';
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         if (w > 52 && h > 30) ctx.fillText(p.name, x + w / 2, y + h / 2, Math.max(24, w - 10));
@@ -350,7 +350,7 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
       const selectedWall = purpose === 'build' && wall.id === selectedWallId;
       const hoveredWall = purpose === 'build' && hover?.type === 'wall' && hover.id === wall.id;
       const draggingWall = purpose === 'build' && drag?.type === 'wall' && drag.id === wall.id;
-      ctx.strokeStyle = (hoveredWall || draggingWall) ? HOVER_CYAN : selectedWall ? '#1769aa' : '#252a28';
+      ctx.strokeStyle = (hoveredWall || draggingWall) ? HOVER_CYAN : selectedWall ? '#2563eb' : '#27272a';
       ctx.lineWidth = (hoveredWall || draggingWall) ? 7.5 : selectedWall ? 7 : (purpose === 'build' ? 5 : 3);
       ctx.lineCap = 'round';
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
@@ -369,7 +369,7 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
       const hoveredOpening = purpose === 'build' && hover?.type === 'opening' && hover.id === opening.id;
       const draggingOpening = purpose === 'build' && drag?.type === 'opening' && drag.id === opening.id;
-      const baseOpeningColor = opening.type === 'door' ? '#2f6f5e' : opening.type === 'opening' ? '#7b817e' : '#4f8fa8';
+      const baseOpeningColor = opening.type === 'window' ? '#2563eb' : opening.type === 'door' ? '#52525b' : '#71717a';
       ctx.strokeStyle = (hoveredOpening || draggingOpening) ? HOVER_CYAN : baseOpeningColor;
       ctx.lineWidth = (hoveredOpening || draggingOpening) ? 5.8 : isSelected ? 5.5 : 3.5;
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
@@ -377,7 +377,7 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
       if (opening.type === 'door' && opening.variant !== 'door-frame') {
         const n = points.wall.inward;
         const open = toPx(points.start.x + n.x * opening.width, points.start.z + n.z * opening.width);
-        ctx.strokeStyle = '#6d756f';
+        ctx.strokeStyle = '#71717a';
         ctx.lineWidth = 1.25;
         ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(open.x, open.y); ctx.stroke();
         const control = { x: b.x + n.x * opening.width * scale, y: b.y + n.z * opening.width * scale };
@@ -391,17 +391,17 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
         ctx.font = '500 9px system-ui, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillStyle = '#929895';
+        ctx.fillStyle = '#71717a';
         const kind = opening.type === 'door' ? 'Door' : opening.type === 'opening' ? 'Opening' : 'Window';
         ctx.fillText(`${kind} ${openingNumber}`, label.x, label.y);
       }
       ctx.restore();
     }
 
-    if (purpose === 'furnish' && activeSnap.kind !== 'none') {
+    if (purpose === 'plan' && activeSnap.kind !== 'none') {
       ctx.save();
       ctx.setLineDash([5, 5]);
-      ctx.strokeStyle = '#1769aa';
+      ctx.strokeStyle = '#2563eb';
       ctx.lineWidth = 1.4;
       if (activeSnap.x) {
         const x = ox + activeSnap.x.value * scale;
@@ -642,7 +642,7 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
       for (const label of placedWallLabels) {
         if (!label.leader) continue;
         ctx.save();
-        ctx.strokeStyle = label.wall.id === selectedWallId ? 'rgba(23,105,170,.42)' : 'rgba(116,123,119,.42)';
+        ctx.strokeStyle = label.wall.id === selectedWallId ? 'rgba(37,99,235,.48)' : 'rgba(113,113,122,.46)';
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(label.leader.start.x, label.leader.start.y);
@@ -652,21 +652,28 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
       }
 
       for (const label of placedWallLabels) {
-        ctx.fillStyle = 'rgba(248,248,246,.96)';
-        ctx.fillRect(label.rect.x, label.rect.y, label.rect.width, label.rect.height);
-        ctx.font = '600 11px system-ui, sans-serif';
-        ctx.fillStyle = label.wall.id === selectedWallId ? '#1769aa' : '#555d59';
+        ctx.save();
+        ctx.beginPath();
+        ctx.roundRect(label.rect.x, label.rect.y, label.rect.width, label.rect.height, 6);
+        ctx.fillStyle = 'rgba(255,255,255,.97)';
+        ctx.fill();
+        ctx.strokeStyle = label.wall.id === selectedWallId ? 'rgba(37,99,235,.72)' : 'rgba(24,24,27,.13)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.font = '650 11px system-ui, sans-serif';
+        ctx.fillStyle = label.wall.id === selectedWallId ? '#1d4ed8' : '#18181b';
         ctx.fillText(label.text, label.x, label.y - 4);
         ctx.font = '500 9px system-ui, sans-serif';
-        ctx.fillStyle = label.wall.id === selectedWallId ? '#6f93ae' : '#9a9f9c';
+        ctx.fillStyle = label.wall.id === selectedWallId ? '#64748b' : '#71717a';
         ctx.fillText(label.idText, label.x, label.y + 8);
+        ctx.restore();
       }
 
       // Corner handles: neutral by default, electric cyan on hover/drag.
       for (const vertex of room.vertices) {
         const point = toPx(vertex.x, vertex.z);
         const active = (hover?.type === 'corner' && hover.id === vertex.id) || (drag?.type === 'corner' && drag.id === vertex.id);
-        ctx.fillStyle = active ? HOVER_CYAN : '#5f6964';
+        ctx.fillStyle = active ? HOVER_CYAN : '#27272a';
         ctx.beginPath(); ctx.arc(point.x, point.y, active ? 8 : 7, 0, Math.PI * 2); ctx.fill();
         ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.stroke();
       }
@@ -728,10 +735,10 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
         const active = hover?.type === 'split' && hover.id === wall.id;
         ctx.save();
         ctx.fillStyle = active ? HOVER_CYAN : 'rgba(255,255,255,.96)';
-        ctx.strokeStyle = active ? HOVER_CYAN : '#aeb4b0';
+        ctx.strokeStyle = active ? HOVER_CYAN : '#d4d4d8';
         ctx.lineWidth = active ? 2.2 : 1.4;
         ctx.beginPath(); ctx.arc(mid.x, mid.y, active ? 10 : 9, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-        ctx.strokeStyle = active ? '#06444b' : '#68706c';
+        ctx.strokeStyle = active ? '#ffffff' : '#52525b';
         ctx.lineWidth = 1.5;
         ctx.beginPath(); ctx.moveTo(mid.x - 4, mid.y); ctx.lineTo(mid.x + 4, mid.y); ctx.moveTo(mid.x, mid.y - 4); ctx.lineTo(mid.x, mid.y + 4); ctx.stroke();
         ctx.restore();
@@ -743,13 +750,17 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
       for (const label of angleLabels) {
         const active = (hover?.type === 'corner' && hover.id === label.vertex.id) || (drag?.type === 'corner' && drag.id === label.vertex.id);
         ctx.save();
+        ctx.beginPath();
+        ctx.roundRect(label.rect.x, label.rect.y, label.rect.width, label.rect.height, 5);
+        ctx.fillStyle = 'rgba(255,255,255,.94)';
+        ctx.fill();
+        ctx.strokeStyle = active ? HOVER_CYAN : 'rgba(24,24,27,.10)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
         ctx.font = active ? '700 10px system-ui, sans-serif' : '600 9px system-ui, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.lineWidth = 3.5;
-        ctx.strokeStyle = 'rgba(255,255,255,.92)';
-        ctx.strokeText(`${label.angle.toFixed(1)}°`, label.x, label.y);
-        ctx.fillStyle = active ? '#008fa3' : '#8b918e';
+        ctx.fillStyle = active ? '#1d4ed8' : '#52525b';
         ctx.fillText(`${label.angle.toFixed(1)}°`, label.x, label.y);
         ctx.restore();
       }
