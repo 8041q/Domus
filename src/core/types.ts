@@ -78,10 +78,40 @@ export type ProductKind =
 
 export type ProductCategory = 'Seating' | 'Tables' | 'Storage' | 'Decor';
 
+/**
+ * Semantic interaction tags are intentionally separate from visual categories.
+ * They let placement rules stay data-driven as the catalogue grows (for example,
+ * a chair may tuck under a dining table while both remain normal furniture).
+ */
+export type ProductInteractionTag =
+  | 'floor-covering'
+  | 'support-surface'
+  | 'tuckable-table'
+  | 'tuckable-seating'
+  | 'surface-item';
+
+export interface ProductInteractionRules {
+  /** Tags this product exposes to other placement rules. */
+  tags?: ProductInteractionTag[];
+  /** Footprint collision is ignored when the other product exposes one of these tags. */
+  allowOverlapWith?: ProductInteractionTag[];
+  /** Reserved for vertical placement (books/decor on tables, shelves, etc.). */
+  canRestOn?: ProductInteractionTag[];
+}
+
 export interface ClearanceRule {
   front: number;
   back: number;
   sides: number;
+}
+
+export interface ProductCollisionFootprint {
+  /** Local collider width/depth in metres. Defaults to the catalogue dimensions. */
+  width: number;
+  depth: number;
+  /** Optional local offset from the product origin for asymmetric visible footprints. */
+  offsetX?: number;
+  offsetZ?: number;
 }
 
 export interface ProductDefinition {
@@ -93,6 +123,13 @@ export interface ProductDefinition {
   height: number;
   wallAffinity?: boolean;
   collision?: boolean;
+  /**
+   * Floor collision can intentionally differ from the nominal dimension box. This
+   * keeps interaction tight to the visible base without changing displayed product
+   * dimensions or clearance recommendations.
+   */
+  collisionFootprint?: ProductCollisionFootprint;
+  interaction?: ProductInteractionRules;
   clearance: ClearanceRule;
   priceLabel: string;
   swatch: string;

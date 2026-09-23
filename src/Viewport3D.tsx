@@ -18,6 +18,7 @@ export function Viewport3D({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<PlannerScene | null>(null);
+  const internallyChangedViewRef = useRef<PlanCameraView | null>(null);
   const [exporting, setExporting] = useState(false);
 
   const exportGLB = async () => {
@@ -60,7 +61,14 @@ export function Viewport3D({
       updateObject: (id, patch) => usePlannerStore.getState().updateObject(id, patch),
       updateOpening: (id, patch, recordHistory = true) => usePlannerStore.getState().updateOpening(id, patch, recordHistory),
       commitDrag: (before) => usePlannerStore.getState().commitSnapshot(before),
-      feedback: (snap, collisionId, collisionPush) => usePlannerStore.getState().setFeedback(snap, collisionId, collisionPush)
+      feedback: (snap, collisionId, collisionPush) => usePlannerStore.getState().setFeedback(snap, collisionId, collisionPush),
+      cameraViewChanged: (nextView) => {
+        const state = usePlannerStore.getState();
+        if (state.planView !== nextView) {
+          internallyChangedViewRef.current = nextView;
+          state.setPlanView(nextView);
+        }
+      }
     }, { showFurniture: furniture, interactiveFurniture: interactive, interactiveArchitecture: architectureInteractive });
     sceneRef.current = scene;
     if (view) scene.setCameraView(view);
@@ -92,7 +100,15 @@ export function Viewport3D({
   }, [furniture, interactive, architectureInteractive]);
 
   useEffect(() => {
-    if (view) sceneRef.current?.setCameraView(view);
+    if (!view) return;
+    // When PlannerScene itself changes the active preset to Dollhouse after manual
+    // navigation, update the UI/store without snapping the camera to the default
+    // dollhouse position. Explicit button clicks still call setCameraView normally.
+    if (internallyChangedViewRef.current === view) {
+      internallyChangedViewRef.current = null;
+      return;
+    }
+    sceneRef.current?.setCameraView(view);
   }, [view]);
 
   return (

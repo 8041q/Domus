@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { PRODUCTS, rotatedFootprint } from './core/products';
-import { objectsOverlap, resolvePlacement } from './core/placement';
+import { objectsOverlap, resolvePlacement, resolveRotationPlacement } from './core/placement';
 import { SnapshotHistory } from './core/history';
 import {
   findNearestValidPosition,
@@ -356,9 +356,13 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
     const before = snapshotOf(get());
     const nextRotation = object.rotationY + direction * Math.PI / 2;
     const others = get().objects.filter((o) => o.id !== id);
-    const probe = { ...object, rotationY: nextRotation };
-    const resolved = resolvePlacement(probe, object.x, object.z, get().room, others, { enterSnapDistance: 0.08 });
-    set((state) => ({ objects: state.objects.map((o) => o.id === id ? { ...o, rotationY: nextRotation, x: resolved.x, z: resolved.z } : o) }));
+    const resolved = resolveRotationPlacement(object, nextRotation, get().room, others);
+    set((state) => ({
+      objects: state.objects.map((o) => o.id === id ? { ...o, rotationY: resolved.rotationY } : o),
+      activeSnap: { kind: 'none' },
+      collisionId: resolved.colliding ? id : null,
+      collisionPush: false
+    }));
     history.push(before);
   },
 
@@ -370,9 +374,13 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
     const twoPi = Math.PI * 2;
     const normalizedRotation = ((rotationY % twoPi) + twoPi) % twoPi;
     const others = get().objects.filter((o) => o.id !== id);
-    const probe = { ...object, rotationY: normalizedRotation };
-    const resolved = resolvePlacement(probe, object.x, object.z, get().room, others, { enterSnapDistance: 0 });
-    set((state) => ({ objects: state.objects.map((o) => o.id === id ? { ...o, rotationY: normalizedRotation, x: resolved.x, z: resolved.z } : o) }));
+    const resolved = resolveRotationPlacement(object, normalizedRotation, get().room, others);
+    set((state) => ({
+      objects: state.objects.map((o) => o.id === id ? { ...o, rotationY: resolved.rotationY } : o),
+      activeSnap: { kind: 'none' },
+      collisionId: resolved.colliding ? id : null,
+      collisionPush: false
+    }));
     if (before) history.push(before);
   },
 

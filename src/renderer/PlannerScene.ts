@@ -5,6 +5,8 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { OutlinePass } from 'three/examples/jsm/postprocessing/OutlinePass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { FXAAShader } from 'three/examples/jsm/shaders/FXAAShader.js';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
@@ -37,6 +39,7 @@ export interface SceneBridge {
   updateOpening: (id: string, patch: Partial<RoomOpening>, recordHistory?: boolean) => void;
   commitDrag: (before: PlannerSnapshot) => void;
   feedback: (snap: SnapFeedback, collisionId: string | null, collisionPush: boolean) => void;
+  cameraViewChanged?: (view: PlanCameraView) => void;
 }
 
 interface SceneOptions {
@@ -55,11 +58,28 @@ const SPACING_COLOR = themeHex('spacing-line');
 const DIMENSION_TEXT_COLOR = themeHex('dimension-text');
 const DIMENSION_CARD_BACKGROUND = themeHex('dimension-card-background');
 const DIMENSION_CARD_BORDER = themeHex('dimension-card-border');
+const SCENE_LAYER = 0;
+const ANNOTATION_TEXT_LAYER = 1;
 const TRIM_COLOR = 0xffffff;
 const JUNCTION_COLOR = 0xffffff;
 const WALL_THICKNESS = 0.05;
 const FLOOR_THICKNESS = WALL_THICKNESS;
 const CEILING_THICKNESS = WALL_THICKNESS;
+
+// Dollhouse cutaway thresholds. `facing` is the horizontal dot product between a
+// wall's outward normal and the direction from that wall to the camera. Smaller
+// ENTER values make side walls disappear sooner at shallow viewing angles. EXIT
+// stays lower than ENTER to prevent flicker while orbiting around the threshold.
+const CUTAWAY_ENTER_FACING = 0.08;
+const CUTAWAY_EXIT_FACING = 0.02;
+
+// Automatic ceiling behavior for the free dollhouse camera. When the camera is
+// almost level with its target (small elevation angle), the room reads as an
+// enclosed eye-level view, so show the ceiling. The threshold is intentionally
+// tight: the camera must be nearly horizontal. EXIT stays slightly wider to avoid
+// flicker around the boundary. Side presets force the ceiling on separately.
+const CEILING_ENTER_ELEVATION = THREE.MathUtils.degToRad(9);
+const CEILING_EXIT_ELEVATION = THREE.MathUtils.degToRad(9);
 
 type DomusExportCategory = 'Walls' | 'Floors' | 'Frames' | 'Ceiling' | 'Furniture';
 
@@ -88,6 +108,7 @@ export class PlannerScene {
   private renderer: THREE.WebGLRenderer;
   private composer: EffectComposer;
   private outlinePass: OutlinePass;
+  private fxaaPass: ShaderPass;
   private controls: OrbitControls;
   private raycaster = new THREE.Raycaster();
   private pointer = new THREE.Vector2();
@@ -105,11 +126,14 @@ export class PlannerScene {
   private animationFrame = 0;
   private disposed = false;
   private controlsInteracting = false;
+  private controlsInteractionStartDirection = new THREE.Vector3();
   private lastRoomKey = '';
   private lastOpeningsKey = '';
   private lastOpeningHighlightKey = '';
   private lastHelperKey = '';
   private currentCameraView: PlanCameraView = 'perspective';
+  private ceilingVisible = false;
+  private suppressAutoCeilingUntilRaised = false;
   private environmentTexture: THREE.Texture | null = null;
   private mainLight: THREE.DirectionalLight;
   private wallHiddenState = new Map<string, boolean>();
@@ -123,7 +147,8 @@ export class PlannerScene {
 
   constructor(private container: HTMLElement, private bridge: SceneBridge, private options: SceneOptions) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.6));
+    const pixelRatio = Math.min(window.devicePixelRatio, 1.6);
+    this.renderer.setPixelRatio(pixelRatio);
     this.renderer.shadowMap.enabled = true;
     // A firmer PCF shadow reads better for furniture and avoids the over-blurred Phase 5 result.
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -140,6 +165,10 @@ export class PlannerScene {
 
     // Screen-space silhouette outlining matches the reference planner: the selected
     // product gets one crisp yellow contour, independent of its component meshes.
+    // EffectComposer renders into off-screen targets, so the renderer's native
+    // framebuffer MSAA does not smooth the composed result. Keep one low-cost FXAA
+    // pass enabled on every display; HiDPI still benefits because outlines and
+    // oblique geometry are composed after the native framebuffer antialias stage.
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.outlinePass = new OutlinePass(new THREE.Vector2(1, 1), this.scene, this.camera);
@@ -150,6 +179,9 @@ export class PlannerScene {
     this.outlinePass.edgeGlow = 0;
     this.outlinePass.pulsePeriod = 0;
     this.composer.addPass(this.outlinePass);
+    this.fxaaPass = new ShaderPass(FXAAShader);
+    this.fxaaPass.enabled = true;
+    this.composer.addPass(this.fxaaPass);
     this.composer.addPass(new OutputPass());
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
@@ -565,6 +597,7 @@ export class PlannerScene {
 
   setCameraView(view: PlanCameraView) {
     this.currentCameraView = view;
+    this.suppressAutoCeilingUntilRaised = false;
     const room = this.bridge.getSnapshot().room;
     const bounds = roomBounds(room.vertices);
     const cx = (bounds.minX + bounds.maxX) / 2;
@@ -1051,11 +1084,44 @@ export class PlannerScene {
     this.updateCeilingVisibility();
   }
 
-  private updateCeilingVisibility() {
-    this.ceilingGroup.visible = this.currentCameraView === 'front'
+  private updateCeilingVisibility(force = false) {
+    const sidePreset = this.currentCameraView === 'front'
       || this.currentCameraView === 'back'
       || this.currentCameraView === 'left'
       || this.currentCameraView === 'right';
+
+    let visible = sidePreset;
+    if (this.currentCameraView === 'perspective') {
+      const offset = this.camera.position.clone().sub(this.controls.target);
+      const horizontal = Math.hypot(offset.x, offset.z);
+      const elevation = Math.atan2(Math.abs(offset.y), Math.max(horizontal, 1e-6));
+
+      // After leaving a preset by hand, keep the ceiling open until the user has
+      // clearly raised the camera. This makes the preset -> dollhouse transition
+      // immediate even if the preset began at exactly eye level.
+      if (this.suppressAutoCeilingUntilRaised && elevation > CEILING_EXIT_ELEVATION) {
+        this.suppressAutoCeilingUntilRaised = false;
+      }
+
+      if (!this.suppressAutoCeilingUntilRaised) {
+        visible = this.ceilingVisible
+          ? elevation <= CEILING_EXIT_ELEVATION
+          : elevation <= CEILING_ENTER_ELEVATION;
+      }
+    }
+
+    if (!force && visible === this.ceilingVisible) return;
+    this.ceilingVisible = visible;
+    this.ceilingGroup.visible = visible;
+    this.updateRoomDimensionVisibility();
+  }
+
+  private updateRoomDimensionVisibility() {
+    // Room dimensions are temporarily hidden whenever the ceiling is visible.
+    // Item spacing, product dimensions and clearance helpers remain untouched.
+    this.helperGroup.children.forEach((object) => {
+      if (object.userData.helperRole === 'roomDimensions') object.visible = !this.ceilingVisible;
+    });
   }
 
   private rebuildWalls(snapshot: PlannerSnapshot) {
@@ -1439,7 +1505,7 @@ export class PlannerScene {
         && along > -0.12
         && along < wall.length + 0.12
         && Math.abs(signed) < transitionLimit;
-      const dollhouseCutaway = previousHidden ? facing > 0.045 : facing > 0.18;
+      const dollhouseCutaway = previousHidden ? facing > CUTAWAY_EXIT_FACING : facing > CUTAWAY_ENTER_FACING;
       nextState.set(wall.id, crossingWall || dollhouseCutaway);
     }
 
@@ -1668,7 +1734,7 @@ export class PlannerScene {
     labelStyle = 'world',
     keepUpright = true,
     textOutlinePx = themeMetric('dimension-text-outline-px'),
-    targetPixelHeight = themeMetric('dimension-label-screen-px')
+    targetPixelHeight = themeMetric('room-dimension-label-screen-px')
   }: {
     parent?: THREE.Group;
     start: THREE.Vector3;
@@ -1689,7 +1755,7 @@ export class PlannerScene {
       : this.createMeasurementTextPlane(text, labelHeight, textOutlinePx, targetPixelHeight);
     const worldWidth = typeof label.userData.labelWorldWidth === 'number' ? label.userData.labelWorldWidth : labelHeight * 1.4;
     const length = start.distanceTo(end);
-    const gap = Math.min(Math.max(worldWidth + 0.055, 0.12), length * 0.7);
+    const gap = Math.min(Math.max(worldWidth + 0.11, 0.16), length * 0.7);
     const destination = parent ?? this.helperGroup;
     const draw = (points: THREE.Vector3[]) => {
       if (parent) this.makeLocalLine(parent, points, color, 0.92, dashed, overlay, widthPx);
@@ -1707,6 +1773,9 @@ export class PlannerScene {
       draw([start, end]);
     }
 
+    // Keep the text anchor exactly at the geometric midpoint of its dimension.
+    // Extra breathing room is created by the symmetric line break above rather
+    // than shifting the label away from the line, which keeps it visually centered.
     label.position.copy(start).add(end).multiplyScalar(0.5);
     if (labelStyle === 'world') {
       this.orientMeasurementLabel(label, start, end);
@@ -1723,17 +1792,17 @@ export class PlannerScene {
   }
 
   /**
-   * World labels remain attached to the dimension direction. They never billboard;
-   * the only camera-dependent change is a 180° baseline flip handled below so text
-   * is not read upside-down when the orbit camera crosses to the opposite side.
+   * World labels begin flat and aligned to their measurement line. Camera updates
+   * may then pitch the text around its local X axis only; the baseline/yaw remains
+   * tied to the measurement itself.
    */
   private orientMeasurementLabel(label: THREE.Object3D, start: THREE.Vector3, end: THREE.Vector3) {
     const xAxis = end.clone().sub(start).normalize();
     if (xAxis.lengthSq() < 1e-8) return;
 
-    // PlaneGeometry's local X is the text baseline and local Z is its face normal.
-    // Horizontal room/spacing annotations face upward; near-vertical labels use a
-    // fixed horizontal face. Neither orientation tracks the camera.
+    // PlaneGeometry local X = text baseline, local Z = face normal. Horizontal
+    // room/spacing labels therefore start flat on the floor with their baseline
+    // following the dimension direction.
     let zAxis = Math.abs(xAxis.y) > 0.78
       ? new THREE.Vector3(0, 0, 1)
       : new THREE.Vector3(0, 1, 0);
@@ -1745,37 +1814,61 @@ export class PlannerScene {
     label.quaternion.setFromRotationMatrix(basis);
   }
 
-  private createMeasurementTextPlane(text: string, height: number, outlinePx: number = themeMetric('dimension-text-outline-px'), targetPixelHeight: number = themeMetric('dimension-label-screen-px')) {
+  private configureAnnotationTexture(texture: THREE.CanvasTexture) {
+    texture.colorSpace = THREE.SRGBColorSpace;
+    // Mipmaps + anisotropy matter much more than raw canvas resolution when a
+    // world-space label is seen at a steep angle. This avoids the alternating
+    // pixelated/blurry look of plain bilinear filtering while keeping labels cheap.
+    texture.generateMipmaps = true;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.anisotropy = Math.min(12, this.renderer.capabilities.getMaxAnisotropy());
+    texture.needsUpdate = true;
+    return texture;
+  }
+
+  private drawOutlinedAnnotationText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, outlinePx: number, fillStyle: string) {
+    // A two-stage halo gives small labels a cleaner edge than one very thick stroke.
+    // outlinePx <= 0 intentionally disables the halo (used for room dimensions).
+    if (outlinePx > 0) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.98)';
+      ctx.lineWidth = outlinePx + 2;
+      ctx.strokeText(text, x, y);
+      ctx.strokeStyle = 'rgba(255,255,255,0.98)';
+      ctx.lineWidth = outlinePx;
+      ctx.strokeText(text, x, y);
+    }
+    ctx.fillStyle = fillStyle;
+    ctx.fillText(text, x, y);
+  }
+
+  private createMeasurementTextPlane(text: string, height: number, outlinePx: number = themeMetric('dimension-text-outline-px'), targetPixelHeight: number = themeMetric('room-dimension-label-screen-px')) {
     const fontPx = themeMetric('dimension-texture-font-px');
+    const textureScale = 2;
     const probe = document.createElement('canvas').getContext('2d')!;
     probe.font = `700 ${fontPx}px Inter, system-ui, sans-serif`;
     const measuredWidth = Math.ceil(probe.measureText(text).width);
     const paddingX = 14 + outlinePx * 2;
     const paddingY = 10 + outlinePx * 2;
+    const logicalWidth = Math.max(72, measuredWidth + paddingX * 2);
+    const logicalHeight = Math.max(84, fontPx + paddingY * 2);
 
     const canvas = document.createElement('canvas');
-    canvas.width = Math.max(72, measuredWidth + paddingX * 2);
-    canvas.height = Math.max(84, fontPx + paddingY * 2);
+    canvas.width = Math.ceil(logicalWidth * textureScale);
+    canvas.height = Math.ceil(logicalHeight * textureScale);
     const ctx = canvas.getContext('2d')!;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.scale(textureScale, textureScale);
+    ctx.clearRect(0, 0, logicalWidth, logicalHeight);
     ctx.font = `700 ${fontPx}px Inter, system-ui, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
     const textHex = `#${DIMENSION_TEXT_COLOR.toString(16).padStart(6, '0')}`;
-    ctx.strokeStyle = 'rgba(255,255,255,0.96)';
-    ctx.lineWidth = outlinePx;
-    ctx.strokeText(text, canvas.width / 2, canvas.height / 2 + 1);
-    ctx.fillStyle = textHex;
-    ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 1);
+    this.drawOutlinedAnnotationText(ctx, text, logicalWidth / 2, logicalHeight / 2 + 1, outlinePx, textHex);
 
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.minFilter = THREE.LinearFilter;
-    texture.magFilter = THREE.LinearFilter;
-
-    const aspect = canvas.width / canvas.height;
+    const texture = this.configureAnnotationTexture(new THREE.CanvasTexture(canvas));
+    const aspect = logicalWidth / logicalHeight;
     const geometry = new THREE.PlaneGeometry(aspect, 1);
     const material = new THREE.MeshBasicMaterial({
       map: texture,
@@ -1787,6 +1880,9 @@ export class PlannerScene {
     });
     const plane = new THREE.Mesh(geometry, material);
     plane.scale.set(height, height, 1);
+    // Text is composited after scene FXAA. It remains in world space; this layer
+    // only changes render order so already-rasterized glyphs are not blurred again.
+    plane.layers.set(ANNOTATION_TEXT_LAYER);
     plane.userData.measurementLabel = true;
     plane.userData.labelAspect = aspect;
     plane.userData.labelWorldWidth = height * aspect;
@@ -1799,21 +1895,25 @@ export class PlannerScene {
    * the camera while its measured line/bounding-box geometry remains world-aligned. */
   private createProductDimensionBadge(text: string, height: number, outlinePx: number = themeMetric('dimension-text-outline-px'), targetPixelHeight: number = themeMetric('product-dimension-label-screen-px')) {
     const fontPx = themeMetric('dimension-texture-font-px');
+    const textureScale = 2;
     const paddingX = themeMetric('product-dimension-card-padding-x-px');
     const paddingY = themeMetric('product-dimension-card-padding-y-px');
     const radius = themeMetric('product-dimension-card-radius-px');
     const probe = document.createElement('canvas').getContext('2d')!;
     probe.font = `700 ${fontPx}px Inter, system-ui, sans-serif`;
     const measuredWidth = Math.ceil(probe.measureText(text).width);
+    const logicalWidth = Math.max(88, measuredWidth + paddingX * 2 + outlinePx * 2);
+    const logicalHeight = Math.max(84, fontPx + paddingY * 2 + outlinePx * 2);
     const canvas = document.createElement('canvas');
-    canvas.width = Math.max(88, measuredWidth + paddingX * 2 + outlinePx * 2);
-    canvas.height = Math.max(84, fontPx + paddingY * 2 + outlinePx * 2);
+    canvas.width = Math.ceil(logicalWidth * textureScale);
+    canvas.height = Math.ceil(logicalHeight * textureScale);
     const ctx = canvas.getContext('2d')!;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.scale(textureScale, textureScale);
+    ctx.clearRect(0, 0, logicalWidth, logicalHeight);
 
     const cardInset = 2;
     ctx.beginPath();
-    ctx.roundRect(cardInset, cardInset, canvas.width - cardInset * 2, canvas.height - cardInset * 2, radius);
+    ctx.roundRect(cardInset, cardInset, logicalWidth - cardInset * 2, logicalHeight - cardInset * 2, radius);
     ctx.fillStyle = `#${DIMENSION_CARD_BACKGROUND.toString(16).padStart(6, '0')}f2`;
     ctx.fill();
     ctx.strokeStyle = `#${DIMENSION_CARD_BORDER.toString(16).padStart(6, '0')}`;
@@ -1825,17 +1925,17 @@ export class PlannerScene {
     ctx.textBaseline = 'middle';
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    ctx.strokeStyle = 'rgba(255,255,255,0.96)';
-    ctx.lineWidth = outlinePx;
-    ctx.strokeText(text, canvas.width / 2, canvas.height / 2 + 1);
-    ctx.fillStyle = `#${DIMENSION_TEXT_COLOR.toString(16).padStart(6, '0')}`;
-    ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 1);
+    this.drawOutlinedAnnotationText(
+      ctx,
+      text,
+      logicalWidth / 2,
+      logicalHeight / 2 + 1,
+      outlinePx,
+      `#${DIMENSION_TEXT_COLOR.toString(16).padStart(6, '0')}`
+    );
 
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.minFilter = THREE.LinearFilter;
-    texture.magFilter = THREE.LinearFilter;
-    const aspect = canvas.width / canvas.height;
+    const texture = this.configureAnnotationTexture(new THREE.CanvasTexture(canvas));
+    const aspect = logicalWidth / logicalHeight;
     const material = new THREE.SpriteMaterial({
       map: texture,
       transparent: true,
@@ -1845,6 +1945,9 @@ export class PlannerScene {
     });
     const sprite = new THREE.Sprite(material);
     sprite.scale.set(height * aspect, height, 1);
+    // Product badges keep their existing Sprite behaviour, but like world labels
+    // they bypass the final FXAA pass to avoid filtering the glyph edges twice.
+    sprite.layers.set(ANNOTATION_TEXT_LAYER);
     sprite.userData.measurementLabel = true;
     sprite.userData.labelAspect = aspect;
     sprite.userData.labelWorldWidth = height * aspect;
@@ -1854,15 +1957,21 @@ export class PlannerScene {
   }
 
   /**
-   * Keep world-oriented room/spacing text readable as the orbit camera crosses a
-   * dimension line. This flips only the text baseline by 180°; it does not make
-   * the plane face the camera, so the annotation remains geometrically static.
+   * Keep room/spacing labels readable without turning them into billboards.
+   * Their yaw/baseline remains attached to the dimension line. We preserve the
+   * camera-based 180° upright flip, then rotate only around the label's local X
+   * axis so its face can pitch toward the camera.
    */
   private updateMeasurementLabelOrientation() {
     const projectedStart = new THREE.Vector3();
     const projectedEnd = new THREE.Vector3();
+    const worldPosition = new THREE.Vector3();
+    const localCamera = new THREE.Vector3();
+    const worldQuaternion = new THREE.Quaternion();
+    const inverseQuaternion = new THREE.Quaternion();
     this.camera.updateMatrixWorld();
 
+    this.helperGroup.updateWorldMatrix(true, true);
     this.helperGroup.traverse((object) => {
       if (!object.userData.keepMeasurementUpright) return;
       const start = object.userData.measurementStart as THREE.Vector3 | undefined;
@@ -1870,18 +1979,29 @@ export class PlannerScene {
       const base = object.userData.measurementBaseQuaternion as THREE.Quaternion | undefined;
       if (!start || !end || !base) return;
 
+      // Keep the old automatic upright behavior: flip the text baseline when the
+      // dimension direction crosses to the opposite side of the screen.
       projectedStart.copy(start).project(this.camera);
       projectedEnd.copy(end).project(this.camera);
       const screenDx = projectedEnd.x - projectedStart.x;
       let flipped = Boolean(object.userData.measurementFlipped);
-      // Small hysteresis prevents labels rapidly switching when their baseline is
-      // almost perfectly vertical on screen.
       if (screenDx > 0.012) flipped = false;
       else if (screenDx < -0.012) flipped = true;
 
       object.quaternion.copy(base);
       if (flipped) object.rotateZ(Math.PI);
       object.userData.measurementFlipped = flipped;
+
+      // Convert the camera direction into the label's current local frame. A
+      // rotation around local X leaves the text baseline/yaw untouched while
+      // pitching the plane toward the camera as far as that one axis allows.
+      object.getWorldPosition(worldPosition);
+      object.getWorldQuaternion(worldQuaternion);
+      inverseQuaternion.copy(worldQuaternion).invert();
+      localCamera.copy(this.camera.position).sub(worldPosition).applyQuaternion(inverseQuaternion);
+      if (Math.abs(localCamera.y) + Math.abs(localCamera.z) < 1e-8) return;
+      const pitch = Math.atan2(-localCamera.y, localCamera.z);
+      object.rotateX(pitch);
     });
   }
 
@@ -1905,7 +2025,7 @@ export class PlannerScene {
       cameraSpace.copy(worldPosition).applyMatrix4(this.camera.matrixWorldInverse);
       const depth = Math.max(0.12, -cameraSpace.z);
       const worldPerPixel = (2 * depth * Math.tan(halfFov)) / viewportHeight;
-      const targetPixels = Number(object.userData.targetPixelHeight) || themeMetric('dimension-label-screen-px');
+      const targetPixels = Number(object.userData.targetPixelHeight) || themeMetric('room-dimension-label-screen-px');
       const worldHeight = THREE.MathUtils.clamp(worldPerPixel * targetPixels, minHeight, maxHeight);
       const aspect = Number(object.userData.labelAspect) || 1;
       if (object instanceof THREE.Sprite) object.scale.set(worldHeight * aspect, worldHeight, 1);
@@ -1961,6 +2081,7 @@ export class PlannerScene {
     const system = snapshot.measurementSystem ?? 'metric';
 
     if (snapshot.showRoomDimensions) this.addRoomDimensions(snapshot, system);
+    this.updateRoomDimensionVisibility();
 
     if (!snapshot.selectedId || !this.options.showFurniture) return;
     const selected = snapshot.objects.find((o) => o.id === snapshot.selectedId);
@@ -2024,6 +2145,9 @@ export class PlannerScene {
   }
 
   private addRoomDimensions(snapshot: SceneSnapshot, system: MeasurementSystem) {
+    const parent = new THREE.Group();
+    parent.userData.helperRole = 'roomDimensions';
+
     for (const wall of getRoomWalls(snapshot.room)) {
       const hidden = this.wallHiddenState.get(wall.id) ?? false;
       const outward = new THREE.Vector3(-wall.inward.x, 0, -wall.inward.z);
@@ -2034,6 +2158,7 @@ export class PlannerScene {
       const end = new THREE.Vector3(wall.end.x + outward.x * offset, dimensionY, wall.end.z + outward.z * offset);
 
       this.addLabelledMeasurementLine({
+        parent,
         start,
         end,
         text: this.annotationLength(wall.length, system),
@@ -2041,17 +2166,23 @@ export class PlannerScene {
         widthPx: 1.55,
         dashed: false,
         overlay: true,
-        labelHeight: themeMetric('dimension-label-height')
+        labelHeight: themeMetric('dimension-label-height'),
+        // Room dimensions are intentionally plain dark text. Spacing/product
+        // dimensions retain their white halo for contrast over furniture/floors.
+        textOutlinePx: 0,
+        targetPixelHeight: themeMetric('room-dimension-label-screen-px')
       });
 
       const witness = outward.clone().multiplyScalar(0.068);
-      this.makeLine([start.clone().sub(witness), start.clone().add(witness)], DIMENSION_COLOR, 0.95, false, true, 1.3);
-      this.makeLine([end.clone().sub(witness), end.clone().add(witness)], DIMENSION_COLOR, 0.95, false, true, 1.3);
+      this.makeLocalLine(parent, [start.clone().sub(witness), start.clone().add(witness)], DIMENSION_COLOR, 0.95, false, true, 1.3);
+      this.makeLocalLine(parent, [end.clone().sub(witness), end.clone().add(witness)], DIMENSION_COLOR, 0.95, false, true, 1.3);
 
       const tickDirection = tangent.clone().add(outward).normalize().multiplyScalar(0.052);
-      this.makeLine([start.clone().sub(tickDirection), start.clone().add(tickDirection)], DIMENSION_COLOR, 0.95, false, true, 1.45);
-      this.makeLine([end.clone().sub(tickDirection), end.clone().add(tickDirection)], DIMENSION_COLOR, 0.95, false, true, 1.45);
+      this.makeLocalLine(parent, [start.clone().sub(tickDirection), start.clone().add(tickDirection)], DIMENSION_COLOR, 0.95, false, true, 1.45);
+      this.makeLocalLine(parent, [end.clone().sub(tickDirection), end.clone().add(tickDirection)], DIMENSION_COLOR, 0.95, false, true, 1.45);
     }
+
+    this.helperGroup.add(parent);
   }
 
   private addProductDimensions(selected: PlacedObject, system: MeasurementSystem) {
@@ -2147,7 +2278,8 @@ export class PlannerScene {
         dashed: false,
         overlay: true,
         labelHeight: themeMetric('dimension-label-height'),
-        textOutlinePx: themeMetric('spacing-dimension-text-outline-px')
+        textOutlinePx: themeMetric('spacing-dimension-text-outline-px'),
+        targetPixelHeight: themeMetric('spacing-dimension-label-screen-px')
       });
       const perpendicular = new THREE.Vector3(-measurement.direction.z, 0, measurement.direction.x).multiplyScalar(0.05);
       this.makeLine([origin.clone().sub(perpendicular), origin.clone().add(perpendicular)], SPACING_COLOR, 0.92, false, true, 1.35);
@@ -2354,6 +2486,8 @@ export class PlannerScene {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height, false);
     this.composer.setSize(width, height);
+    const pixelRatio = this.renderer.getPixelRatio();
+    this.fxaaPass.material.uniforms.resolution.value.set(1 / (width * pixelRatio), 1 / (height * pixelRatio));
     this.helperGroup.traverse((object) => {
       const material = (object as THREE.Object3D & { material?: THREE.Material | THREE.Material[] }).material;
       const materials = Array.isArray(material) ? material : material ? [material] : [];
@@ -2364,9 +2498,42 @@ export class PlannerScene {
     this.requestRender();
   }
 
-  private onControlsChange = () => this.requestRender();
+  private leavePresetForManualNavigation() {
+    if (this.currentCameraView === 'perspective') return;
+    // Camera presets are transient presentation views. The first actual camera
+    // change caused by orbit/pan/zoom returns to free dollhouse behavior without
+    // moving the camera to the default dollhouse position. Waiting for `change`
+    // (rather than pointer-down) means clicking/dragging furniture does not exit a
+    // preset merely because OrbitControls saw the same pointer event first.
+    this.currentCameraView = 'perspective';
+    this.suppressAutoCeilingUntilRaised = true;
+    this.camera.fov = 39;
+    this.camera.updateProjectionMatrix();
+    this.bridge.cameraViewChanged?.('perspective');
+    this.updateCeilingVisibility(true);
+    this.updateCutawayWalls(true);
+  }
+
+  private onControlsChange = () => {
+    if (this.controlsInteracting && this.currentCameraView !== 'perspective') {
+      const currentDirection = this.camera.position.clone().sub(this.controls.target);
+      if (currentDirection.lengthSq() > 1e-8 && this.controlsInteractionStartDirection.lengthSq() > 1e-8) {
+        currentDirection.normalize();
+        // Zoom changes only the radius and pan moves camera + target together, so
+        // neither meaningfully changes this direction. Orbit does. Use a tiny
+        // angular tolerance to ignore floating-point drift while preserving presets
+        // during wheel zoom and right-button panning.
+        const orbitThreshold = THREE.MathUtils.degToRad(0.12);
+        const dot = THREE.MathUtils.clamp(currentDirection.dot(this.controlsInteractionStartDirection), -1, 1);
+        if (dot < Math.cos(orbitThreshold)) this.leavePresetForManualNavigation();
+      }
+    }
+    this.requestRender();
+  };
   private onControlsStart = () => {
     this.controlsInteracting = true;
+    this.controlsInteractionStartDirection.copy(this.camera.position).sub(this.controls.target);
+    if (this.controlsInteractionStartDirection.lengthSq() > 1e-8) this.controlsInteractionStartDirection.normalize();
     this.requestRender();
   };
   private onControlsEnd = () => {
@@ -2383,10 +2550,37 @@ export class PlannerScene {
     this.animationFrame = 0;
     if (this.disposed) return;
     const controlsChanged = this.controls.update();
+    this.updateCeilingVisibility();
     this.updateCutawayWalls();
     this.updateMeasurementLabelOrientation();
     this.updateMeasurementLabelScale();
+
+    // Geometry/outlines receive FXAA, but annotation text does not. Canvas text is
+    // already antialiased when rasterized and then texture-filtered by WebGL; sending
+    // those tiny glyphs through a second screen-space edge filter is what made them
+    // look washed-out/pixelated. Layering changes only render order -- world labels
+    // keep the exact same positions and quaternions.
+    this.camera.layers.set(SCENE_LAYER);
     this.composer.render();
+
+    const previousAutoClear = this.renderer.autoClear;
+    const previousBackground = this.scene.background;
+    const previousCameraLayerMask = this.camera.layers.mask;
+    try {
+      this.renderer.autoClear = false;
+      // Three.js WebGLBackground force-clears when Scene.background is a Color,
+      // even if autoClear is false. Temporarily suppress only the background for
+      // the annotation overlay so the composer's completed 3D frame is preserved.
+      this.scene.background = null;
+      this.camera.layers.set(ANNOTATION_TEXT_LAYER);
+      this.renderer.setRenderTarget(null);
+      this.renderer.render(this.scene, this.camera);
+    } finally {
+      this.camera.layers.mask = previousCameraLayerMask;
+      this.scene.background = previousBackground;
+      this.renderer.autoClear = previousAutoClear;
+    }
+
     // OrbitControls damping needs a few follow-up frames, but an idle scene should do
     // no RAF/GPU work at all. `change` events also schedule a frame during interaction.
     if (this.controlsInteracting || controlsChanged) this.requestRender();

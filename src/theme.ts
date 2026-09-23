@@ -52,16 +52,17 @@ export const PLANNER_METRICS = {
   // Their visible size is controlled by the screen-pixel target below so zooming
   // in/out does not make labels become enormous or unreadably tiny.
   'dimension-label-height': 0.15,
-  'dimension-label-screen-px': 24,
+  'room-dimension-label-screen-px': 20,
+  'spacing-dimension-label-screen-px': 30,
   'dimension-label-min-world-height': 0.055,
-  'dimension-label-max-world-height': 0.19,
+  'dimension-label-max-world-height': 0.24,
   'dimension-texture-font-px': 64,
-  'dimension-text-outline-px': 5,
-  // Spacing labels need extra separation from furniture/floor textures. Room labels keep the base outline above.
-  'spacing-dimension-text-outline-px': 8,
+  'dimension-text-outline-px': 7,
+  // Spacing labels need extra separation from furniture/floor textures. Room labels have no halo.
+  'spacing-dimension-text-outline-px': 10,
   // Product badges are intentionally smaller than room/spacing annotations.
   'product-dimension-label-height': 0.10,
-  'product-dimension-label-screen-px': 16,
+  'product-dimension-label-screen-px': 20,
   'product-dimension-card-radius-px': 10,
   'product-dimension-card-padding-x-px': 16,
   'product-dimension-card-padding-y-px': 10,

@@ -1,4 +1,4 @@
-import { PRODUCTS, rotatedFootprint } from './products';
+import { PRODUCTS } from './products';
 import {
   getRoomWalls,
   getWall,
@@ -61,25 +61,64 @@ export interface SpacingMeasurement {
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 const EPS = 1e-7;
 // Room vertices describe the wall centreline. Furniture should stop at the visible
-// interior wall face, not half-way through the 5 cm structural wall. Keep the same
-// 2 mm visual/contact allowance used before the wall thickness change.
-const WALL_FACE_INSET = 0.027;
+// interior wall face, not half-way through the 5 cm structural wall. A sub-millimetre
+// allowance avoids z-fighting while still reading visually as direct contact.
+const WALL_FACE_INSET = 0.0255;
+
+function localCollisionCorners(object: PlacedObject, padding = 0): Vec2[] {
+  const product = PRODUCTS[object.productId];
+  const footprint = product.collisionFootprint ?? { width: product.width, depth: product.depth };
+  const halfW = footprint.width / 2 + padding;
+  const halfD = footprint.depth / 2 + padding;
+  const offsetX = footprint.offsetX ?? 0;
+  const offsetZ = footprint.offsetZ ?? 0;
+  return [
+    { x: offsetX - halfW, z: offsetZ - halfD },
+    { x: offsetX + halfW, z: offsetZ - halfD },
+    { x: offsetX + halfW, z: offsetZ + halfD },
+    { x: offsetX - halfW, z: offsetZ + halfD }
+  ];
+}
+
+function footprintProjectionFromOrigin(object: PlacedObject, axis: Vec2) {
+  const points = localCollisionCorners(object).map((point) => rotatePoint(point.x, point.z, object.rotationY));
+  return projectionInterval(points, axis);
+}
 
 export function objectAabb(object: PlacedObject, padding = 0) {
-  const product = PRODUCTS[object.productId];
-  const size = rotatedFootprint(product, object.rotationY);
-  return {
-    minX: object.x - size.width / 2 - padding,
-    maxX: object.x + size.width / 2 + padding,
-    minZ: object.z - size.depth / 2 - padding,
-    maxZ: object.z + size.depth / 2 + padding,
-    width: size.width,
-    depth: size.depth
-  };
+  const corners = objectFootprintCorners(object, padding);
+  const xs = corners.map((point) => point.x);
+  const zs = corners.map((point) => point.z);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minZ = Math.min(...zs);
+  const maxZ = Math.max(...zs);
+  return { minX, maxX, minZ, maxZ, width: maxX - minX, depth: maxZ - minZ };
+}
+
+function productTags(object: PlacedObject) {
+  return PRODUCTS[object.productId].interaction?.tags ?? [];
+}
+
+/**
+ * Fast broad placement rule used before geometric overlap tests. Most pairs are
+ * normal solid furniture. Explicit semantic exceptions (rug, chair under table,
+ * future surface items) live in the product catalogue rather than UI code.
+ */
+export function objectsBlockEachOther(a: PlacedObject, b: PlacedObject): boolean {
+  const aProduct = PRODUCTS[a.productId];
+  const bProduct = PRODUCTS[b.productId];
+  if (aProduct.collision === false || bProduct.collision === false) return false;
+
+  const aAllows = aProduct.interaction?.allowOverlapWith ?? [];
+  const bAllows = bProduct.interaction?.allowOverlapWith ?? [];
+  if (aAllows.some((tag) => productTags(b).includes(tag))) return false;
+  if (bAllows.some((tag) => productTags(a).includes(tag))) return false;
+  return true;
 }
 
 export function objectsOverlap(a: PlacedObject, b: PlacedObject, padding = 0): boolean {
-  if (PRODUCTS[a.productId].collision === false || PRODUCTS[b.productId].collision === false) return false;
+  if (!objectsBlockEachOther(a, b)) return false;
   // Use the actual rotated floor footprints for collision tests. The earlier AABB-only
   // test created large invisible collision zones whenever an item was rotated.
   return polygonsOverlap(objectFootprintCorners(a, padding), objectFootprintCorners(b, padding));
@@ -134,11 +173,12 @@ function objectFitsVisibleRoom(candidate: PlacedObject, room: RoomState) {
   // overlaps the footprint; this also behaves sensibly around concave room shapes.
   for (const wall of getRoomWalls(room)) {
     const along = (candidate.x - wall.start.x) * wall.tangent.x + (candidate.z - wall.start.z) * wall.tangent.z;
-    const halfAlong = supportAlong(candidate, wall.tangent);
-    if (along < -halfAlong || along > wall.length + halfAlong) continue;
-    const signedCentre = (candidate.x - wall.start.x) * wall.inward.x + (candidate.z - wall.start.z) * wall.inward.z;
-    const required = supportAlong(candidate, wall.inward) + WALL_FACE_INSET;
-    if (signedCentre < required - 0.0015) return false;
+    const alongProjection = footprintProjectionFromOrigin(candidate, wall.tangent);
+    if (along + alongProjection.max < 0 || along + alongProjection.min > wall.length) continue;
+    const signedOrigin = (candidate.x - wall.start.x) * wall.inward.x + (candidate.z - wall.start.z) * wall.inward.z;
+    const inwardProjection = footprintProjectionFromOrigin(candidate, wall.inward);
+    const required = -inwardProjection.min + WALL_FACE_INSET;
+    if (signedOrigin < required - 0.00075) return false;
   }
   return true;
 }
@@ -176,6 +216,22 @@ function sweepToTarget(
   const dz = target.z - moving.z;
   const distance = Math.hypot(dx, dz);
   if (distance < EPS) return { x: moving.x, z: moving.z, blocked: false };
+
+  // Defensive recovery for legacy/rounding states that begin a few pixels inside a
+  // collider. Only permit a very short (2 cm maximum) move in the user's requested
+  // direction; this lets an object escape numerical penetration without tunnelling
+  // through an actual piece of furniture.
+  if (!placementValid(moving, room, others, gap, allowOverlap)) {
+    const escapeDistance = Math.min(distance, 0.02);
+    const ux = dx / distance;
+    const uz = dz / distance;
+    for (let step = 1; step <= 8; step += 1) {
+      const d = escapeDistance * step / 8;
+      const escaped = { ...moving, x: moving.x + ux * d, z: moving.z + uz * d };
+      if (!placementValid(escaped, room, others, gap, allowOverlap)) continue;
+      return sweepToTarget(escaped, target, room, others, gap, allowOverlap);
+    }
+  }
 
   // Sampling prevents a fast pointer from crossing a thin obstacle in one event.
   const steps = Math.max(1, Math.ceil(distance / 0.025));
@@ -243,19 +299,17 @@ function collisionNormal(a: PlacedObject, b: PlacedObject, padding: number): Vec
 }
 
 function supportAlong(object: PlacedObject, normal: Vec2) {
-  const product = PRODUCTS[object.productId];
-  const xAxis = rotatePoint(1, 0, object.rotationY);
-  const zAxis = rotatePoint(0, 1, object.rotationY);
-  return Math.abs(xAxis.x * normal.x + xAxis.z * normal.z) * product.width / 2
-    + Math.abs(zAxis.x * normal.x + zAxis.z * normal.z) * product.depth / 2;
+  // Distance from the product origin to the collider face opposite `normal`.
+  // Using the actual projection preserves asymmetric colliders (e.g. sofa back/front).
+  return -footprintProjectionFromOrigin(object, normal).min;
 }
 
 function nearestContactWall(object: PlacedObject, room: RoomState, extra = 0.04) {
   let best: { wall: ReturnType<typeof getRoomWalls>[number]; gap: number } | null = null;
   for (const wall of getRoomWalls(room)) {
     const along = (object.x - wall.start.x) * wall.tangent.x + (object.z - wall.start.z) * wall.tangent.z;
-    const halfAlong = supportAlong(object, wall.tangent);
-    if (along < -halfAlong - 0.08 || along > wall.length + halfAlong + 0.08) continue;
+    const tangentProjection = footprintProjectionFromOrigin(object, wall.tangent);
+    if (along + tangentProjection.max < -0.08 || along + tangentProjection.min > wall.length + 0.08) continue;
     const signedCentre = (object.x - wall.start.x) * wall.inward.x + (object.z - wall.start.z) * wall.inward.z;
     const gap = signedCentre - supportAlong(object, wall.inward) - WALL_FACE_INSET;
     if (gap > extra) continue;
@@ -283,7 +337,15 @@ function rotateToward(from: number, to: number, maxStep: number) {
  * continues to track the pointer tangentially. This mirrors the reference video
  * and keeps the actual wall snap threshold at 18 mm.
  */
-function contactAlignedObject(moving: PlacedObject, rawX: number, rawZ: number, room: RoomState) {
+function contactAlignedObject(
+  moving: PlacedObject,
+  rawX: number,
+  rawZ: number,
+  room: RoomState,
+  others: PlacedObject[],
+  collisionGap: number,
+  allowOverlap: boolean
+) {
   const product = PRODUCTS[moving.productId];
   if (!product.wallAffinity) return moving;
   const dx = rawX - moving.x;
@@ -307,18 +369,50 @@ function contactAlignedObject(moving: PlacedObject, rawX: number, rawZ: number, 
   const travel = Math.hypot(dx, dz);
   const maxStep = clamp(0.035 + travel * 0.55, 0.035, 0.12);
   const nextRotation = rotateToward(moving.rotationY, targetRotation, maxStep);
-  if (Math.abs(angleDelta(moving.rotationY, nextRotation)) < 1e-6) return moving;
+  const delta = angleDelta(moving.rotationY, nextRotation);
+  if (Math.abs(delta) < 1e-6) return moving;
 
+  // Auto-rotation used to validate only against the room. Near another object this
+  // could commit a microscopically overlapping angle, after which every drag sweep
+  // started from an invalid state and the product appeared permanently stuck.
+  // Sweep the small angular step and keep every intermediate pose valid instead.
   const beforeSupport = supportAlong(moving, contact.wall.inward);
-  const rotated = { ...moving, rotationY: nextRotation };
-  const afterSupport = supportAlong(rotated, contact.wall.inward);
-  const shift = Math.max(0, afterSupport - beforeSupport);
-  const adjusted = {
-    ...rotated,
-    x: rotated.x + contact.wall.inward.x * shift,
-    z: rotated.z + contact.wall.inward.z * shift
+  const candidateAt = (t: number) => {
+    const rotated = { ...moving, rotationY: normalizeAngle(moving.rotationY + delta * t) };
+    const afterSupport = supportAlong(rotated, contact.wall.inward);
+    const shift = Math.max(0, afterSupport - beforeSupport);
+    return {
+      ...rotated,
+      x: rotated.x + contact.wall.inward.x * shift,
+      z: rotated.z + contact.wall.inward.z * shift
+    };
   };
-  return objectFitsVisibleRoom(adjusted, room) ? adjusted : moving;
+
+  const steps = Math.max(1, Math.ceil(Math.abs(delta) / (Math.PI / 180)));
+  let lastValidT = 0;
+  let lastValid = moving;
+  for (let step = 1; step <= steps; step += 1) {
+    const t = step / steps;
+    const candidate = candidateAt(t);
+    if (placementValid(candidate, room, others, collisionGap, allowOverlap)) {
+      lastValidT = t;
+      lastValid = candidate;
+      continue;
+    }
+
+    // Refine only within the first blocked angular slice. This keeps the sofa flush
+    // to the wall without leaving a visible backing-off gap.
+    let low = lastValidT;
+    let high = t;
+    for (let i = 0; i < 10; i += 1) {
+      const mid = (low + high) / 2;
+      const probe = candidateAt(mid);
+      if (placementValid(probe, room, others, collisionGap, allowOverlap)) low = mid;
+      else high = mid;
+    }
+    return low > lastValidT + 1e-6 ? candidateAt(low) : lastValid;
+  }
+  return lastValid;
 }
 
 function moveWithCollisionSlide(
@@ -371,25 +465,27 @@ function moveWithCollisionSlide(
 
 function addWallSnapCandidates(
   room: RoomState,
+  object: PlacedObject,
   x: number,
   z: number,
-  halfW: number,
-  halfD: number,
   xCandidates: Candidate[],
   zCandidates: Candidate[]
 ) {
+  const probe = { ...object, x, z };
   for (const wall of getRoomWalls(room)) {
     // Axis snaps are deliberately only used when the wall itself is essentially axis aligned.
-    // Angled walls are handled by spatialWallAlignment so we never fake an X/Z snap to a diagonal.
+    // Angled walls are handled by spatial wall alignment so we never fake an X/Z snap to a diagonal.
+    const tangentProjection = footprintProjectionFromOrigin(probe, wall.tangent);
+    const along = (x - wall.start.x) * wall.tangent.x + (z - wall.start.z) * wall.tangent.z;
+    if (along + tangentProjection.max < -0.04 || along + tangentProjection.min > wall.length + 0.04) continue;
+
+    const inwardProjection = footprintProjectionFromOrigin(probe, wall.inward);
+    const signedOrigin = WALL_FACE_INSET - inwardProjection.min;
     if (Math.abs(wall.tangent.x) > 0.995) {
-      const projection = (x - wall.start.x) * wall.tangent.x + (z - wall.start.z) * wall.tangent.z;
-      if (projection < halfW - 0.04 || projection > wall.length - halfW + 0.04) continue;
-      const value = wall.start.z + wall.inward.z * (halfD + WALL_FACE_INSET);
+      const value = wall.start.z + wall.inward.z * signedOrigin;
       zCandidates.push({ kind: 'wall', targetId: wall.id, axis: 'z', value, distance: Math.abs(z - value), label: 'Wall' });
     } else if (Math.abs(wall.tangent.z) > 0.995) {
-      const projection = (x - wall.start.x) * wall.tangent.x + (z - wall.start.z) * wall.tangent.z;
-      if (projection < halfD - 0.04 || projection > wall.length - halfD + 0.04) continue;
-      const value = wall.start.x + wall.inward.x * (halfW + WALL_FACE_INSET);
+      const value = wall.start.x + wall.inward.x * signedOrigin;
       xCandidates.push({ kind: 'wall', targetId: wall.id, axis: 'x', value, distance: Math.abs(x - value), label: 'Wall' });
     }
   }
@@ -398,6 +494,68 @@ function addWallSnapCandidates(
 function normalizeAngle(angle: number) {
   const tau = Math.PI * 2;
   return ((angle % tau) + tau) % tau;
+}
+
+export interface RotationPlacementResult {
+  rotationY: number;
+  colliding: boolean;
+}
+
+/**
+ * Rotate through the angular path and stop at first contact. Translation sweeps
+ * cannot catch this case because a rotated object can change footprint while its
+ * centre remains completely stationary.
+ */
+export function resolveRotationPlacement(
+  moving: PlacedObject,
+  targetRotationY: number,
+  room: RoomState,
+  others: PlacedObject[],
+  collisionGap = 0.0005
+): RotationPlacementResult {
+  const start = normalizeAngle(moving.rotationY);
+  const target = normalizeAngle(targetRotationY);
+  const delta = angleDelta(start, target);
+  if (Math.abs(delta) < 1e-7) return { rotationY: start, colliding: false };
+
+  const startObject = { ...moving, rotationY: start };
+  const startValid = placementValid(startObject, room, others, collisionGap, false);
+
+  // Shift/free-move can intentionally leave an object overlapping another one.
+  // Do not trap it there: a rotation that directly restores a valid state is allowed.
+  if (!startValid) {
+    const targetObject = { ...moving, rotationY: target };
+    return placementValid(targetObject, room, others, collisionGap, false)
+      ? { rotationY: target, colliding: false }
+      : { rotationY: start, colliding: true };
+  }
+
+  // 2° angular samples are inexpensive (rotation is user-driven, not per-frame)
+  // and prevent a 90° button press from tunnelling through thin/nearby furniture.
+  const steps = Math.max(1, Math.ceil(Math.abs(delta) / (Math.PI / 90)));
+  let lastValidT = 0;
+  for (let step = 1; step <= steps; step += 1) {
+    const t = step / steps;
+    const probe = { ...moving, rotationY: normalizeAngle(start + delta * t) };
+    if (placementValid(probe, room, others, collisionGap, false)) {
+      lastValidT = t;
+      continue;
+    }
+
+    // Refine contact so the object stops cleanly against the wall/object instead
+    // of visibly backing off by the angular sampling interval.
+    let low = lastValidT;
+    let high = t;
+    for (let i = 0; i < 12; i += 1) {
+      const mid = (low + high) / 2;
+      const candidate = { ...moving, rotationY: normalizeAngle(start + delta * mid) };
+      if (placementValid(candidate, room, others, collisionGap, false)) low = mid;
+      else high = mid;
+    }
+    return { rotationY: normalizeAngle(start + delta * low), colliding: true };
+  }
+
+  return { rotationY: target, colliding: false };
 }
 
 
@@ -412,19 +570,16 @@ export function resolvePlacement(
 ): PlacementResult {
   const enter = options.enterSnapDistance;
   const exit = options.exitSnapDistance;
-  const collisionGap = options.collisionGap ?? 0.001;
+  const collisionGap = options.collisionGap ?? 0.0005;
   const allowOverlap = options.allowOverlap ?? false;
 
   // Contact rotation is intentionally separate from magnetic snapping. It only
   // activates when a wall-affinity item physically meets a wall.
   const working = options.spatialWallSnap === false || enter === 0
     ? moving
-    : contactAlignedObject(moving, rawX, rawZ, room);
+    : contactAlignedObject(moving, rawX, rawZ, room, others, collisionGap, allowOverlap);
 
   const product = PRODUCTS[working.productId];
-  const size = rotatedFootprint(product, working.rotationY);
-  const halfW = size.width / 2;
-  const halfD = size.depth / 2;
   const bounds = roomBounds(room.vertices);
 
   // Start from the last visible object position and sweep to the pointer. This is
@@ -448,23 +603,33 @@ export function resolvePlacement(
   const zCandidates: Candidate[] = [
     { kind: 'center', axis: 'z', value: centreZ, distance: Math.abs(z - centreZ), label: 'Room centre' }
   ];
-  addWallSnapCandidates(room, x, z, halfW, halfD, xCandidates, zCandidates);
+  addWallSnapCandidates(room, working, x, z, xCandidates, zCandidates);
 
-  const movingBox = { minX: x - halfW, maxX: x + halfW, minZ: z - halfD, maxZ: z + halfD };
+  const relativeBox = objectAabb({ ...working, x: 0, z: 0 });
+  const movingBox = {
+    minX: x + relativeBox.minX,
+    maxX: x + relativeBox.maxX,
+    minZ: z + relativeBox.minZ,
+    maxZ: z + relativeBox.maxZ
+  };
   for (const other of others) {
     if (PRODUCTS[other.productId].collision === false && product.collision !== false) continue;
     const ob = objectAabb(other);
     if (rangesNear(movingBox.minZ, movingBox.maxZ, ob.minZ, ob.maxZ)) {
+      const leftOf = ob.minX - relativeBox.maxX;
+      const rightOf = ob.maxX - relativeBox.minX;
       xCandidates.push(
-        { kind: 'object', targetId: other.id, axis: 'x', value: ob.minX - halfW, distance: Math.abs(x - (ob.minX - halfW)), label: 'Edges aligned' },
-        { kind: 'object', targetId: other.id, axis: 'x', value: ob.maxX + halfW, distance: Math.abs(x - (ob.maxX + halfW)), label: 'Edges aligned' },
+        { kind: 'object', targetId: other.id, axis: 'x', value: leftOf, distance: Math.abs(x - leftOf), label: 'Edges aligned' },
+        { kind: 'object', targetId: other.id, axis: 'x', value: rightOf, distance: Math.abs(x - rightOf), label: 'Edges aligned' },
         { kind: 'object', targetId: other.id, axis: 'x', value: other.x, distance: Math.abs(x - other.x), label: 'Centres aligned' }
       );
     }
     if (rangesNear(movingBox.minX, movingBox.maxX, ob.minX, ob.maxX)) {
+      const behind = ob.minZ - relativeBox.maxZ;
+      const ahead = ob.maxZ - relativeBox.minZ;
       zCandidates.push(
-        { kind: 'object', targetId: other.id, axis: 'z', value: ob.minZ - halfD, distance: Math.abs(z - (ob.minZ - halfD)), label: 'Edges aligned' },
-        { kind: 'object', targetId: other.id, axis: 'z', value: ob.maxZ + halfD, distance: Math.abs(z - (ob.maxZ + halfD)), label: 'Edges aligned' },
+        { kind: 'object', targetId: other.id, axis: 'z', value: behind, distance: Math.abs(z - behind), label: 'Edges aligned' },
+        { kind: 'object', targetId: other.id, axis: 'z', value: ahead, distance: Math.abs(z - ahead), label: 'Edges aligned' },
         { kind: 'object', targetId: other.id, axis: 'z', value: other.z, distance: Math.abs(z - other.z), label: 'Centres aligned' }
       );
     }
@@ -505,15 +670,7 @@ export function rotatePoint(x: number, z: number, angle: number): Vec2 {
 }
 
 export function objectFootprintCorners(object: PlacedObject, padding = 0): Vec2[] {
-  const p = PRODUCTS[object.productId];
-  const halfW = p.width / 2 + padding;
-  const halfD = p.depth / 2 + padding;
-  return [
-    { x: -halfW, z: -halfD },
-    { x: halfW, z: -halfD },
-    { x: halfW, z: halfD },
-    { x: -halfW, z: halfD }
-  ].map((point) => {
+  return localCollisionCorners(object, padding).map((point) => {
     const rotated = rotatePoint(point.x, point.z, object.rotationY);
     return { x: object.x + rotated.x, z: object.z + rotated.z };
   });
@@ -630,7 +787,7 @@ export function clearanceIssues(object: PlacedObject, room: RoomState, others: P
       }
     }
     for (const other of others) {
-      if (PRODUCTS[other.productId].collision === false) continue;
+      if (!objectsBlockEachOther(object, other)) continue;
       if (!polygonsOverlap(region.corners, objectFootprintCorners(other))) continue;
       const key = `${other.id}-${region.side}`;
       if (seen.has(key)) continue;
@@ -686,7 +843,7 @@ function sideOriginAndDirection(object: PlacedObject, side: SpacingMeasurement['
 export function spacingMeasurements(object: PlacedObject, room: RoomState, others: PlacedObject[]): SpacingMeasurement[] {
   const roomWalls = getRoomWalls(room);
   const objectPolygons = others
-    .filter((other) => PRODUCTS[other.productId].collision !== false)
+    .filter((other) => objectsBlockEachOther(object, other))
     .map((other) => objectFootprintCorners(other));
   const measurements: SpacingMeasurement[] = [];
 
