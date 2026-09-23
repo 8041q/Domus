@@ -160,3 +160,13 @@ The first annotation-overlay implementation rendered the same Scene a second tim
 - Preset exit uses camera direction rather than mouse-button assumptions, so touch/alternate OrbitControls inputs behave consistently.
 - Automatic Cutaway view ceiling thresholds are now 4° enter / 6° exit elevation, requiring a nearly horizontal view.
 - No continuous render loop was added; these checks run only on existing OrbitControls render events.
+
+## Drag interaction + live dimensions pass (2026-09-23)
+
+- Room dimensions and product dimensions are now treated as static/object-attached helpers instead of being destroyed and recreated for every furniture position update.
+- Item-spacing helpers are isolated into their own group and refresh at approximately 15 Hz during a live drag, then refresh exactly on pointer-up. Furniture meshes and object-attached product dimensions remain on the immediate render path.
+- Snap guide lines update independently from measurement labels, avoiding unrelated canvas-texture/geometry churn.
+- Cutaway wall transitions rebuild only room-dimension helpers rather than every active helper.
+- Furniture dragging now maps screen X/Y motion into two stable room-floor axes. It no longer switches between floor/X/Z ray planes based on orbit angle, eliminating the side-view one-axis lock and the corner-grab pivot jump caused by mixing a mesh hit point with a different drag plane.
+- Shift held before pointer-down starts OrbitControls rotation while preserving the selected object and its dimensions. Shift pressed after a furniture drag starts retains the existing free-move/overlap behavior.
+- `npm run build` succeeds with the supplied Linux `node_modules`.

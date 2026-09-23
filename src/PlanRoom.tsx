@@ -272,10 +272,10 @@ export function PlanRoom() {
             : collisionPush
               ? 'Object contact - placement was nudged to the nearest free edge.'
               : activeSnap.label === 'Free move'
-                ? 'Free move · magnetic wall and object snapping are off while Shift is held.'
+                ? 'Free move · snapping is off while Shift is held during an item drag.'
                 : activeSnap.kind !== 'none'
                   ? `Alignment assist · ${activeSnap.label ?? 'guide'}`
-                  : 'Drag an item near a wall to auto-align it, or near another item to snap edges · hold Shift for free move / overlap'}
+                  : 'Drag an item to move · hold Shift while dragging for free move / overlap · Shift + drag empty space to orbit without clearing selection'}
         </div>
       </section>
     </div>

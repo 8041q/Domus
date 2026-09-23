@@ -29,7 +29,7 @@ This pass brings the 3D workspace closer to the supplied reference images/video:
 - **Selected products** use a crisp yellow screen-space silhouette rather than a blue bounding box.
 - **Product dimensions** use a neutral dashed measurement cage, matching extension lines, and the same white bordered measurement badges used by the rest of the annotation UI while keeping the scene selection outline visible.
 - **Wall junctions** overlap their structural cores, finish faces and skirting slightly at true wall ends to remove hairline corner gaps in the cutaway view.
-- **Furniture dragging** is more magnetic: wall-affinity products auto-rotate and settle on the visible interior wall face, object-edge snaps have practical enter/exit hysteresis, rotated collision tests use the real oriented footprint, and Shift still provides immediate free-move/overlap.
+- **Furniture dragging** is more magnetic: wall-affinity products auto-rotate and settle on the visible interior wall face, object-edge snaps have practical enter/exit hysteresis, rotated collision tests use the real oriented footprint, and Shift can still provide free-move/overlap after a drag has started.
 - Perspective framing/background were tuned toward the lighter reference presentation, and furniture now exposes a move cursor while draggable.
 
 ## Phase 8 - stabilization before core-focus work
@@ -152,8 +152,9 @@ npm run build
 - `R` - rotate selected furniture 90°
 - `Delete` / `Backspace` - remove selected furniture
 - Drag empty 3D space - orbit
+- Hold `Shift` before left-dragging - orbit without clearing the active furniture selection/dimensions
 - Mouse wheel / trackpad - zoom
-- Hold `Shift` while dragging furniture - free movement / snapping off
+- Start dragging furniture, then hold `Shift` - free movement / snapping off
 - Build Room: drag walls/corners/openings directly
 - Build Room: click a wall-centre `+` to create a new corner
 - Build Room: Shift while drafting uses the finer snap step

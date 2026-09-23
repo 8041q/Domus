@@ -14,7 +14,7 @@ import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { PRODUCTS } from '../core/products';
 import { floorFinishDefinition, type FloorFinishDefinition } from '../core/roomFinishes';
-import { clearanceRegions, resolvePlacement, spacingMeasurements } from '../core/placement';
+import { clearanceRegions, resolvePlacement, spacingMeasurements, type SpacingMeasurement } from '../core/placement';
 import { getRoomWalls, roomBounds, wallPoint, wallProjectionDistance } from '../core/roomGeometry';
 import { formatLength } from '../core/units';
 import type { FloorFinish, PlanCameraView, MeasurementSystem, PlannerSnapshot, PlacedObject, RoomOpening, SnapFeedback, Vec2 } from '../core/types';
@@ -112,14 +112,25 @@ export class PlannerScene {
   private controls: OrbitControls;
   private raycaster = new THREE.Raycaster();
   private pointer = new THREE.Vector2();
-  private floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   private floorGroup = new THREE.Group();
   private wallsGroup = new THREE.Group();
   private ceilingGroup = new THREE.Group();
   private objectGroup = new THREE.Group();
   private helperGroup = new THREE.Group();
   private objectModels = new Map<string, THREE.Group>();
-  private dragging: { id: string; before: PlannerSnapshot; snap: SnapFeedback; grabOffset: Vec2 } | null = null;
+  private dragging: {
+    id: string;
+    before: PlannerSnapshot;
+    snap: SnapFeedback;
+    startClientX: number;
+    startClientY: number;
+    startX: number;
+    startZ: number;
+    screenRight: Vec2;
+    screenUp: Vec2;
+    worldPerPixelX: number;
+    worldPerPixelY: number;
+  } | null = null;
   private openingDragging: { id: string; before: PlannerSnapshot } | null = null;
   private hoverOpeningId: string | null = null;
   private resizeObserver: ResizeObserver;
@@ -131,6 +142,8 @@ export class PlannerScene {
   private lastOpeningsKey = '';
   private lastOpeningHighlightKey = '';
   private lastHelperKey = '';
+  private lastSpacingHelperKey = '';
+  private lastSnapHelperKey = '';
   private currentCameraView: PlanCameraView = 'perspective';
   private ceilingVisible = false;
   private environmentTexture: THREE.Texture | null = null;
@@ -143,6 +156,9 @@ export class PlannerScene {
   private floorMapCache = new Map<FloorFinish, Promise<LoadedFloorMaps>>();
   private floorMapResults = new Map<FloorFinish, LoadedFloorMaps>();
   private floorMapAssets = new Set<THREE.Texture>();
+  private spacingDimensionGroup: THREE.Group | null = null;
+  private spacingDimensionLines: LineSegments2 | null = null;
+  private spacingDimensionLabels = new Map<SpacingMeasurement['side'], THREE.Mesh>();
 
   constructor(private container: HTMLElement, private bridge: SceneBridge, private options: SceneOptions) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
@@ -199,6 +215,30 @@ export class PlannerScene {
     this.controls.minDistance = 1.8;
     this.controls.maxDistance = 20;
     this.controls.screenSpacePanning = false;
+
+    // OrbitControls swaps rotate/pan whenever Shift is held. Shift already has an
+    // application-level meaning here (free furniture movement), so keep the normal
+    // mouse mapping stable: LMB = orbit and RMB = pan even while Shift is down.
+    // This only changes the mouse-action decision inside OrbitControls; furniture
+    // pointer-downs still disable controls before OrbitControls sees the gesture.
+    const controlsInternal = this.controls as OrbitControls & { _onMouseDown?: (event: PointerEvent) => void };
+    const orbitMouseDown = controlsInternal._onMouseDown;
+    if (orbitMouseDown) {
+      controlsInternal._onMouseDown = (event: PointerEvent) => {
+        if (!event.shiftKey) {
+          orbitMouseDown(event);
+          return;
+        }
+        const unmodifiedEvent = new Proxy(event, {
+          get(target, property) {
+            if (property === 'shiftKey') return false;
+            return Reflect.get(target, property, target);
+          }
+        }) as PointerEvent;
+        orbitMouseDown(unmodifiedEvent);
+      };
+    }
+
     this.controls.addEventListener('change', this.onControlsChange);
     this.controls.addEventListener('start', this.onControlsStart);
     this.controls.addEventListener('end', this.onControlsEnd);
@@ -218,7 +258,10 @@ export class PlannerScene {
     fill.position.set(-4.5, 5.2, -4.2);
     this.scene.add(hemi, ambient, this.mainLight, this.mainLight.target, fill);
 
-    this.renderer.domElement.addEventListener('pointerdown', this.onPointerDown);
+    // Capture pointer-down before OrbitControls. Furniture drags disable controls
+    // before they enter a camera gesture. Shift+empty-space is allowed through so
+    // the user can orbit without clearing the active furniture selection.
+    this.renderer.domElement.addEventListener('pointerdown', this.onPointerDown, true);
     window.addEventListener('pointermove', this.onPointerMove);
     window.addEventListener('pointerup', this.onPointerUp);
 
@@ -236,7 +279,7 @@ export class PlannerScene {
     if (this.animationFrame) cancelAnimationFrame(this.animationFrame);
     this.animationFrame = 0;
     this.resizeObserver.disconnect();
-    this.renderer.domElement.removeEventListener('pointerdown', this.onPointerDown);
+    this.renderer.domElement.removeEventListener('pointerdown', this.onPointerDown, true);
     window.removeEventListener('pointermove', this.onPointerMove);
     window.removeEventListener('pointerup', this.onPointerUp);
     this.controls.removeEventListener('change', this.onControlsChange);
@@ -676,6 +719,24 @@ export class PlannerScene {
     if (helperKey !== this.lastHelperKey) {
       this.rebuildHelpers(snapshot);
       this.lastHelperKey = helperKey;
+      this.lastSpacingHelperKey = this.spacingHelperStateKey(snapshot);
+      this.lastSnapHelperKey = this.snapHelperStateKey(snapshot);
+    } else {
+      const snapKey = this.snapHelperStateKey(snapshot);
+      if (snapKey !== this.lastSnapHelperKey) {
+        this.rebuildSnapHelpers(snapshot);
+        this.lastSnapHelperKey = snapKey;
+      }
+
+      const spacingKey = this.spacingHelperStateKey(snapshot);
+      if (spacingKey !== this.lastSpacingHelperKey) {
+        // Spacing helpers are persistent now: line buffers, materials and canvases
+        // are reused while dragging. Updating them at the same cadence as furniture
+        // keeps the guides visually attached without reintroducing allocation/texture
+        // churn on every pointer move.
+        this.syncSpacingHelpers(snapshot);
+        this.lastSpacingHelperKey = spacingKey;
+      }
     }
     // Cutaway visibility depends on architecture/camera, not furniture/selection state.
     if (architectureChanged) this.updateCutawayWalls(true);
@@ -1522,7 +1583,10 @@ export class PlannerScene {
       if (force || object.visible === hidden) object.visible = !hidden;
     });
     if (cutawayChanged && snapshot.showRoomDimensions) {
-      this.rebuildHelpers(snapshot);
+      // Camera orbit only changes which room-wall dimensions belong above the
+      // shell versus on the cutaway edge. Rebuild that one static helper set;
+      // product/spacing annotations should not churn while the camera moves.
+      this.rebuildRoomDimensionHelpers(snapshot);
       this.lastHelperKey = this.helperStateKey(snapshot);
     }
   }
@@ -2040,9 +2104,6 @@ export class PlannerScene {
 
   private helperStateKey(snapshot: SceneSnapshot) {
     const selected = snapshot.selectedId ? snapshot.objects.find((object) => object.id === snapshot.selectedId) : undefined;
-    const spacingState = snapshot.showSpacingDimensions && selected
-      ? snapshot.objects.map((object) => [object.id, object.x, object.z, object.rotationY])
-      : null;
     return JSON.stringify({
       selectedId: snapshot.selectedId ?? null,
       selectedProduct: selected?.productId ?? null,
@@ -2051,14 +2112,28 @@ export class PlannerScene {
       showProductDimensions: !!snapshot.showProductDimensions,
       showSpacingDimensions: !!snapshot.showSpacingDimensions,
       measurementSystem: snapshot.measurementSystem ?? 'metric',
-      activeSnap: snapshot.activeSnap ?? null,
-      spacingState,
-      roomDimensionState: snapshot.showRoomDimensions || snapshot.showSpacingDimensions ? {
+      roomDimensionState: snapshot.showRoomDimensions ? {
         height: snapshot.room.height,
         vertices: snapshot.room.vertices.map((vertex) => [vertex.x, vertex.z]),
         hidden: snapshot.showRoomDimensions ? [...this.wallHiddenState.entries()] : null
       } : null
     });
+  }
+
+  private spacingHelperStateKey(snapshot: SceneSnapshot) {
+    if (!snapshot.showSpacingDimensions || !snapshot.selectedId || !this.options.showFurniture) return 'off';
+    return JSON.stringify({
+      selectedId: snapshot.selectedId,
+      objects: snapshot.objects.map((object) => [object.id, object.productId, object.x, object.z, object.rotationY]),
+      room: snapshot.room.vertices.map((vertex) => [vertex.x, vertex.z]),
+      measurementSystem: snapshot.measurementSystem ?? 'metric'
+    });
+  }
+
+  private snapHelperStateKey(snapshot: SceneSnapshot) {
+    const snap = snapshot.activeSnap;
+    if (!snap || snap.kind === 'none') return 'off';
+    return JSON.stringify(snap);
   }
 
   private syncHelperTransforms(snapshot: SceneSnapshot) {
@@ -2076,7 +2151,49 @@ export class PlannerScene {
     });
   }
 
+  private removeHelperRole(role: string) {
+    const matches = this.helperGroup.children.filter((object): object is THREE.Group => (
+      object instanceof THREE.Group && object.userData.helperRole === role
+    ));
+    for (const group of matches) {
+      this.helperGroup.remove(group);
+      this.disposeGroup(group);
+    }
+  }
+
+  private rebuildRoomDimensionHelpers(snapshot: SceneSnapshot) {
+    this.removeHelperRole('roomDimensions');
+    if (snapshot.showRoomDimensions) this.addRoomDimensions(snapshot, snapshot.measurementSystem ?? 'metric');
+    this.updateRoomDimensionVisibility();
+  }
+
+  private rebuildSnapHelpers(snapshot: SceneSnapshot) {
+    this.removeHelperRole('snapGuides');
+    const snap = snapshot.activeSnap;
+    if (!snap || snap.kind === 'none') return;
+
+    const parent = new THREE.Group();
+    parent.userData.helperRole = 'snapGuides';
+    const bounds = roomBounds(snapshot.room.vertices);
+    if (snap.x) {
+      this.makeLocalLine(parent, [
+        new THREE.Vector3(snap.x.value, 0.025, bounds.minZ),
+        new THREE.Vector3(snap.x.value, 0.025, bounds.maxZ)
+      ], SELECTION_COLOR, 0.72, true, true);
+    }
+    if (snap.z) {
+      this.makeLocalLine(parent, [
+        new THREE.Vector3(bounds.minX, 0.025, snap.z.value),
+        new THREE.Vector3(bounds.maxX, 0.025, snap.z.value)
+      ], SELECTION_COLOR, 0.72, true, true);
+    }
+    this.helperGroup.add(parent);
+  }
+
   private rebuildHelpers(snapshot: SceneSnapshot) {
+    this.spacingDimensionGroup = null;
+    this.spacingDimensionLines = null;
+    this.spacingDimensionLabels.clear();
     this.disposeGroup(this.helperGroup);
     const system = snapshot.measurementSystem ?? 'metric';
 
@@ -2089,24 +2206,8 @@ export class PlannerScene {
 
     if (snapshot.showClearance) this.addClearanceGuide(selected);
     if (snapshot.showProductDimensions) this.addProductDimensions(selected, system);
-    if (snapshot.showSpacingDimensions) this.addSpacingDimensions(selected, snapshot, system);
-
-    const snap = snapshot.activeSnap;
-    if (snap && snap.kind !== 'none') {
-      const bounds = roomBounds(snapshot.room.vertices);
-      if (snap.x) {
-        this.makeLine([
-          new THREE.Vector3(snap.x.value, 0.025, bounds.minZ),
-          new THREE.Vector3(snap.x.value, 0.025, bounds.maxZ)
-        ], SELECTION_COLOR, 0.72, true, true);
-      }
-      if (snap.z) {
-        this.makeLine([
-          new THREE.Vector3(bounds.minX, 0.025, snap.z.value),
-          new THREE.Vector3(bounds.maxX, 0.025, snap.z.value)
-        ], SELECTION_COLOR, 0.72, true, true);
-      }
-    }
+    if (snapshot.showSpacingDimensions) this.syncSpacingHelpers(snapshot);
+    this.rebuildSnapHelpers(snapshot);
   }
 
   private addClearanceGuide(selected: PlacedObject) {
@@ -2265,26 +2366,185 @@ export class PlannerScene {
     this.helperGroup.add(parent);
   }
 
-  private addSpacingDimensions(selected: PlacedObject, snapshot: SceneSnapshot, system: MeasurementSystem) {
+  private createDynamicSpacingLabel(initialText: string) {
+    const logicalWidth = 360;
+    const logicalHeight = 108;
+    const canvas = document.createElement('canvas');
+    canvas.width = logicalWidth;
+    canvas.height = logicalHeight;
+    const ctx = canvas.getContext('2d')!;
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    // Dynamic spacing labels can change several times per second while dragging.
+    // Mipmap regeneration is unnecessary at their ~30 px display size and was one
+    // of the biggest sources of GPU upload stalls in the old rebuild path.
+    texture.generateMipmaps = false;
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.needsUpdate = true;
+
+    const aspect = logicalWidth / logicalHeight;
+    const geometry = new THREE.PlaneGeometry(aspect, 1);
+    const material = new THREE.MeshBasicMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      toneMapped: false
+    });
+    const label = new THREE.Mesh(geometry, material);
+    label.layers.set(ANNOTATION_TEXT_LAYER);
+    label.userData.measurementLabel = true;
+    label.userData.labelAspect = aspect;
+    label.userData.labelWorldWidth = themeMetric('dimension-label-height') * aspect;
+    label.userData.targetPixelHeight = themeMetric('spacing-dimension-label-screen-px');
+    label.scale.set(themeMetric('dimension-label-height'), themeMetric('dimension-label-height'), 1);
+    label.userData.dynamicSpacingCanvas = canvas;
+    label.userData.dynamicSpacingContext = ctx;
+    label.userData.dynamicSpacingTexture = texture;
+    label.userData.dynamicSpacingText = '';
+    label.renderOrder = 30;
+    this.updateDynamicSpacingLabel(label, initialText);
+    return label;
+  }
+
+  private updateDynamicSpacingLabel(label: THREE.Mesh, text: string) {
+    if (label.userData.dynamicSpacingText === text) return;
+    const canvas = label.userData.dynamicSpacingCanvas as HTMLCanvasElement | undefined;
+    const ctx = label.userData.dynamicSpacingContext as CanvasRenderingContext2D | undefined;
+    const texture = label.userData.dynamicSpacingTexture as THREE.CanvasTexture | undefined;
+    if (!canvas || !ctx || !texture) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const fontPx = 58;
+    ctx.font = `700 ${fontPx}px Inter, system-ui, sans-serif`;
+    const measuredTextWidth = ctx.measureText(text).width;
+    label.userData.dynamicSpacingTextAspect = Math.min(
+      canvas.width / canvas.height,
+      (measuredTextWidth + themeMetric('spacing-dimension-text-outline-px') * 4 + 24) / canvas.height
+    );
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    this.drawOutlinedAnnotationText(
+      ctx,
+      text,
+      canvas.width / 2,
+      canvas.height / 2 + 1,
+      themeMetric('spacing-dimension-text-outline-px'),
+      `#${DIMENSION_TEXT_COLOR.toString(16).padStart(6, '0')}`
+    );
+    label.userData.dynamicSpacingText = text;
+    texture.needsUpdate = true;
+  }
+
+  private ensureSpacingHelpers() {
+    if (this.spacingDimensionGroup && this.spacingDimensionLines) return;
+
+    const parent = new THREE.Group();
+    parent.userData.helperRole = 'spacingDimensions';
+
+    const geometry = new LineSegmentsGeometry();
+    geometry.setPositions([0, 0, 0, 0, 0, 0]);
+    const material = new LineMaterial({
+      color: SPACING_COLOR,
+      linewidth: 1.65,
+      transparent: false,
+      opacity: 1,
+      dashed: false,
+      depthTest: false,
+      depthWrite: false,
+      worldUnits: false
+    });
+    this.lineResolution(material);
+    const lines = new LineSegments2(geometry, material);
+    lines.renderOrder = 24;
+    lines.visible = false;
+    parent.add(lines);
+
+    for (const side of ['front', 'back', 'left', 'right'] as const) {
+      const label = this.createDynamicSpacingLabel('0 cm');
+      label.visible = false;
+      label.userData.spacingSide = side;
+      parent.add(label);
+      this.spacingDimensionLabels.set(side, label);
+    }
+
+    this.spacingDimensionGroup = parent;
+    this.spacingDimensionLines = lines;
+    this.helperGroup.add(parent);
+  }
+
+  private syncSpacingHelpers(snapshot: SceneSnapshot) {
+    if (!snapshot.showSpacingDimensions || !snapshot.selectedId || !this.options.showFurniture) {
+      if (this.spacingDimensionGroup) this.spacingDimensionGroup.visible = false;
+      return;
+    }
+    const selected = snapshot.objects.find((object) => object.id === snapshot.selectedId);
+    if (!selected) return;
+
+    this.ensureSpacingHelpers();
+    const parent = this.spacingDimensionGroup!;
+    const lines = this.spacingDimensionLines!;
+    parent.visible = true;
+    for (const label of this.spacingDimensionLabels.values()) label.visible = false;
+
+    const system = snapshot.measurementSystem ?? 'metric';
     const others = snapshot.objects.filter((object) => object.id !== selected.id);
-    for (const measurement of spacingMeasurements(selected, snapshot.room, others)) {
+    const measurements = spacingMeasurements(selected, snapshot.room, others);
+    const segmentPositions: number[] = [];
+
+    const addSegment = (a: THREE.Vector3, b: THREE.Vector3) => {
+      segmentPositions.push(a.x, a.y, a.z, b.x, b.y, b.z);
+    };
+
+    for (const measurement of measurements) {
       const origin = new THREE.Vector3(measurement.origin.x, 0.075, measurement.origin.z);
       const end = new THREE.Vector3(measurement.end.x, 0.075, measurement.end.z);
-      this.addLabelledMeasurementLine({
-        start: origin,
-        end,
-        text: formatLength(measurement.distance, system),
-        color: SPACING_COLOR,
-        widthPx: 1.65,
-        dashed: false,
-        overlay: true,
-        labelHeight: themeMetric('dimension-label-height'),
-        textOutlinePx: themeMetric('spacing-dimension-text-outline-px'),
-        targetPixelHeight: themeMetric('spacing-dimension-label-screen-px')
-      });
+      const label = this.spacingDimensionLabels.get(measurement.side)!;
+      const text = formatLength(measurement.distance, system);
+      this.updateDynamicSpacingLabel(label, text);
+      label.visible = true;
+      label.position.copy(origin).add(end).multiplyScalar(0.5);
+      this.orientMeasurementLabel(label, origin, end);
+      label.userData.keepMeasurementUpright = true;
+      const storedStart = (label.userData.measurementStart as THREE.Vector3 | undefined) ?? new THREE.Vector3();
+      const storedEnd = (label.userData.measurementEnd as THREE.Vector3 | undefined) ?? new THREE.Vector3();
+      const storedBase = (label.userData.measurementBaseQuaternion as THREE.Quaternion | undefined) ?? new THREE.Quaternion();
+      storedStart.copy(origin);
+      storedEnd.copy(end);
+      storedBase.copy(label.quaternion);
+      label.userData.measurementStart = storedStart;
+      label.userData.measurementEnd = storedEnd;
+      label.userData.measurementBaseQuaternion = storedBase;
+      label.userData.measurementFlipped = false;
+
+      const length = origin.distanceTo(end);
+      const labelWorldWidth = (Number(label.userData.dynamicSpacingTextAspect) || Number(label.userData.labelAspect) || 1)
+        * Math.max(0.055, label.scale.x || themeMetric('dimension-label-height'));
+      const gap = Math.min(Math.max(labelWorldWidth + 0.09, 0.16), length * 0.7);
+      if (length > gap + 0.04) {
+        const direction = end.clone().sub(origin).normalize();
+        const mid = origin.clone().add(end).multiplyScalar(0.5);
+        addSegment(origin, mid.clone().addScaledVector(direction, -gap / 2));
+        addSegment(mid.clone().addScaledVector(direction, gap / 2), end);
+      } else {
+        addSegment(origin, end);
+      }
+
       const perpendicular = new THREE.Vector3(-measurement.direction.z, 0, measurement.direction.x).multiplyScalar(0.05);
-      this.makeLine([origin.clone().sub(perpendicular), origin.clone().add(perpendicular)], SPACING_COLOR, 0.92, false, true, 1.35);
-      this.makeLine([end.clone().sub(perpendicular), end.clone().add(perpendicular)], SPACING_COLOR, 0.92, false, true, 1.35);
+      addSegment(origin.clone().sub(perpendicular), origin.clone().add(perpendicular));
+      addSegment(end.clone().sub(perpendicular), end.clone().add(perpendicular));
+    }
+
+    const geometry = lines.geometry as LineSegmentsGeometry;
+    if (segmentPositions.length) {
+      geometry.setPositions(segmentPositions);
+      lines.visible = true;
+    } else {
+      lines.visible = false;
     }
   }
 
@@ -2338,8 +2598,65 @@ export class PlannerScene {
     return best;
   }
 
+  private dragMappingFor(selected: PlacedObject) {
+    this.camera.updateMatrixWorld(true);
+
+    const right3 = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
+    const up3 = new THREE.Vector3(0, 1, 0).applyQuaternion(this.camera.quaternion);
+    const forward3 = this.controls.target.clone().sub(this.camera.position);
+    const rightLength = Math.hypot(right3.x, right3.z);
+    const projectedUpLength = Math.hypot(up3.x, up3.z);
+    const projectedForwardLength = Math.hypot(forward3.x, forward3.z);
+
+    const screenRight: Vec2 = rightLength > 1e-5
+      ? { x: right3.x / rightLength, z: right3.z / rightLength }
+      : { x: 1, z: 0 };
+
+    let screenUp: Vec2;
+    let verticalProjection = projectedUpLength;
+    if (projectedUpLength > 0.08) {
+      screenUp = { x: up3.x / projectedUpLength, z: up3.z / projectedUpLength };
+    } else if (projectedForwardLength > 1e-5) {
+      // At near eye-level views the camera's visual up vector is almost vertical,
+      // so it carries no useful X/Z movement. Continue the screen-Y gesture into
+      // room depth instead of collapsing the drag to a single horizontal axis.
+      screenUp = { x: forward3.x / projectedForwardLength, z: forward3.z / projectedForwardLength };
+      verticalProjection = 0.38;
+    } else {
+      screenUp = { x: -screenRight.z, z: screenRight.x };
+      verticalProjection = 1;
+    }
+
+    // OrbitControls does not roll the camera, but orthogonalizing here makes the
+    // drag basis stable even if that ever changes or a preset introduces tiny drift.
+    const dot = screenUp.x * screenRight.x + screenUp.z * screenRight.z;
+    screenUp = { x: screenUp.x - screenRight.x * dot, z: screenUp.z - screenRight.z * dot };
+    const upLength = Math.hypot(screenUp.x, screenUp.z);
+    if (upLength > 1e-5) {
+      screenUp.x /= upLength;
+      screenUp.z /= upLength;
+    } else {
+      screenUp = { x: -screenRight.z, z: screenRight.x };
+    }
+
+    const product = PRODUCTS[selected.productId];
+    const anchor = new THREE.Vector3(selected.x, Math.max(0.04, product.height * 0.45), selected.z);
+    const cameraSpace = anchor.clone().applyMatrix4(this.camera.matrixWorldInverse);
+    const depth = Math.max(0.35, -cameraSpace.z);
+    const viewportHeight = Math.max(1, this.container.clientHeight);
+    const worldPerPixel = (2 * depth * Math.tan(THREE.MathUtils.degToRad(this.camera.fov * 0.5))) / viewportHeight;
+
+    return {
+      screenRight,
+      screenUp,
+      worldPerPixelX: worldPerPixel / Math.max(0.45, rightLength),
+      worldPerPixelY: worldPerPixel / Math.max(0.32, verticalProjection)
+    };
+  }
+
   private onPointerDown = (event: PointerEvent) => {
     if (event.button !== 0) return;
+
     this.setPointer(event);
 
     if (this.options.interactiveArchitecture) {
@@ -2360,17 +2677,27 @@ export class PlannerScene {
     const hits = this.raycaster.intersectObjects([...this.objectModels.values()], true);
     const id = this.findObjectId(hits[0]?.object ?? null);
     if (!id) {
-      this.bridge.select(null);
+      // Shift+empty-space is the inspection gesture: OrbitControls receives the
+      // pointer-down, but the active furniture remains selected so its dimensions
+      // stay visible while orbiting to another side.
+      if (!event.shiftKey) this.bridge.select(null);
       return;
     }
     const before = structuredClone(this.bridge.getSnapshot()) as PlannerSnapshot;
     this.bridge.select(id);
     const selected = this.bridge.getSnapshot().objects.find((object) => object.id === id);
-    const hitPoint = hits[0]?.point;
-    const grabOffset = selected && hitPoint
-      ? { x: hitPoint.x - selected.x, z: hitPoint.z - selected.z }
-      : { x: 0, z: 0 };
-    this.dragging = { id, before, snap: { kind: 'none' }, grabOffset };
+    if (!selected) return;
+    const mapping = this.dragMappingFor(selected);
+    this.dragging = {
+      id,
+      before,
+      snap: { kind: 'none' },
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startX: selected.x,
+      startZ: selected.z,
+      ...mapping
+    };
     this.controls.enabled = false;
     this.renderer.domElement.style.cursor = 'grabbing';
     this.renderer.domElement.setPointerCapture?.(event.pointerId);
@@ -2392,28 +2719,20 @@ export class PlannerScene {
     }
 
     if (this.dragging) {
-      const point = new THREE.Vector3();
       const snapshot = this.bridge.getSnapshot();
       const moving = snapshot.objects.find((o) => o.id === this.dragging!.id);
       if (!moving) return;
 
-      let rawX = moving.x;
-      let rawZ = moving.z;
-      const viewVector = this.controls.target.clone().sub(this.camera.position).normalize();
-      const isTopLike = Math.abs(viewVector.y) > 0.12;
-      if (isTopLike) {
-        if (!this.raycaster.ray.intersectPlane(this.floorPlane, point)) return;
-        rawX = point.x - this.dragging.grabOffset.x;
-        rawZ = point.z - this.dragging.grabOffset.z;
-      } else if (Math.abs(viewVector.z) >= Math.abs(viewVector.x)) {
-        const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -moving.z);
-        if (!this.raycaster.ray.intersectPlane(plane, point)) return;
-        rawX = point.x - this.dragging.grabOffset.x;
-      } else {
-        const plane = new THREE.Plane(new THREE.Vector3(1, 0, 0), -moving.x);
-        if (!this.raycaster.ray.intersectPlane(plane, point)) return;
-        rawZ = point.z - this.dragging.grabOffset.z;
-      }
+      const dxPixels = event.clientX - this.dragging.startClientX;
+      const dyPixels = this.dragging.startClientY - event.clientY;
+      const rightDistance = dxPixels * this.dragging.worldPerPixelX;
+      const upDistance = dyPixels * this.dragging.worldPerPixelY;
+      const rawX = this.dragging.startX
+        + this.dragging.screenRight.x * rightDistance
+        + this.dragging.screenUp.x * upDistance;
+      const rawZ = this.dragging.startZ
+        + this.dragging.screenRight.z * rightDistance
+        + this.dragging.screenUp.z * upDistance;
 
       const others = snapshot.objects.filter((o) => o.id !== moving.id);
       const freeMove = event.shiftKey;
@@ -2437,6 +2756,15 @@ export class PlannerScene {
         this.requestRender();
       }
       this.bridge.updateObject(moving.id, patch);
+      // Keep every moving annotation on the same immediate path as the mesh rather
+      // than waiting for the store subscription's next RAF. Spacing helpers are now
+      // persistent, so this is an in-place buffer/canvas update rather than a rebuild.
+      const liveSnapshot = this.bridge.getSnapshot();
+      this.syncHelperTransforms(liveSnapshot);
+      if (liveSnapshot.showSpacingDimensions) {
+        this.syncSpacingHelpers(liveSnapshot);
+        this.lastSpacingHelperKey = this.spacingHelperStateKey(liveSnapshot);
+      }
       this.bridge.feedback(
         freeMove ? { kind: 'none', label: 'Free move' } : resolved.snap,
         freeMove ? null : resolved.colliding ? moving.id : null,
@@ -2478,6 +2806,12 @@ export class PlannerScene {
     this.controls.enabled = true;
     this.renderer.domElement.style.cursor = '';
     this.bridge.feedback({ kind: 'none' }, null, false);
+    const snapshot = this.bridge.getSnapshot();
+    this.syncSpacingHelpers(snapshot);
+    this.lastSpacingHelperKey = this.spacingHelperStateKey(snapshot);
+    this.rebuildSnapHelpers(snapshot);
+    this.lastSnapHelperKey = this.snapHelperStateKey(snapshot);
+    this.requestRender();
   };
 
   private resize() {
