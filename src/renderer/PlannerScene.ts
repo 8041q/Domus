@@ -70,8 +70,8 @@ const CEILING_THICKNESS = WALL_THICKNESS;
 // wall's outward normal and the direction from that wall to the camera. Smaller
 // ENTER values make side walls disappear sooner at shallow viewing angles. EXIT
 // stays lower than ENTER to prevent flicker while orbiting around the threshold.
-const CUTAWAY_ENTER_FACING = 0.08;
-const CUTAWAY_EXIT_FACING = 0.02;
+const CUTAWAY_ENTER_FACING = 0.02;
+const CUTAWAY_EXIT_FACING = 0.005;
 
 // Automatic ceiling behavior for the free Cutaway view camera. When the camera is
 // almost level with its target (small elevation angle), the room reads as an
@@ -117,6 +117,7 @@ export class PlannerScene {
   private ceilingGroup = new THREE.Group();
   private lightFixtureGroup = new THREE.Group();
   private lightIlluminationGroup = new THREE.Group();
+  private daylightGroup = new THREE.Group();
   private objectGroup = new THREE.Group();
   private helperGroup = new THREE.Group();
   private objectModels = new Map<string, THREE.Group>();
@@ -184,7 +185,7 @@ export class PlannerScene {
     // Start open by construction. The first camera evaluation may opt into the
     // ceiling, but there is never a one-frame closed-room flash while Plan Room mounts.
     this.ceilingGroup.visible = false;
-    this.scene.add(this.floorGroup, this.wallsGroup, this.ceilingGroup, this.lightFixtureGroup, this.lightIlluminationGroup, this.objectGroup, this.helperGroup);
+    this.scene.add(this.floorGroup, this.wallsGroup, this.ceilingGroup, this.lightFixtureGroup, this.lightIlluminationGroup, this.daylightGroup, this.objectGroup, this.helperGroup);
 
     // Screen-space silhouette outlining matches the reference planner: the selected
     // product gets one crisp yellow contour, independent of its component meshes.
@@ -209,7 +210,10 @@ export class PlannerScene {
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.environmentTexture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.environment = this.environmentTexture;
+    // Keep the PMREM around for future material-level use if needed, but do not
+    // feed a global environment into the room. The interior should read from
+    // explicit ceiling/daylight sources rather than a broad omnidirectional fill.
+    this.scene.environment = null;
     pmrem.dispose();
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -298,6 +302,7 @@ export class PlannerScene {
     this.disposeGroup(this.ceilingGroup);
     this.disposeGroup(this.lightFixtureGroup);
     this.disposeGroup(this.lightIlluminationGroup);
+    this.disposeGroup(this.daylightGroup);
     this.disposeGroup(this.objectGroup);
     this.disposeGroup(this.helperGroup);
     for (const texture of this.floorMapAssets) texture.dispose();
@@ -718,6 +723,7 @@ export class PlannerScene {
       this.lastFloorFinish = floorFinish;
     } else if (openingsKey !== this.lastOpeningsKey) {
       this.rebuildWalls(snapshot);
+      this.rebuildWindowDaylighting(snapshot);
       architectureChanged = true;
       this.lastOpeningsKey = openingsKey;
     }
@@ -747,6 +753,11 @@ export class PlannerScene {
         this.lastSpacingHelperKey = spacingKey;
       }
     }
+    // Room-lighting toggles are stored in the room state but may change without
+    // requiring full geometry rebuilds. Keep the explicit lighting rig in sync here.
+    this.applyRoomLighting(snapshot);
+    this.updateShadowBounds(snapshot);
+    this.updateLightFixtureVisibility(snapshot);
     // Cutaway visibility depends on architecture/camera, not furniture/selection state.
     if (architectureChanged) this.updateCutawayWalls(true);
     this.requestRender();
@@ -1125,6 +1136,7 @@ export class PlannerScene {
     this.rebuildWalls(snapshot);
     this.rebuildCeiling(snapshot);
     this.rebuildCeilingLighting(snapshot);
+    this.rebuildWindowDaylighting(snapshot);
     this.applyRoomLighting(snapshot);
   }
 
@@ -1261,13 +1273,42 @@ export class PlannerScene {
     this.updateLightFixtureVisibility(snapshot);
   }
 
+  private rebuildWindowDaylighting(snapshot: PlannerSnapshot) {
+    this.disposeGroup(this.daylightGroup);
+
+    const windows = snapshot.openings.filter((opening) => opening.type === 'window' || opening.type === 'opening');
+    for (const opening of windows) {
+      const wall = getRoomWalls(snapshot.room).find((candidate) => candidate.id === opening.wallId);
+      if (!wall) continue;
+      const centre = wallPoint(wall, opening.offset);
+      const outward = new THREE.Vector3(-wall.inward.x, 0, -wall.inward.z);
+      const inward = new THREE.Vector3(wall.inward.x, 0, wall.inward.z);
+      const verticalCenter = opening.sillHeight + opening.height * 0.62;
+      const source = new THREE.Vector3(centre.x, verticalCenter, centre.z)
+        .addScaledVector(outward, 0.38)
+        .add(new THREE.Vector3(0, opening.height * 0.08, 0));
+      const targetPosition = new THREE.Vector3(centre.x, Math.max(0.32, verticalCenter * 0.58), centre.z)
+        .addScaledVector(inward, 1.45);
+
+      const light = new THREE.SpotLight(0xfff1db, 0.58, 8.5, THREE.MathUtils.degToRad(44), 0.58, 1.35);
+      light.position.copy(source);
+      light.target.position.copy(targetPosition);
+      light.castShadow = false;
+      this.daylightGroup.add(light, light.target);
+    }
+  }
+
   private applyRoomLighting(snapshot: PlannerSnapshot) {
     const enabled = snapshot.room.lighting.enabled;
-    this.hemiLight.intensity = enabled ? 0.44 : 0.78;
-    this.ambientLight.intensity = enabled ? 0.08 : 0.18;
-    this.mainLight.intensity = enabled ? 1.08 : 1.72;
-    this.fillLight.intensity = enabled ? 0.18 : 0.34;
-    this.scene.background = new THREE.Color(enabled ? 0xc6c6c6 : 0xd2d2d2);
+    const hasDaylight = this.daylightGroup.children.length > 0;
+    // Keep the outside world visually separate from the room. The interior should
+    // get most of its brightness from explicit fixtures plus localized daylight, not
+    // from an omnidirectional ambient wash. This preserves darker corners.
+    this.hemiLight.intensity = enabled ? 0.16 : 0.22;
+    this.ambientLight.intensity = enabled ? 0.035 : 0.05;
+    this.mainLight.intensity = enabled ? 0.82 : (hasDaylight ? 0.68 : 0.9);
+    this.fillLight.intensity = enabled ? 0.08 : 0.06;
+    this.scene.background = new THREE.Color(enabled ? 0xbdbdbd : 0xc4c4c4);
   }
 
   private updateCeilingVisibility(force = false) {
