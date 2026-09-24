@@ -1492,6 +1492,7 @@ export class PlannerScene {
     const intensity = 1.1 * Math.sqrt(4 / positions.length);
     for (const position of positions) {
       const light = new THREE.SpotLight(0xfff1e5, intensity, Math.max(3.4, snapshot.room.height * 1.4), THREE.MathUtils.degToRad(78), 0.8, 2);
+      light.userData.baseIntensity = intensity;
       light.position.set(position.x, position.y - 0.07, position.z);
       light.target.position.set(position.x, 0.2, position.z);
       light.castShadow = false;
@@ -1582,8 +1583,8 @@ export class PlannerScene {
       this.sunsetGroup.add(light, light.target);
       return light;
     };
-    const softSun = makeSun('Window sunset soft', 0xffad72, 20, -1, 512, 9);
-    const sharpSun = makeSun('Window sunset sharp', 0xffc694, 12, 1, 1024, 1.25);
+    const softSun = makeSun('Window sunset soft', 0xffc28a, 70, -1, 512, 9);
+    const sharpSun = makeSun('Window sunset sharp', 0xffe5c7, 60, 1, 1024, 1.25);
     const sunsetShadowCameras = new Set<THREE.Camera>([
       softSun.shadow.camera,
       sharpSun.shadow.camera
@@ -1624,13 +1625,20 @@ export class PlannerScene {
   private applyRoomLighting(snapshot: PlannerSnapshot) {
     const enabled = snapshot.room.lighting.enabled;
     const hasDaylight = this.daylightGroup.children.length > 0;
+    const hasSunset = this.sunsetGroup.children.some((child) => child instanceof THREE.SpotLight);
     // The broad terms stand in for bounced indoor light. Fixtures supply a
     // visible ceiling cue; the original shadow caster still projects furniture
     // shadows onto the room, while contact AO sits beneath each model.
-    this.hemiLight.intensity = enabled ? 1.15 : 0.95;
-    this.ambientLight.intensity = enabled ? 0.38 : 0.28;
-    this.mainLight.intensity = enabled ? 0.82 : (hasDaylight ? 0.78 : 0.88);
-    this.fillLight.intensity = enabled ? 0.34 : 0.26;
+    this.hemiLight.intensity = hasSunset ? (enabled ? 0.72 : 0.62) : (enabled ? 1.15 : 0.95);
+    this.ambientLight.intensity = hasSunset ? (enabled ? 0.16 : 0.12) : (enabled ? 0.38 : 0.28);
+    this.mainLight.intensity = hasSunset ? (enabled ? 0.52 : 0.46) : (enabled ? 0.82 : (hasDaylight ? 0.78 : 0.88));
+    this.fillLight.intensity = hasSunset ? (enabled ? 0.15 : 0.12) : (enabled ? 0.34 : 0.26);
+    for (const child of this.interiorLightGroup.children) {
+      if (child instanceof THREE.SpotLight) {
+        child.intensity = child.userData.baseIntensity * (hasSunset ? 0.55 : 1);
+      }
+    }
+    this.renderer.toneMappingExposure = hasSunset ? 0.91 : 0.98;
     this.scene.background = new THREE.Color(0xd4d5d6);
   }
 
