@@ -292,7 +292,7 @@ export class PlannerScene {
     this.disposeGroup(this.lightFixtureGroup);
     this.disposeGroup(this.interiorLightGroup);
     this.disposeGroup(this.daylightGroup);
-    this.disposeGroup(this.sunsetGroup);
+    this.disposeSunsetRig();
     this.disposeGroup(this.contactShadowGroup);
     this.disposeGroup(this.objectGroup);
     this.disposeGroup(this.helperGroup);
@@ -1526,10 +1526,17 @@ export class PlannerScene {
     }
   }
 
-  /** One low, warm source enters through the first real window. It is additive to
-   * the established room rig and owns only its own furniture shadow map. */
-  private rebuildSunset(snapshot: PlannerSnapshot) {
+  private disposeSunsetRig() {
+    for (const child of this.sunsetGroup.children) {
+      if (child instanceof THREE.SpotLight) child.shadow.dispose();
+    }
     this.disposeGroup(this.sunsetGroup);
+  }
+
+  /** A soft and a crisp sun share one window while the established room rig
+   * and furniture contact shadows remain independent. */
+  private rebuildSunset(snapshot: PlannerSnapshot) {
+    this.disposeSunsetRig();
     const walls = getRoomWalls(snapshot.room);
     const opening = snapshot.openings.find((candidate) =>
       candidate.type === 'window' && walls.some((wall) => wall.id === candidate.wallId));
@@ -1549,20 +1556,42 @@ export class PlannerScene {
       THREE.MathUtils.degToRad(24),
       THREE.MathUtils.degToRad(42)
     );
-    const sunset = new THREE.SpotLight(0xff984e, 32, 9, angle, 0.35, 2);
-    sunset.position.copy(source);
-    sunset.target.position.copy(target);
-    sunset.castShadow = true;
-    sunset.shadow.mapSize.set(1024, 1024);
-    sunset.shadow.bias = -0.00012;
-    sunset.shadow.normalBias = 0.01;
-    sunset.shadow.radius = 4;
-    sunset.name = 'Window sunset';
-    this.sunsetGroup.add(sunset, sunset.target);
+    const alongWall = new THREE.Vector3(wall.tangent.x, 0, wall.tangent.z);
+    // Scale the offset with the glazing so both rays still cross narrow windows.
+    const lateralOffset = Math.min(0.12, opening.width * 0.07);
+    const heightOffset = Math.min(0.08, opening.height * 0.08);
+    const makeSun = (
+      name: string,
+      color: THREE.ColorRepresentation,
+      intensity: number,
+      side: number,
+      mapSize: number,
+      radius: number
+    ) => {
+      const light = new THREE.SpotLight(color, intensity, 9, angle, 0.35, 2);
+      light.name = name;
+      light.position.copy(source)
+        .addScaledVector(alongWall, lateralOffset * side)
+        .add(new THREE.Vector3(0, heightOffset * side, 0));
+      light.target.position.copy(target);
+      light.castShadow = true;
+      light.shadow.mapSize.set(mapSize, mapSize);
+      light.shadow.bias = -0.00012;
+      light.shadow.normalBias = 0.01;
+      light.shadow.radius = radius;
+      this.sunsetGroup.add(light, light.target);
+      return light;
+    };
+    const softSun = makeSun('Window sunset soft', 0xffad72, 20, -1, 512, 9);
+    const sharpSun = makeSun('Window sunset sharp', 0xffc694, 12, 1, 1024, 1.25);
+    const sunsetShadowCameras = new Set<THREE.Camera>([
+      softSun.shadow.camera,
+      sharpSun.shadow.camera
+    ]);
 
     // Invisible wall pieces form a rectangular aperture in this light's shadow
     // map. They write no pixels in the normal render and no depth in the
-    // established room shadow map, so only the sunset gains a window silhouette.
+    // established room shadow map, so only the two suns gain window silhouettes.
     const maskMaterial = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
     const wallYaw = -Math.atan2(wall.tangent.z, wall.tangent.x);
     const addMask = (along: number, bottom: number, width: number, height: number) => {
@@ -1573,7 +1602,7 @@ export class PlannerScene {
       mask.rotation.y = wallYaw;
       mask.castShadow = true;
       mask.onBeforeShadow = (_renderer, _object, _camera, shadowCamera, _geometry, depthMaterial) => {
-        const isSunset = shadowCamera === sunset.shadow.camera;
+        const isSunset = sunsetShadowCameras.has(shadowCamera);
         depthMaterial.depthWrite = isSunset;
         depthMaterial.colorWrite = isSunset;
       };
