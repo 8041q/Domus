@@ -99,6 +99,28 @@ In the front view the six fixtures form two centered rows, each has a local
 light, the white baseboard stays light, and the corner shade is more legible
 above the floor.
 
+The side-by-side cutaway exposed two scales of occlusion in the IKEA image:
+a broad falloff across each wall and the carpet, plus a narrow, darker contact
+line at the actual wall junction. Domus now layers a short-range wall-corner seam
+over its wider height-dependent shade. The carpet strip reaches farther into
+the room and has a separate narrow contact term, strongest at corners. The
+carpet's center finish is unchanged.
+
+The baseboard has a shaded face and lighter top cap. Door casings are wider
+and deeper than the baseboard, with a small projecting header; window frames
+are slimmer and have a projecting sill. Their stable trim colors keep them
+legible against white walls regardless of room light direction. The revised
+cutaway and a door-facing view were inspected in the live WebGL app.
+
+The next close-up showed that the contact seam still read as a narrow vertical
+stripe. Its fade now spans 24 cm and its added peak opacity is 0.015, leaving
+the broad wall gradient to carry most of the corner depth. The live cutaway
+close-up shows a faint contact edge instead of the previous dark stripe. A
+faint ceiling perimeter overlay adds depth where the warm ceiling meets the
+walls and disappears with the ceiling in cutaway views. The floor shading and
+carpet finish were left unchanged. The free-camera ceiling appears below 5°
+elevation and disappears above 7°; side presets keep it visible.
+
 IKEA sources: [Kreativ announcement](https://www.ingka.com/newsroom/ikea-launches-new-ai-powered-experience-empowering-customers-to-create-lifelike-room-designs/),
 [technology FAQ](https://www.ikea.com/fi/en/customer-service/knowledge/articles/ff043ec6-3527-4de3-96e2-9368671ec281.html).
 Three.js references: [standard material](https://threejs.org/docs/pages/MeshStandardMaterial.html),

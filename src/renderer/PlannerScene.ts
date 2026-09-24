@@ -75,8 +75,8 @@ const CUTAWAY_EXIT_FACING = 0.005;
 // enclosed eye-level view, so show the ceiling. The threshold is intentionally
 // tight: the camera must be nearly horizontal. EXIT stays slightly wider to avoid
 // flicker around the boundary. Side presets force the ceiling on separately.
-const CEILING_ENTER_ELEVATION = THREE.MathUtils.degToRad(9);
-const CEILING_EXIT_ELEVATION = THREE.MathUtils.degToRad(9);
+const CEILING_ENTER_ELEVATION = THREE.MathUtils.degToRad(4);
+const CEILING_EXIT_ELEVATION = THREE.MathUtils.degToRad(5);
 
 type DomusExportCategory = 'Walls' | 'Floors' | 'Frames' | 'Ceiling' | 'Furniture';
 
@@ -1287,7 +1287,61 @@ void main() {
     ceiling.name = 'Ceiling';
     this.tagExportRoot(ceiling, 'Ceiling', 'ceiling', 'Ceiling');
     this.ceilingGroup.add(ceiling);
+    this.addCeilingPerimeterShade(snapshot);
     this.updateCeilingVisibility();
+  }
+
+  private addCeilingPerimeterShade(snapshot: PlannerSnapshot) {
+    const bounds = roomBounds(snapshot.room.vertices);
+    const width = Math.min(0.65, Math.min(bounds.width, bounds.depth) * 0.16);
+    const edge = this.insetRoomVertices(snapshot, WALL_THICKNESS / 2);
+    const inner = this.insetRoomVertices(snapshot, WALL_THICKNESS / 2 + width);
+    const underside = snapshot.room.height - CEILING_THICKNESS - 0.002;
+
+    for (const wall of getRoomWalls(snapshot.room)) {
+      const next = (wall.index + 1) % edge.length;
+      const geometry = this.makeQuadGeometry([
+        new THREE.Vector3(edge[wall.index].x, underside, edge[wall.index].z),
+        new THREE.Vector3(edge[next].x, underside, edge[next].z),
+        new THREE.Vector3(inner[next].x, underside, inner[next].z),
+        new THREE.Vector3(inner[wall.index].x, underside, inner[wall.index].z)
+      ]);
+      geometry.setAttribute('uv', new THREE.Float32BufferAttribute([
+        0, 0, wall.length, 0, wall.length, 1, 0, 1
+      ], 2));
+      const material = new THREE.ShaderMaterial({
+        uniforms: { wallLength: { value: wall.length } },
+        vertexShader: `
+          varying vec2 vCeilingPosition;
+          void main() {
+            vCeilingPosition = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform float wallLength;
+          varying vec2 vCeilingPosition;
+          void main() {
+            float fromWall = 1.0 - smoothstep(0.0, 1.0, vCeilingPosition.y);
+            float nearCorner = max(
+              1.0 - smoothstep(0.0, 0.7, vCeilingPosition.x),
+              1.0 - smoothstep(0.0, 0.7, wallLength - vCeilingPosition.x)
+            );
+            float contact = 1.0 - smoothstep(0.0, 0.15, vCeilingPosition.y);
+            float opacity = fromWall * (0.04 + 0.015 * nearCorner) + 0.015 * contact;
+            gl_FragColor = vec4(0.16, 0.15, 0.14, opacity);
+          }
+        `,
+        transparent: true,
+        depthWrite: false,
+        side: THREE.DoubleSide
+      });
+      const shade = new THREE.Mesh(geometry, material);
+      shade.userData.ceilingShade = true;
+      shade.visible = this.ceilingVisible;
+      shade.renderOrder = 1;
+      this.architecturalShadeGroup.add(shade);
+    }
   }
 
   private updateLightFixtureVisibility(snapshot: PlannerSnapshot) {
@@ -1493,6 +1547,9 @@ void main() {
     if (!force && visible === this.ceilingVisible) return;
     this.ceilingVisible = visible;
     this.ceilingGroup.visible = visible;
+    this.architecturalShadeGroup.children.forEach((shade) => {
+      if (shade.userData.ceilingShade) shade.visible = visible;
+    });
     this.updateLightFixtureVisibility(this.bridge.getSnapshot());
     this.updateRoomDimensionVisibility();
   }
@@ -1704,13 +1761,13 @@ void main() {
           float endCorner = 1.0 - smoothstep(0.0, cornerWidth, wallLength - vWallPosition.x);
           float corner = max(startCorner, endCorner);
           float seam = max(
-            1.0 - smoothstep(0.0, 0.055, vWallPosition.x),
-            1.0 - smoothstep(0.0, 0.055, wallLength - vWallPosition.x)
+            1.0 - smoothstep(0.0, 0.24, vWallPosition.x),
+            1.0 - smoothstep(0.0, 0.24, wallLength - vWallPosition.x)
           );
           float opacity = corner * (0.09 + 0.02 * floorEdge + 0.008 * ceilingEdge)
-            + 0.055 * seam
+            + 0.030 * seam
             + 0.025 * floorEdge + 0.008 * ceilingEdge;
-          gl_FragColor = vec4(0.065, 0.062, 0.064, min(opacity, 0.22));
+          gl_FragColor = vec4(0.065, 0.062, 0.064, min(opacity, 0.20));
         }
       `,
       transparent: true,
@@ -1725,7 +1782,7 @@ void main() {
 
   private addFloorPerimeterShade(snapshot: PlannerSnapshot) {
     const bounds = roomBounds(snapshot.room.vertices);
-    const width = Math.min(0.9, Math.max(0.2, Math.min(bounds.width, bounds.depth) * 0.2));
+    const width = Math.min(1.1, Math.max(0.25, Math.min(bounds.width, bounds.depth) * 0.24));
     const edge = this.insetRoomVertices(snapshot, WALL_THICKNESS / 2);
     const inner = this.insetRoomVertices(snapshot, WALL_THICKNESS / 2 + width);
     const walls = getRoomWalls(snapshot.room);
@@ -1760,7 +1817,7 @@ void main() {
               1.0 - smoothstep(0.0, 0.8, vEdgePosition.x),
               1.0 - smoothstep(0.0, 0.8, wallLength - vEdgePosition.x)
             );
-            float opacity = fromWall * (0.12 + 0.05 * nearCorner) + 0.065 * contact;
+            float opacity = fromWall * (0.17 + 0.08 * nearCorner) + 0.08 * contact;
             gl_FragColor = vec4(0.045, 0.045, 0.055, opacity);
           }
         `,
@@ -1837,7 +1894,7 @@ void main() {
     const isWindow = opening.type === 'window';
     const frame = isWindow ? 0.04 : 0.075;
     const frameDepth = wallThickness + (isWindow ? 0.02 : 0.04);
-    const casingColor = isWindow ? 0xdad8d5 : 0xe3e0dc;
+    const casingColor = isWindow ? 0xcfcecb : 0xdedbd8;
     const bottom = opening.sillHeight;
     const top = Math.min(snapshot.room.height, bottom + opening.height);
     const yaw = this.wallYaw(wall);
@@ -1909,9 +1966,9 @@ void main() {
     alignedBox(opening.offset + opening.width / 2, (top + bottom) / 2, frame, top - bottom, frameDepth);
     alignedBox(opening.offset, top, opening.width + frame, frame, frameDepth);
     if (isWindow) {
-      alignedBox(opening.offset, bottom, opening.width + 0.1, 0.04, frameDepth + 0.02, 0.012, 0xf2f0ed, true);
+      alignedBox(opening.offset, bottom, opening.width + 0.1, 0.04, frameDepth + 0.02, 0.012, 0xe9e6e2, true);
     } else {
-      alignedBox(opening.offset, top + frame * 0.42, opening.width + frame * 1.55, 0.014, frameDepth + 0.016, 0.008, 0xf3f1ee, true);
+      alignedBox(opening.offset, top + frame * 0.42, opening.width + frame * 1.55, 0.014, frameDepth + 0.016, 0.008, 0xece9e5, true);
     }
 
     if (opening.type === 'window') {
@@ -2287,44 +2344,304 @@ void main() {
     fontWeight?: number;
   }) {
     const label = labelStyle === 'camera-card'
-      ? this.createProductDimensionBadge(text, labelHeight, textOutlinePx, targetPixelHeight)
-      : this.createMeasurementTextPlane(text, labelHeight, textOutlinePx, targetPixelHeight, fontWeight);
-    const worldWidth = typeof label.userData.labelWorldWidth === 'number' ? label.userData.labelWorldWidth : labelHeight * 1.4;
-    const length = start.distanceTo(end);
-    const gap = Math.min(Math.max(worldWidth + 0.11, 0.16), length * 0.7);
+      ? this.createProductDimensionBadge(
+          text,
+          labelHeight,
+          textOutlinePx,
+          targetPixelHeight
+        )
+      : this.createMeasurementTextPlane(
+          text,
+          labelHeight,
+          textOutlinePx,
+          targetPixelHeight,
+          fontWeight
+        );
+
     const destination = parent ?? this.helperGroup;
+
     const draw = (points: THREE.Vector3[]) => {
-      if (parent) this.makeLocalLine(parent, points, color, 0.92, dashed, overlay, widthPx);
-      else this.makeLine(points, color, 0.92, dashed, overlay, widthPx);
+      return parent
+        ? this.makeLocalLine(
+            parent,
+            points,
+            color,
+            0.92,
+            dashed,
+            overlay,
+            widthPx
+          )
+        : this.makeLine(
+            points,
+            color,
+            0.92,
+            dashed,
+            overlay,
+            widthPx
+          );
     };
 
-    if (length > gap + 0.04) {
-      const direction = end.clone().sub(start).normalize();
-      const mid = start.clone().add(end).multiplyScalar(0.5);
-      const firstEnd = mid.clone().addScaledVector(direction, -gap / 2);
-      const secondStart = mid.clone().addScaledVector(direction, gap / 2);
-      draw([start, firstEnd]);
-      draw([secondStart, end]);
-    } else {
-      draw([start, end]);
-    }
+    const worldWidth =
+      typeof label.userData.labelWorldWidth === 'number'
+        ? label.userData.labelWorldWidth
+        : labelHeight * 1.4;
 
-    // Keep the text anchor exactly at the geometric midpoint of its dimension.
-    // Extra breathing room is created by the symmetric line break above rather
-    // than shifting the label away from the line, which keeps it visually centered.
-    label.position.copy(start).add(end).multiplyScalar(0.5);
+    const length = start.distanceTo(end);
+
+    const initialGap = Math.min(
+      Math.max(worldWidth + 0.11, 0.16),
+      length * 0.7
+    );
+
+    const direction = end.clone().sub(start).normalize();
+
+    const mid = start
+      .clone()
+      .add(end)
+      .multiplyScalar(0.5);
+
+    const firstEnd = mid
+      .clone()
+      .addScaledVector(direction, -initialGap / 2);
+
+    const secondStart = mid
+      .clone()
+      .addScaledVector(direction, initialGap / 2);
+
+    const firstLine = draw([
+      start,
+      firstEnd
+    ]);
+
+    const secondLine = draw([
+      secondStart,
+      end
+    ]);
+
+    // Keep label centered on the measurement.
+    label.position
+      .copy(start)
+      .add(end)
+      .multiplyScalar(0.5);
+
     if (labelStyle === 'world') {
-      this.orientMeasurementLabel(label, start, end);
+      this.orientMeasurementLabel(
+        label,
+        start,
+        end
+      );
+
       if (keepUpright) {
         label.userData.keepMeasurementUpright = true;
         label.userData.measurementStart = start.clone();
         label.userData.measurementEnd = end.clone();
-        label.userData.measurementBaseQuaternion = label.quaternion.clone();
+
+        label.userData.measurementBaseQuaternion =
+          label.quaternion.clone();
+
         label.userData.measurementFlipped = false;
       }
+
+      // Data used by updateMeasurementLineGaps()
+      label.userData.dynamicMeasurementGap = true;
+
+      label.userData.measurementGapStart =
+        start.clone();
+
+      label.userData.measurementGapEnd =
+        end.clone();
+
+      label.userData.measurementGapFirstLine =
+        firstLine;
+
+      label.userData.measurementGapSecondLine =
+        secondLine;
+
+      // Empty screen-space space on EACH side of the text.
+      label.userData.measurementGapPaddingPx = 10;
     }
+
     destination.add(label);
+
     return label;
+  }
+
+  private updateMeasurementLineGaps() {
+    const width = Math.max(1, this.container.clientWidth);
+    const height = Math.max(1, this.container.clientHeight);
+
+    const projectedStart = new THREE.Vector3();
+    const projectedEnd = new THREE.Vector3();
+
+    const corner = new THREE.Vector3();
+
+    this.camera.updateMatrixWorld(true);
+    this.helperGroup.updateWorldMatrix(true, true);
+
+    this.helperGroup.traverse((object) => {
+      if (!object.userData.dynamicMeasurementGap) return;
+
+      const start =
+        object.userData.measurementGapStart as THREE.Vector3 | undefined;
+
+      const end =
+        object.userData.measurementGapEnd as THREE.Vector3 | undefined;
+
+      const firstLine =
+        object.userData.measurementGapFirstLine as Line2 | undefined;
+
+      const secondLine =
+        object.userData.measurementGapSecondLine as Line2 | undefined;
+
+      if (!start || !end || !firstLine || !secondLine) return;
+
+      const worldLength = start.distanceTo(end);
+
+      if (worldLength < 1e-6) return;
+
+      // --------------------------------------------------
+      // Dimension line length in SCREEN pixels
+      // --------------------------------------------------
+
+      projectedStart.copy(start).project(this.camera);
+      projectedEnd.copy(end).project(this.camera);
+
+      const startPxX =
+        (projectedStart.x * 0.5 + 0.5) * width;
+
+      const startPxY =
+        (-projectedStart.y * 0.5 + 0.5) * height;
+
+      const endPxX =
+        (projectedEnd.x * 0.5 + 0.5) * width;
+
+      const endPxY =
+        (-projectedEnd.y * 0.5 + 0.5) * height;
+
+      const lineDx = endPxX - startPxX;
+      const lineDy = endPxY - startPxY;
+
+      const screenLineLength =
+        Math.hypot(lineDx, lineDy);
+
+      if (screenLineLength < 1e-4) return;
+
+      const pixelsPerWorld =
+        screenLineLength / worldLength;
+
+      // Unit direction of dimension line on screen
+      const screenDirX = lineDx / screenLineLength;
+      const screenDirY = lineDy / screenLineLength;
+
+      // --------------------------------------------------
+      // Find the label's actual projected width ALONG
+      // the dimension line.
+      // --------------------------------------------------
+
+      object.updateWorldMatrix(true, false);
+
+      const aspect =
+        Number(object.userData.labelAspect) || 1;
+
+      const localCorners = [
+        [-aspect / 2, -0.5],
+        [ aspect / 2, -0.5],
+        [ aspect / 2,  0.5],
+        [-aspect / 2,  0.5]
+      ];
+
+      let minProjection = Infinity;
+      let maxProjection = -Infinity;
+
+      for (const [x, y] of localCorners) {
+        corner
+          .set(x, y, 0)
+          .applyMatrix4(object.matrixWorld)
+          .project(this.camera);
+
+        const px =
+          (corner.x * 0.5 + 0.5) * width;
+
+        const py =
+          (-corner.y * 0.5 + 0.5) * height;
+
+        const projection =
+          px * screenDirX +
+          py * screenDirY;
+
+        minProjection = Math.min(
+          minProjection,
+          projection
+        );
+
+        maxProjection = Math.max(
+          maxProjection,
+          projection
+        );
+      }
+
+      const labelExtentPx =
+        maxProjection - minProjection;
+
+      const paddingPx =
+        Number(
+          object.userData.measurementGapPaddingPx
+        ) || 10;
+
+      // Full screen-space break needed around label
+      const desiredGapPx =
+        labelExtentPx + paddingPx * 2;
+
+      // Convert back into world-space distance
+      const desiredGapWorld =
+        desiredGapPx / pixelsPerWorld;
+
+      const gap = THREE.MathUtils.clamp(
+        desiredGapWorld,
+        0.12,
+        worldLength * 0.72
+      );
+
+      // --------------------------------------------------
+      // Update the two line pieces
+      // --------------------------------------------------
+
+      const direction =
+        end.clone().sub(start).normalize();
+
+      const mid =
+        start.clone().add(end).multiplyScalar(0.5);
+
+      const firstEnd =
+        mid
+          .clone()
+          .addScaledVector(direction, -gap / 2);
+
+      const secondStart =
+        mid
+          .clone()
+          .addScaledVector(direction, gap / 2);
+
+      (firstLine.geometry as LineGeometry).setPositions([
+        start.x,
+        start.y,
+        start.z,
+
+        firstEnd.x,
+        firstEnd.y,
+        firstEnd.z
+      ]);
+
+      (secondLine.geometry as LineGeometry).setPositions([
+        secondStart.x,
+        secondStart.y,
+        secondStart.z,
+
+        end.x,
+        end.y,
+        end.z
+      ]);
+    });
   }
 
   /**
@@ -2346,6 +2663,7 @@ void main() {
 
     const yAxis = zAxis.clone().cross(xAxis).normalize();
     zAxis = xAxis.clone().cross(yAxis).normalize();
+
     const basis = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis);
     label.quaternion.setFromRotationMatrix(basis);
   }
@@ -2499,43 +2817,84 @@ void main() {
   private updateMeasurementLabelOrientation() {
     const projectedStart = new THREE.Vector3();
     const projectedEnd = new THREE.Vector3();
-    const worldPosition = new THREE.Vector3();
-    const localCamera = new THREE.Vector3();
-    const worldQuaternion = new THREE.Quaternion();
-    const inverseQuaternion = new THREE.Quaternion();
-    this.camera.updateMatrixWorld();
+
+    const cameraWorldQuaternion = new THREE.Quaternion();
+    const desiredWorldQuaternion = new THREE.Quaternion();
+    const parentWorldQuaternion = new THREE.Quaternion();
+    const inverseParentQuaternion = new THREE.Quaternion();
+
+    const rollQuaternion = new THREE.Quaternion();
+    const localZAxis = new THREE.Vector3(0, 0, 1);
+
+    this.camera.updateMatrixWorld(true);
+    this.camera.getWorldQuaternion(cameraWorldQuaternion);
 
     this.helperGroup.updateWorldMatrix(true, true);
+
     this.helperGroup.traverse((object) => {
       if (!object.userData.keepMeasurementUpright) return;
-      const start = object.userData.measurementStart as THREE.Vector3 | undefined;
-      const end = object.userData.measurementEnd as THREE.Vector3 | undefined;
-      const base = object.userData.measurementBaseQuaternion as THREE.Quaternion | undefined;
-      if (!start || !end || !base) return;
 
-      // Keep the old automatic upright behavior: flip the text baseline when the
-      // dimension direction crosses to the opposite side of the screen.
+      const start =
+        object.userData.measurementStart as THREE.Vector3 | undefined;
+
+      const end =
+        object.userData.measurementEnd as THREE.Vector3 | undefined;
+
+      if (!start || !end) return;
+
+      // Project the dimension line into screen space.
       projectedStart.copy(start).project(this.camera);
       projectedEnd.copy(end).project(this.camera);
-      const screenDx = projectedEnd.x - projectedStart.x;
-      let flipped = Boolean(object.userData.measurementFlipped);
-      if (screenDx > 0.012) flipped = false;
-      else if (screenDx < -0.012) flipped = true;
 
-      object.quaternion.copy(base);
-      if (flipped) object.rotateZ(Math.PI);
-      object.userData.measurementFlipped = flipped;
+      const dx = projectedEnd.x - projectedStart.x;
+      const dy = projectedEnd.y - projectedStart.y;
 
-      // Convert the camera direction into the label's current local frame. A
-      // rotation around local X leaves the text baseline/yaw untouched while
-      // pitching the plane toward the camera as far as that one axis allows.
-      object.getWorldPosition(worldPosition);
-      object.getWorldQuaternion(worldQuaternion);
-      inverseQuaternion.copy(worldQuaternion).invert();
-      localCamera.copy(this.camera.position).sub(worldPosition).applyQuaternion(inverseQuaternion);
-      if (Math.abs(localCamera.y) + Math.abs(localCamera.z) < 1e-8) return;
-      const pitch = Math.atan2(-localCamera.y, localCamera.z);
-      object.rotateX(pitch);
+      if (dx * dx + dy * dy < 1e-10) return;
+
+      // Actual dimension-line angle on screen
+      let screenAngle = Math.atan2(dy, dx);
+
+      // Keep text the right way up
+      if (screenAngle > Math.PI / 2) {
+        screenAngle -= Math.PI;
+      } else if (screenAngle < -Math.PI / 2) {
+        screenAngle += Math.PI;
+      }
+
+      // But DON'T allow the text to become vertical
+      const maxLabelRoll = THREE.MathUtils.degToRad(30);
+
+      const readableAngle = THREE.MathUtils.clamp(
+        screenAngle,
+        -maxLabelRoll,
+        maxLabelRoll
+      );
+
+      // Face camera
+      desiredWorldQuaternion.copy(cameraWorldQuaternion);
+
+      // Apply only the limited screen-space rotation
+      rollQuaternion.setFromAxisAngle(
+        localZAxis,
+        readableAngle
+      );
+
+      desiredWorldQuaternion.multiply(rollQuaternion);
+
+      // Convert world orientation back into the object's local space.
+      if (object.parent) {
+        object.parent.getWorldQuaternion(parentWorldQuaternion);
+
+        inverseParentQuaternion
+          .copy(parentWorldQuaternion)
+          .invert();
+
+        object.quaternion
+          .copy(inverseParentQuaternion)
+          .multiply(desiredWorldQuaternion);
+      } else {
+        object.quaternion.copy(desiredWorldQuaternion);
+      }
     });
   }
 
@@ -3354,6 +3713,7 @@ void main() {
     this.updateCutawayWalls();
     this.updateMeasurementLabelOrientation();
     this.updateMeasurementLabelScale();
+    this.updateMeasurementLineGaps();
 
     // Native MSAA keeps ordinary room geometry and floor textures crisp. Only a
     // selected product needs the composer's outline pass.
