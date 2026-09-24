@@ -13,8 +13,9 @@ import { PRODUCTS } from '../core/products';
 import { floorFinishDefinition, type FloorFinishDefinition } from '../core/roomFinishes';
 import { clearanceRegions, resolvePlacement, spacingMeasurements, type SpacingMeasurement } from '../core/placement';
 import { getRoomWalls, pointInRoom, roomBounds, wallPoint, wallProjectionDistance } from '../core/roomGeometry';
+import { effectiveSunAzimuth } from '../core/sun';
 import { formatLength } from '../core/units';
-import type { FloorFinish, PlanCameraView, MeasurementSystem, PlannerSnapshot, PlacedObject, RoomOpening, SnapFeedback, Vec2 } from '../core/types';
+import type { FloorFinish, PlanCameraView, MeasurementSystem, PlannerSnapshot, PlacedObject, RoomOpening, RoomWallSegment, SnapFeedback, Vec2 } from '../core/types';
 import { themeHex, themeMetric } from '../theme';
 
 export interface SceneSnapshot extends PlannerSnapshot {
@@ -117,6 +118,8 @@ export class PlannerScene {
   private interiorLightGroup = new THREE.Group();
   private daylightGroup = new THREE.Group();
   private sunsetGroup = new THREE.Group();
+  private sunsetLights: [THREE.DirectionalLight, THREE.DirectionalLight] | null = null;
+  private lastSunAnglesKey = '';
   private contactShadowGroup = new THREE.Group();
   private objectGroup = new THREE.Group();
   private helperGroup = new THREE.Group();
@@ -247,12 +250,16 @@ export class PlannerScene {
     this.mainLight = new THREE.DirectionalLight(0xfff6eb, 0.9);
     this.mainLight.position.set(4.2, 7.2, 4.8);
     this.mainLight.castShadow = true;
+
+    // Only controls darkness of projected shadow.Does NOT change room illumination.
+    this.mainLight.shadow.intensity = 0.6;
+
     this.mainLight.shadow.mapSize.set(1024, 1024);
     this.mainLight.shadow.camera.near = 0.25;
     this.mainLight.shadow.camera.far = 34;
     this.mainLight.shadow.bias = -0.00012;
     this.mainLight.shadow.normalBias = 0.012;
-    this.mainLight.shadow.radius = 5;
+    this.mainLight.shadow.radius = 6;
     this.fillLight = new THREE.DirectionalLight(0xe9edf0, 0.3);
     this.fillLight.position.set(-4.5, 5.2, -4.2);
     this.scene.add(this.hemiLight, this.ambientLight, this.mainLight, this.mainLight.target, this.fillLight);
@@ -693,7 +700,8 @@ export class PlannerScene {
     if (this.disposed) return;
     const snapshot = this.bridge.getSnapshot();
     const { floorFinish, ...roomWithoutFloorFinish } = snapshot.room;
-    const roomKey = JSON.stringify(roomWithoutFloorFinish);
+    const { sunAzimuth, sunElevation, ...lightingWithoutSunAngles } = roomWithoutFloorFinish.lighting;
+    const roomKey = JSON.stringify({ ...roomWithoutFloorFinish, lighting: lightingWithoutSunAngles });
     const openingsKey = JSON.stringify(snapshot.openings);
     let architectureChanged = false;
     if (roomKey !== this.lastRoomKey) {
@@ -718,6 +726,7 @@ export class PlannerScene {
       architectureChanged = true;
       this.lastOpeningsKey = openingsKey;
     }
+    this.syncSunsetAngles(snapshot);
     this.syncObjects(snapshot);
     this.syncOpeningHighlight(snapshot);
     this.syncHelperTransforms(snapshot);
@@ -763,7 +772,7 @@ export class PlannerScene {
     this.mainLight.target.position.set(cx, 0.45, cz);
     // Keep the shadow source below the ceiling in every lighting mode. Its
     // illumination is a stand-in for indoor bounce, not exterior sunlight.
-    this.mainLight.position.set(cx + span * 0.10, snapshot.room.height - 0.12, cz + span * 0.08);
+    this.mainLight.position.set(cx, snapshot.room.height - 0.12, cz);
     this.fillLight.position.set(cx - span * 0.28, snapshot.room.height - 0.35, cz - span * 0.24);
     const shadow = this.mainLight.shadow.camera as THREE.OrthographicCamera;
     shadow.left = -radius;
@@ -1529,103 +1538,173 @@ export class PlannerScene {
 
   private disposeSunsetRig() {
     for (const child of this.sunsetGroup.children) {
-      if (child instanceof THREE.SpotLight) child.shadow.dispose();
+      if (child instanceof THREE.DirectionalLight) child.shadow.dispose();
     }
     this.disposeGroup(this.sunsetGroup);
+    this.sunsetLights = null;
   }
 
-  /** A soft and a crisp sun share one window while the established room rig
-   * and furniture contact shadows remain independent. */
+  private sunDirection(snapshot: PlannerSnapshot) {
+    const walls = getRoomWalls(snapshot.room);
+    const windows = snapshot.openings.flatMap((opening) => {
+      const wall = walls.find((candidate) => candidate.id === opening.wallId);
+      return opening.type === 'window' && wall ? [{ opening, wall }] : [];
+    });
+    if (!windows.length) return null;
+
+    // Zero horizontal rotation faces the first valid window. The orbit is
+    // shared by every opening, regardless of how many receive direct sun.
+    const firstWall = windows[0].wall;
+    const direction = new THREE.Vector3(-firstWall.inward.x, 0, -firstWall.inward.z)
+      .applyAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(effectiveSunAzimuth(snapshot.room.lighting.sunAzimuth, windows.length)));
+    return direction;
+  }
+
+  private positionSunsetLights(snapshot: PlannerSnapshot, direction: THREE.Vector3) {
+    if (!this.sunsetLights) return;
+    const bounds = roomBounds(snapshot.room.vertices);
+    const centre = new THREE.Vector3(
+      (bounds.minX + bounds.maxX) / 2,
+      snapshot.room.height / 2,
+      (bounds.minZ + bounds.maxZ) / 2
+    );
+    const elevation = THREE.MathUtils.degToRad(snapshot.room.lighting.sunElevation);
+    const sideways = new THREE.Vector3(-direction.z, 0, direction.x);
+    const vertical = new THREE.Vector3(
+      -direction.x * Math.sin(elevation),
+      Math.cos(elevation),
+      -direction.z * Math.sin(elevation)
+    );
+    // Both sources orbit the room at a fixed radius. Their small offset in the
+    // tangent plane keeps their separation and two shadow directions constant.
+    const source = centre.clone()
+      .addScaledVector(direction, 50 * Math.cos(elevation));
+    source.y += 50 * Math.sin(elevation);
+    this.sunsetLights.forEach((light, index) => {
+      const side = index === 0 ? -1 : 1;
+      light.position.copy(source)
+        .addScaledVector(sideways, side)
+        .addScaledVector(vertical, 0.45 * side);
+      light.target.position.copy(centre);
+      light.shadow.needsUpdate = true;
+    });
+  }
+
+  private syncSunsetAngles(snapshot: PlannerSnapshot) {
+    const key = `${snapshot.room.lighting.sunAzimuth}:${snapshot.room.lighting.sunElevation}`;
+    if (key === this.lastSunAnglesKey) return;
+    const direction = this.sunDirection(snapshot);
+    if (direction) this.positionSunsetLights(snapshot, direction);
+    this.lastSunAnglesKey = key;
+  }
+
+  /** A soft and a crisp sun share one orbit while the established room
+   * rig and furniture contact shadows remain independent. */
   private rebuildSunset(snapshot: PlannerSnapshot) {
     this.disposeSunsetRig();
     const walls = getRoomWalls(snapshot.room);
-    const opening = snapshot.openings.find((candidate) =>
-      candidate.type === 'window' && walls.some((wall) => wall.id === candidate.wallId));
-    if (!opening) return;
+    const direction = this.sunDirection(snapshot);
+    this.lastSunAnglesKey = `${snapshot.room.lighting.sunAzimuth}:${snapshot.room.lighting.sunElevation}`;
+    if (!direction) return;
 
-    const wall = walls.find((candidate) => candidate.id === opening.wallId)!;
-    const centre = wallPoint(wall, opening.offset);
-    const inward = new THREE.Vector3(wall.inward.x, 0, wall.inward.z);
-    const source = new THREE.Vector3(centre.x, opening.sillHeight + opening.height * 0.7, centre.z)
-      .addScaledVector(inward, -1.7);
-    const target = new THREE.Vector3(centre.x, 0.32, centre.z)
-      .addScaledVector(inward, 2.4);
-    // The cone extends beyond the glazing at the wall plane; the shadow-only
-    // aperture below, rather than the circular spot boundary, shapes the beam.
-    const angle = THREE.MathUtils.clamp(
-      Math.atan(Math.max(opening.width, opening.height) * 0.85 / 1.7),
-      THREE.MathUtils.degToRad(24),
-      THREE.MathUtils.degToRad(42)
-    );
-    const alongWall = new THREE.Vector3(wall.tangent.x, 0, wall.tangent.z);
-    // Scale the offset with the glazing so both rays still cross narrow windows.
-    const lateralOffset = Math.min(0.12, opening.width * 0.07);
-    const heightOffset = Math.min(0.08, opening.height * 0.08);
+    const bounds = roomBounds(snapshot.room.vertices);
+    const shadowSpan = Math.hypot(bounds.width, bounds.depth) + snapshot.room.height * 2 + 4;
     const makeSun = (
       name: string,
       color: THREE.ColorRepresentation,
       intensity: number,
-      side: number,
       mapSize: number,
       radius: number
     ) => {
-      const light = new THREE.SpotLight(color, intensity, 9, angle, 0.35, 2);
+      const light = new THREE.DirectionalLight(color, intensity);
       light.name = name;
-      light.position.copy(source)
-        .addScaledVector(alongWall, lateralOffset * side)
-        .add(new THREE.Vector3(0, heightOffset * side, 0));
-      light.target.position.copy(target);
       light.castShadow = true;
       light.shadow.mapSize.set(mapSize, mapSize);
+      const camera = light.shadow.camera;
+      camera.left = camera.bottom = -shadowSpan / 2;
+      camera.right = camera.top = shadowSpan / 2;
+      camera.near = 1;
+      camera.far = 105;
+      camera.updateProjectionMatrix();
       light.shadow.bias = -0.00012;
       light.shadow.normalBias = 0.01;
       light.shadow.radius = radius;
       this.sunsetGroup.add(light, light.target);
       return light;
     };
-    const softSun = makeSun('Window sunset soft', 0xffc28a, 70, -1, 512, 9);
-    const sharpSun = makeSun('Window sunset sharp', 0xffe5c7, 60, 1, 1024, 1.25);
+    const softSun = makeSun('Window sunset soft', 0xffc28a, 1.7, 512, 9);
+    const sharpSun = makeSun('Window sunset sharp', 0xffe5c7, 1.4, 1024, 1.25);
+    this.sunsetLights = [softSun, sharpSun];
+    this.positionSunsetLights(snapshot, direction);
     const sunsetShadowCameras = new Set<THREE.Camera>([
       softSun.shadow.camera,
       sharpSun.shadow.camera
     ]);
 
-    // Invisible wall pieces form a rectangular aperture in this light's shadow
-    // map. They write no pixels in the normal render and no depth in the
-    // established room shadow map, so only the two suns gain window silhouettes.
-    const maskMaterial = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
-    const wallYaw = -Math.atan2(wall.tangent.z, wall.tangent.x);
-    const addMask = (along: number, bottom: number, width: number, height: number) => {
+    // Invisible walls and ceiling write only to the paired sun shadow maps.
+    // Every window stays open; direction and surrounding geometry decide which
+    // panes admit sunlight.
+    const maskMaterial = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, side: THREE.DoubleSide });
+    const beforeMaskShadow: THREE.Object3D['onBeforeShadow'] = (_renderer, _object, _camera, shadowCamera, _geometry, depthMaterial) => {
+      const isSunset = sunsetShadowCameras.has(shadowCamera);
+      depthMaterial.depthWrite = isSunset;
+      depthMaterial.colorWrite = isSunset;
+    };
+    const afterMaskShadow: THREE.Object3D['onAfterShadow'] = (_renderer, _object, _camera, _shadowCamera, _geometry, depthMaterial) => {
+      depthMaterial.depthWrite = true;
+      depthMaterial.colorWrite = true;
+    };
+    const addMask = (maskWall: RoomWallSegment, along: number, bottom: number, width: number, height: number) => {
       if (width <= 0.001 || height <= 0.001) return;
-      const point = wallPoint(wall, along);
+      const point = wallPoint(maskWall, along);
       const mask = new THREE.Mesh(new THREE.BoxGeometry(width, height, 0.04), maskMaterial);
       mask.position.set(point.x, bottom + height / 2, point.z);
-      mask.rotation.y = wallYaw;
+      mask.rotation.y = -Math.atan2(maskWall.tangent.z, maskWall.tangent.x);
       mask.castShadow = true;
-      mask.onBeforeShadow = (_renderer, _object, _camera, shadowCamera, _geometry, depthMaterial) => {
-        const isSunset = sunsetShadowCameras.has(shadowCamera);
-        depthMaterial.depthWrite = isSunset;
-        depthMaterial.colorWrite = isSunset;
-      };
-      mask.onAfterShadow = (_renderer, _object, _camera, _shadowCamera, _geometry, depthMaterial) => {
-        depthMaterial.depthWrite = true;
-        depthMaterial.colorWrite = true;
-      };
+      mask.onBeforeShadow = beforeMaskShadow;
+      mask.onAfterShadow = afterMaskShadow;
       this.sunsetGroup.add(mask);
     };
-    const left = Math.max(0, opening.offset - opening.width / 2);
-    const right = Math.min(wall.length, opening.offset + opening.width / 2);
-    const top = Math.min(snapshot.room.height, opening.sillHeight + opening.height);
-    addMask(left / 2, 0, left, snapshot.room.height);
-    addMask((wall.length + right) / 2, 0, wall.length - right, snapshot.room.height);
-    addMask((left + right) / 2, 0, right - left, opening.sillHeight);
-    addMask((left + right) / 2, top, right - left, snapshot.room.height - top);
+    for (const wall of walls) {
+      const windows = snapshot.openings.filter((opening) => opening.type === 'window' && opening.wallId === wall.id);
+      const cuts = [0, wall.length, ...windows.flatMap((opening) => [
+        Math.max(0, opening.offset - opening.width / 2),
+        Math.min(wall.length, opening.offset + opening.width / 2)
+      ])].sort((a, b) => a - b);
+      for (let i = 1; i < cuts.length; i += 1) {
+        const left = cuts[i - 1];
+        const right = cuts[i];
+        if (right - left <= 0.001) continue;
+        const middle = (left + right) / 2;
+        const apertures = windows
+          .filter((opening) => middle > opening.offset - opening.width / 2 && middle < opening.offset + opening.width / 2)
+          .map((opening) => ({
+            bottom: Math.max(0, opening.sillHeight),
+            top: Math.min(snapshot.room.height, opening.sillHeight + opening.height)
+          }))
+          .sort((a, b) => a.bottom - b.bottom);
+        let cursor = 0;
+        for (const aperture of apertures) {
+          addMask(wall, middle, cursor, right - left, aperture.bottom - cursor);
+          cursor = Math.max(cursor, aperture.top);
+        }
+        addMask(wall, middle, cursor, right - left, snapshot.room.height - cursor);
+      }
+    }
+    const ceilingShape = new THREE.Shape(snapshot.room.vertices.map((vertex) => new THREE.Vector2(vertex.x, vertex.z)));
+    const ceilingMask = new THREE.Mesh(new THREE.ShapeGeometry(ceilingShape), maskMaterial);
+    ceilingMask.rotation.x = Math.PI / 2;
+    ceilingMask.position.y = snapshot.room.height + 0.02;
+    ceilingMask.castShadow = true;
+    ceilingMask.onBeforeShadow = beforeMaskShadow;
+    ceilingMask.onAfterShadow = afterMaskShadow;
+    this.sunsetGroup.add(ceilingMask);
   }
 
   private applyRoomLighting(snapshot: PlannerSnapshot) {
     const enabled = snapshot.room.lighting.enabled;
     const hasDaylight = this.daylightGroup.children.length > 0;
-    const hasSunset = this.sunsetGroup.children.some((child) => child instanceof THREE.SpotLight);
+    const hasSunset = snapshot.openings.some((opening) => opening.type === 'window');
     // The broad terms stand in for bounced indoor light. Fixtures supply a
     // visible ceiling cue; the original shadow caster still projects furniture
     // shadows onto the room, while contact AO sits beneath each model.
@@ -2349,24 +2428,24 @@ export class PlannerScene {
     };
 
     if (id === 'sofa' || id === 'armchair') {
-      patch(p.width * 0.72, p.depth * 0.55, 0, 0.03, 0.02, 0.10);
+      patch(p.width * 0.72, p.depth * 0.55, 0, 0.03, 0.03, 0.10);
       for (const x of [-p.width * 0.38, p.width * 0.38]) {
-        for (const z of [-p.depth * 0.28, p.depth * 0.28]) patch(0.07, 0.07, x, z, 0.02, 0.32);
+        for (const z of [-p.depth * 0.28, p.depth * 0.28]) patch(0.07, 0.07, x, z, 0.03, 0.32);
       }
     } else if (id === 'dining-table' || id === 'coffee-table') {
       for (const x of [-p.width * 0.39, p.width * 0.39]) {
-        for (const z of [-p.depth * 0.36, p.depth * 0.36]) patch(0.08, 0.08, x, z, 0.02, 0.32);
+        for (const z of [-p.depth * 0.36, p.depth * 0.36]) patch(0.08, 0.08, x, z, 0.03, 0.32);
       }
     } else if (id === 'chair') {
       for (const x of [-p.width * 0.32, p.width * 0.32]) {
-        for (const z of [-p.depth * 0.28, p.depth * 0.28]) patch(0.055, 0.055, x, z, 0.02, 0.28);
+        for (const z of [-p.depth * 0.28, p.depth * 0.28]) patch(0.055, 0.055, x, z, 0.03, 0.28);
       }
     } else if (id === 'cabinet' || id === 'bookcase') {
-      patch(p.width, p.depth, 0, 0, 0.02, 0.36);
+      patch(p.width, p.depth, 0, 0, 0.03, 0.36);
     } else if (id === 'rug') {
-      patch(p.width, p.depth, 0, 0, 0.05, 0.10);
+      patch(p.width, p.depth, 0, 0, 0.03, 0.10);
     } else if (id === 'plant') {
-      patch(0.31, 0.31, 0, 0, 0.05, 0.34, true);
+      patch(0.31, 0.31, 0, 0, 0.03, 0.34, true);
     }
     return group;
   }
@@ -2395,16 +2474,16 @@ export class PlannerScene {
     const group = new THREE.Group();
     // Model colour remains independent of the room rig; contact AO belongs on
     // the floor underneath it, while castShadow preserves the projected shadow.
-    const baseMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(p.swatch), vertexColors: true });
-    const darkMat = new THREE.MeshBasicMaterial({ color: 0x4d4c48, vertexColors: true });
-    const lightMat = new THREE.MeshBasicMaterial({ color: 0xe4dfd4, vertexColors: true });
-    const greenMat = new THREE.MeshBasicMaterial({ color: 0x54765a, vertexColors: true });
+    const baseMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(p.swatch), vertexColors: true });
+    const darkMat = new THREE.MeshStandardMaterial({ color: 0x4d4c48, vertexColors: true });
+    const lightMat = new THREE.MeshStandardMaterial({ color: 0xe4dfd4, vertexColors: true });
+    const greenMat = new THREE.MeshStandardMaterial({ color: 0x54765a, vertexColors: true });
 
     const box = (w: number, h: number, d: number, x: number, y: number, z: number, mat: THREE.Material = baseMat) => {
       const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
       mesh.position.set(x, y, z);
-      mesh.castShadow = true;
-      mesh.receiveShadow = false;
+      mesh.castShadow = true; // allow objects to cast a shadow
+      mesh.receiveShadow = true; // allow object to get shadow from other objects
       group.add(mesh);
       return mesh;
     };

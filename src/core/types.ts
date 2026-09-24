@@ -33,6 +33,10 @@ export interface RoomLighting {
   enabled: boolean;
   fixtureType: CeilingLightFixtureType;
   showWithoutCeiling: boolean;
+  /** Horizontal rotation in degrees from the first window's outward normal. */
+  sunAzimuth: number;
+  /** Height above the horizon in degrees. */
+  sunElevation: number;
 }
 
 export interface RoomVertex extends Vec2 {

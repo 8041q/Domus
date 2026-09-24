@@ -2,6 +2,7 @@ import { lazy, Suspense, useMemo, useRef, useState, type CSSProperties, type Cha
 import { PRODUCT_LIST, PRODUCTS } from './core/products';
 import { clearanceIssues } from './core/placement';
 import { polygonArea } from './core/roomGeometry';
+import { effectiveSunAzimuth, normalizeSunAzimuth, SUN_AZIMUTH_MAX, SUN_AZIMUTH_MIN, SUN_ELEVATION_MAX, SUN_ELEVATION_MIN, SUN_SINGLE_WINDOW_LIMIT } from './core/sun';
 import { formatArea, formatLength } from './core/units';
 import type { CeilingLightFixtureType, PlanCameraView, ProductCategory } from './core/types';
 import { FLOOR_FINISHES, WALL_FINISHES } from './core/roomFinishes';
@@ -197,7 +198,12 @@ export function PlanRoom() {
   const setShowProductDimensions = usePlannerStore((s) => s.setShowProductDimensions);
   const setShowSpacingDimensions = usePlannerStore((s) => s.setShowSpacingDimensions);
   const lighting = usePlannerStore((s) => s.room.lighting);
+  const windowCount = usePlannerStore((s) => s.openings.filter((opening) => opening.type === 'window').length);
+  const hasWindow = windowCount > 0;
+  const horizontalAngle = effectiveSunAzimuth(lighting.sunAzimuth, windowCount);
   const setRoomLighting = usePlannerStore((s) => s.setRoomLighting);
+  const commitSnapshot = usePlannerStore((s) => s.commitSnapshot);
+  const sunAngleBefore = useRef<ReturnType<typeof getSnapshot> | null>(null);
   const planView = usePlannerStore((s) => s.planView);
   const setPlanView = usePlannerStore((s) => s.setPlanView);
   const addObject = usePlannerStore((s) => s.addObject);
@@ -208,6 +214,18 @@ export function PlanRoom() {
     const matchesSearch = p.name.toLowerCase().includes(search.trim().toLowerCase());
     return matchesCategory && matchesSearch;
   }), [category, search]);
+
+  const finishSunAngle = () => {
+    if (sunAngleBefore.current) commitSnapshot(sunAngleBefore.current);
+    sunAngleBefore.current = null;
+  };
+
+  const sunAngleEvents = {
+    onFocus: () => { if (!sunAngleBefore.current) sunAngleBefore.current = getSnapshot(); },
+    onPointerDown: () => { if (!sunAngleBefore.current) sunAngleBefore.current = getSnapshot(); },
+    onPointerUp: finishSunAngle,
+    onBlur: finishSunAngle
+  };
 
   return (
     <div className="mode-layout plan-room-layout">
@@ -263,6 +281,20 @@ export function PlanRoom() {
                     </label>
                     <label><input type="checkbox" checked={lighting.showWithoutCeiling} onChange={(e) => setRoomLighting({ showWithoutCeiling: e.target.checked })} /><span>Show fixtures without ceiling<small>Keep fixtures visible when the ceiling is hidden</small></span></label>
                   </div>
+                  {hasWindow && <div className="view-options-section sun-angle-section">
+                    <strong>Window sun</strong>
+                    <div className="sun-angle-control">
+                      <div><span>Horizontal</span><output>{horizontalAngle}°</output></div>
+                      <input type="range" min={windowCount === 1 ? -SUN_SINGLE_WINDOW_LIMIT : SUN_AZIMUTH_MIN} max={windowCount === 1 ? SUN_SINGLE_WINDOW_LIMIT : SUN_AZIMUTH_MAX} step="1" value={horizontalAngle} aria-label="Sun horizontal angle" {...sunAngleEvents}
+                        onChange={(e) => setRoomLighting({ sunAzimuth: normalizeSunAzimuth(e.target.value) }, false)} />
+                    </div>
+                    <div className="sun-angle-control">
+                      <div><span>Height</span><output>{lighting.sunElevation}°</output></div>
+                      <input type="range" min={SUN_ELEVATION_MIN} max={SUN_ELEVATION_MAX} step="1" value={lighting.sunElevation} aria-label="Sun height angle" {...sunAngleEvents}
+                        onChange={(e) => setRoomLighting({ sunElevation: Number(e.target.value) }, false)} />
+                    </div>
+                    <small>{windowCount === 1 ? '0° faces the window; the slider stops at its horizon.' : '0° faces the first window. Rotate through 360° to reach other windows.'}</small>
+                  </div>}
                 </div>
               )}
             </div>

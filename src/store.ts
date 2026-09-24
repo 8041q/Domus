@@ -3,6 +3,7 @@ import { PRODUCTS, rotatedFootprint } from './core/products';
 import { objectsOverlap, resolvePlacement, resolveRotationPlacement } from './core/placement';
 import { SnapshotHistory } from './core/history';
 import { normalizeFloorFinish } from './core/roomFinishes';
+import { clampSunAngle, normalizeSunAzimuth, SUN_DEFAULT_AZIMUTH, SUN_DEFAULT_ELEVATION, SUN_ELEVATION_MAX, SUN_ELEVATION_MIN } from './core/sun';
 import {
   findNearestValidPosition,
   getRoomWalls,
@@ -57,7 +58,7 @@ interface PlannerStore extends PlannerSnapshot {
   setShowRoomDimensions: (show: boolean) => void;
   setShowProductDimensions: (show: boolean) => void;
   setShowSpacingDimensions: (show: boolean) => void;
-  setRoomLighting: (patch: Partial<RoomLighting>) => void;
+  setRoomLighting: (patch: Partial<RoomLighting>, recordHistory?: boolean) => void;
 
   addObject: (productId: ProductKind) => void;
   duplicateSelected: () => void;
@@ -99,7 +100,9 @@ const defaultRoom: RoomState = {
   lighting: {
     enabled: true,
     fixtureType: 'recessed',
-    showWithoutCeiling: false
+    showWithoutCeiling: false,
+    sunAzimuth: SUN_DEFAULT_AZIMUTH,
+    sunElevation: SUN_DEFAULT_ELEVATION
   },
   shapeKind: 'rectangle',
   vertices: initialVertices
@@ -147,6 +150,12 @@ function ensureRoom(raw: Partial<RoomState>): RoomState {
     depth,
     height: Math.max(2.1, Math.min(Number(raw.height) || defaultRoom.height, 4.2)),
     floorFinish: normalizeFloorFinish(raw.floorFinish),
+    lighting: {
+      ...defaultRoom.lighting,
+      ...raw.lighting,
+      sunAzimuth: normalizeSunAzimuth(raw.lighting?.sunAzimuth),
+      sunElevation: clampSunAngle(raw.lighting?.sunElevation, SUN_DEFAULT_ELEVATION, SUN_ELEVATION_MIN, SUN_ELEVATION_MAX)
+    },
     shapeKind: raw.shapeKind ?? (vertices.length === 4 ? 'rectangle' : 'custom'),
     vertices
   } as RoomState, vertices);
@@ -274,10 +283,10 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
   setShowRoomDimensions: (showRoomDimensions) => set({ showRoomDimensions }),
   setShowProductDimensions: (showProductDimensions) => set({ showProductDimensions }),
   setShowSpacingDimensions: (showSpacingDimensions) => set({ showSpacingDimensions }),
-  setRoomLighting: (patch) => {
-    const before = snapshotOf(get());
+  setRoomLighting: (patch, recordHistory = true) => {
+    const before = recordHistory ? snapshotOf(get()) : null;
     set((state) => ({ room: ensureRoom({ ...state.room, lighting: { ...state.room.lighting, ...patch } }) }));
-    history.push(before);
+    if (before) history.push(before);
   },
 
   addObject: (productId) => {
