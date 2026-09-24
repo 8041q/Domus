@@ -94,7 +94,7 @@ const defaultRoom: RoomState = {
   width: 5.2,
   depth: 3.8,
   height: 2.6,
-  wallColor: '#eeeae1',
+  wallColor: '#f2f2f3',
   floorFinish: 'wood-floor-057',
   lighting: {
     enabled: true,

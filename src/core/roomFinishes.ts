@@ -222,6 +222,7 @@ export const FLOOR_FINISHES: FloorFinishDefinition[] = [
 ];
 
 export const WALL_FINISHES = [
+  { name: 'Neutral white', value: '#f2f2f3' },
   { name: 'Warm white', value: '#eeeae1' },
   { name: 'Soft ivory', value: '#f4f1e9' },
   { name: 'Light greige', value: '#d9d2c8' },

@@ -112,7 +112,9 @@ export class PlannerScene {
   private floorGroup = new THREE.Group();
   private wallsGroup = new THREE.Group();
   private ceilingGroup = new THREE.Group();
+  private architecturalShadeGroup = new THREE.Group();
   private lightFixtureGroup = new THREE.Group();
+  private interiorLightGroup = new THREE.Group();
   private daylightGroup = new THREE.Group();
   private objectGroup = new THREE.Group();
   private helperGroup = new THREE.Group();
@@ -166,7 +168,6 @@ export class PlannerScene {
     const pixelRatio = Math.min(window.devicePixelRatio, 1.6);
     this.renderer.setPixelRatio(pixelRatio);
     this.renderer.shadowMap.enabled = true;
-    // A firmer PCF shadow reads better for furniture and avoids the over-blurred Phase 5 result.
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.NeutralToneMapping;
@@ -180,7 +181,7 @@ export class PlannerScene {
     // Start open by construction. The first camera evaluation may opt into the
     // ceiling, but there is never a one-frame closed-room flash while Plan Room mounts.
     this.ceilingGroup.visible = false;
-    this.scene.add(this.floorGroup, this.wallsGroup, this.ceilingGroup, this.lightFixtureGroup, this.daylightGroup, this.objectGroup, this.helperGroup);
+    this.scene.add(this.floorGroup, this.wallsGroup, this.ceilingGroup, this.architecturalShadeGroup, this.lightFixtureGroup, this.interiorLightGroup, this.daylightGroup, this.objectGroup, this.helperGroup);
 
     // Screen-space silhouette outlining matches the reference planner: the selected
     // product gets one crisp yellow contour, independent of its component meshes.
@@ -243,11 +244,12 @@ export class PlannerScene {
     this.mainLight = new THREE.DirectionalLight(0xfff6eb, 0.9);
     this.mainLight.position.set(4.2, 7.2, 4.8);
     this.mainLight.castShadow = true;
-    this.mainLight.shadow.mapSize.set(2048, 2048);
+    this.mainLight.shadow.mapSize.set(1024, 1024);
     this.mainLight.shadow.camera.near = 0.25;
     this.mainLight.shadow.camera.far = 34;
     this.mainLight.shadow.bias = -0.00012;
     this.mainLight.shadow.normalBias = 0.012;
+    this.mainLight.shadow.radius = 5;
     this.fillLight = new THREE.DirectionalLight(0xe9edf0, 0.3);
     this.fillLight.position.set(-4.5, 5.2, -4.2);
     this.scene.add(this.hemiLight, this.ambientLight, this.mainLight, this.mainLight.target, this.fillLight);
@@ -283,7 +285,9 @@ export class PlannerScene {
     this.disposeGroup(this.floorGroup);
     this.disposeGroup(this.wallsGroup);
     this.disposeGroup(this.ceilingGroup);
+    this.disposeGroup(this.architecturalShadeGroup);
     this.disposeGroup(this.lightFixtureGroup);
+    this.disposeGroup(this.interiorLightGroup);
     this.disposeGroup(this.daylightGroup);
     this.disposeGroup(this.objectGroup);
     this.disposeGroup(this.helperGroup);
@@ -453,6 +457,7 @@ export class PlannerScene {
       delete object.userData.domusExportRotationY;
       delete object.userData.domusExportRoot;
       delete object.userData.invisiblePick;
+      delete object.userData.stableTrimColor;
 
       if (!(object instanceof THREE.Mesh)) return;
 
@@ -645,10 +650,10 @@ export class PlannerScene {
     // visually centered in both perspective and orthographic-like preset views.
     const targetY = room.height * 0.5;
     const isCutaway = view === 'perspective';
-    this.camera.fov = isCutaway ? 39 : 32;
+    this.camera.fov = isCutaway ? 15 : 32;
     this.camera.updateProjectionMatrix();
-    const distance = Math.max(3.8, size * (isCutaway ? 1.72 : 1.3));
-    this.controls.maxDistance = Math.max(20, size * 4.5);
+    const distance = Math.max(3.8, size * (isCutaway ? 4.0 : 1.3));
+    this.controls.maxDistance = Math.max(20, size * 5.5);
     this.controls.target.set(cx, targetY, cz);
 
     switch (view) {
@@ -670,7 +675,7 @@ export class PlannerScene {
         this.camera.position.set(bounds.maxX + distance, targetY, cz);
         break;
       default:
-        this.camera.position.set(bounds.maxX + size * 0.76, Math.max(3.8, size * 0.84), bounds.maxZ + size * 0.96);
+        this.camera.position.set(bounds.maxX + size * 2.6, Math.max(3.8, size * 2.8), bounds.maxZ + size * 2.6);
         break;
     }
     this.controls.update();
@@ -749,22 +754,18 @@ export class PlannerScene {
     const cz = (bounds.minZ + bounds.maxZ) / 2;
     const span = Math.max(bounds.width, bounds.depth, 4);
     const radius = span * 0.72 + 1.1;
-    const interiorLighting = snapshot.room.lighting.enabled;
     this.mainLight.target.position.set(cx, 0.45, cz);
-    if (interiorLighting) {
-      this.mainLight.position.set(cx + span * 0.22, Math.max(snapshot.room.height - 0.12, 2.1), cz + span * 0.18);
-      this.fillLight.position.set(cx - span * 0.28, Math.max(snapshot.room.height - 0.35, 1.8), cz - span * 0.24);
-    } else {
-      this.mainLight.position.set(cx + span * 0.55, Math.max(6.5, span * 0.72), cz + span * 0.48);
-      this.fillLight.position.set(cx - span * 0.6, Math.max(5.1, span * 0.58), cz - span * 0.52);
-    }
+    // Keep the shadow source below the ceiling in every lighting mode. Its
+    // illumination is a stand-in for indoor bounce, not exterior sunlight.
+    this.mainLight.position.set(cx + span * 0.10, snapshot.room.height - 0.12, cz + span * 0.08);
+    this.fillLight.position.set(cx - span * 0.28, snapshot.room.height - 0.35, cz - span * 0.24);
     const shadow = this.mainLight.shadow.camera as THREE.OrthographicCamera;
     shadow.left = -radius;
     shadow.right = radius;
     shadow.top = radius;
     shadow.bottom = -radius;
     shadow.near = 0.25;
-    shadow.far = interiorLighting ? Math.max(8, snapshot.room.height + span * 1.6) : Math.max(24, span * 4);
+    shadow.far = Math.max(8, snapshot.room.height + span * 1.6);
     shadow.updateProjectionMatrix();
     this.mainLight.shadow.needsUpdate = true;
   }
@@ -1207,6 +1208,7 @@ void main() {
     this.disposeGroup(this.floorGroup);
     this.disposeGroup(this.wallsGroup);
     this.disposeGroup(this.ceilingGroup);
+    this.disposeGroup(this.architecturalShadeGroup);
     this.wallHiddenState.clear();
     const { floorFinish } = snapshot.room;
     const halfWall = WALL_THICKNESS / 2;
@@ -1238,10 +1240,11 @@ void main() {
       ]
     );
     slab.receiveShadow = true;
-    slab.castShadow = true;
+    slab.castShadow = false;
     slab.name = 'Floor';
     this.tagExportRoot(slab, 'Floors', 'floor', 'Floor');
     this.floorGroup.add(slab);
+    this.addFloorPerimeterShade(snapshot);
 
     this.rebuildWalls(snapshot);
     this.rebuildCeiling(snapshot);
@@ -1277,7 +1280,9 @@ void main() {
         new THREE.MeshBasicMaterial({ color: JUNCTION_COLOR, side: THREE.DoubleSide, toneMapped: false })
       ]
     );
-    ceiling.castShadow = true;
+    // All direct lights stay below this slab, and broad fill stands in for
+    // indoor bounce. Camera visibility therefore cannot open a skylight.
+    ceiling.castShadow = false;
     ceiling.receiveShadow = true;
     ceiling.name = 'Ceiling';
     this.tagExportRoot(ceiling, 'Ceiling', 'ceiling', 'Ceiling');
@@ -1294,10 +1299,14 @@ void main() {
     const bounds = roomBounds(snapshot.room.vertices);
     const width = Math.max(2.2, bounds.width);
     const depth = Math.max(2.2, bounds.depth);
-    const cols = THREE.MathUtils.clamp(Math.round(width / 1.9), 2, 4);
-    const rows = THREE.MathUtils.clamp(Math.round(depth / 1.9), 2, 4);
-    const marginX = Math.max(0.55, width * 0.16);
-    const marginZ = Math.max(0.55, depth * 0.16);
+    // A maximum 3 x 3 grid keeps one affordable light per visible fixture.
+    // Quarter-room margins also keep the outside rows off the wall line.
+    const cols = THREE.MathUtils.clamp(Math.round(width / 1.9), 2, 3);
+    const rows = THREE.MathUtils.clamp(Math.round(depth / 1.9), 2, 3);
+    const marginX = width * 0.25;
+    const marginZ = depth * 0.25;
+    const walls = getRoomWalls(snapshot.room);
+    const minimumWallClearance = Math.min(0.8, Math.min(width, depth) * 0.2);
     const positions: THREE.Vector3[] = [];
     for (let r = 0; r < rows; r += 1) {
       const tz = rows === 1 ? 0.5 : r / (rows - 1);
@@ -1306,6 +1315,18 @@ void main() {
         const tx = cols === 1 ? 0.5 : c / (cols - 1);
         const x = THREE.MathUtils.lerp(bounds.minX + marginX, bounds.maxX - marginX, tx);
         if (!pointInRoom({ x, z }, snapshot.room, true)) continue;
+        // In a recess or L-shaped room, bounding-box margins do not describe
+        // the distance to an inside wall. Check the actual segments as well.
+        const wallDistance = Math.min(...walls.map((wall) => {
+          const projection = THREE.MathUtils.clamp(
+            ((x - wall.start.x) * wall.tangent.x + (z - wall.start.z) * wall.tangent.z) / Math.max(wall.length, 0.001),
+            0, 1
+          );
+          const nearestX = wall.start.x + wall.tangent.x * wall.length * projection;
+          const nearestZ = wall.start.z + wall.tangent.z * wall.length * projection;
+          return Math.hypot(x - nearestX, z - nearestZ);
+        }));
+        if (wallDistance < minimumWallClearance) continue;
         positions.push(new THREE.Vector3(x, snapshot.room.height - CEILING_THICKNESS - 0.006, z));
       }
     }
@@ -1319,14 +1340,14 @@ void main() {
       new THREE.CylinderGeometry(0.14, 0.14, 0.025, 26),
       new THREE.MeshStandardMaterial({ color: 0xf9f8f4, roughness: 0.78, metalness: 0.02 })
     );
-    body.castShadow = true;
+    body.castShadow = false;
     body.receiveShadow = true;
     body.position.y = -0.012;
     group.add(body);
 
     const diffuser = new THREE.Mesh(
       new THREE.CylinderGeometry(0.11, 0.11, 0.008, 26),
-      new THREE.MeshStandardMaterial({ color: 0xfff5df, roughness: 0.18, emissive: 0xffefcf, emissiveIntensity: 0.75 })
+      new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false })
     );
     diffuser.position.y = -0.028;
     group.add(diffuser);
@@ -1340,13 +1361,13 @@ void main() {
       new THREE.MeshStandardMaterial({ color: 0xfbfbfb, roughness: 0.72, metalness: 0.01 })
     );
     trim.position.y = -0.005;
-    trim.castShadow = true;
+    trim.castShadow = false;
     trim.receiveShadow = true;
     group.add(trim);
 
     const lens = new THREE.Mesh(
       new THREE.CylinderGeometry(0.085, 0.085, 0.015, 24),
-      new THREE.MeshStandardMaterial({ color: 0xfff3db, roughness: 0.22, emissive: 0xffeac4, emissiveIntensity: 0.92 })
+      new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false })
     );
     lens.position.y = -0.016;
     group.add(lens);
@@ -1375,6 +1396,7 @@ void main() {
 
   private rebuildCeilingLighting(snapshot: PlannerSnapshot) {
     this.disposeGroup(this.lightFixtureGroup);
+    this.disposeGroup(this.interiorLightGroup);
     const lighting = snapshot.room.lighting;
     if (!lighting.enabled) {
       this.updateLightFixtureVisibility(snapshot);
@@ -1395,6 +1417,17 @@ void main() {
       fixture.name = lighting.fixtureType === 'recessed' ? 'Recessed Downlight' : 'Surface Mounted Light';
       fixture.traverse((node) => { node.userData.roomLightFixture = true; });
       this.lightFixtureGroup.add(fixture);
+    }
+
+    // Every visible fixture has a matching light. None adds a shadow map;
+    // scale intensity with the grid size to keep total exposure controlled.
+    const intensity = 1.1 * Math.sqrt(4 / positions.length);
+    for (const position of positions) {
+      const light = new THREE.SpotLight(0xfff1e5, intensity, Math.max(3.4, snapshot.room.height * 1.4), THREE.MathUtils.degToRad(78), 0.8, 2);
+      light.position.set(position.x, position.y - 0.07, position.z);
+      light.target.position.set(position.x, 0.2, position.z);
+      light.castShadow = false;
+      this.interiorLightGroup.add(light, light.target);
     }
 
     this.updateLightFixtureVisibility(snapshot);
@@ -1617,11 +1650,128 @@ void main() {
       ]
     );
     body.receiveShadow = true;
-    body.castShadow = true;
+    body.castShadow = false;
     body.name = `Wall ${wall.index + 1} Segment`;
     this.tagCutawaySurface(body, wall);
     this.tagExportPart(body, 'Walls', wall.id, `Wall ${wall.index + 1}`, this.wallYaw(wall));
     this.wallsGroup.add(body);
+    this.addWallCornerShade(wall, start, end, innerBottom, innerTop, inner, snapshot);
+  }
+
+  private addWallCornerShade(
+    wall: ReturnType<typeof getRoomWalls>[number],
+    start: number,
+    end: number,
+    bottom: number,
+    top: number,
+    inner: { start: Vec2; end: Vec2 },
+    snapshot: PlannerSnapshot
+  ) {
+    // Room-space corner occlusion remains stable across camera cutaways. One
+    // transparent quad per solid wall segment also respects doors and windows.
+    const inset = 0.0015;
+    const points: [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3] = [
+      new THREE.Vector3(inner.start.x + wall.inward.x * inset, bottom, inner.start.z + wall.inward.z * inset),
+      new THREE.Vector3(inner.end.x + wall.inward.x * inset, bottom, inner.end.z + wall.inward.z * inset),
+      new THREE.Vector3(inner.end.x + wall.inward.x * inset, top, inner.end.z + wall.inward.z * inset),
+      new THREE.Vector3(inner.start.x + wall.inward.x * inset, top, inner.start.z + wall.inward.z * inset)
+    ];
+    const geometry = this.makeQuadGeometry(points);
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute([
+      start, bottom, end, bottom, end, top, start, top
+    ], 2));
+    const material = new THREE.ShaderMaterial({
+      uniforms: {
+        wallLength: { value: wall.length },
+        roomHeight: { value: snapshot.room.height }
+      },
+      vertexShader: `
+        varying vec2 vWallPosition;
+        void main() {
+          vWallPosition = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform float wallLength;
+        uniform float roomHeight;
+        varying vec2 vWallPosition;
+        void main() {
+          float floorEdge = 1.0 - smoothstep(0.0, 1.35, vWallPosition.y);
+          float ceilingEdge = 1.0 - smoothstep(0.0, 0.28, roomHeight - vWallPosition.y);
+          float cornerWidth = mix(0.75, 1.3, floorEdge);
+          float startCorner = 1.0 - smoothstep(0.0, cornerWidth, vWallPosition.x);
+          float endCorner = 1.0 - smoothstep(0.0, cornerWidth, wallLength - vWallPosition.x);
+          float corner = max(startCorner, endCorner);
+          float seam = max(
+            1.0 - smoothstep(0.0, 0.055, vWallPosition.x),
+            1.0 - smoothstep(0.0, 0.055, wallLength - vWallPosition.x)
+          );
+          float opacity = corner * (0.09 + 0.02 * floorEdge + 0.008 * ceilingEdge)
+            + 0.055 * seam
+            + 0.025 * floorEdge + 0.008 * ceilingEdge;
+          gl_FragColor = vec4(0.065, 0.062, 0.064, min(opacity, 0.22));
+        }
+      `,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    });
+    const shade = new THREE.Mesh(geometry, material);
+    shade.renderOrder = 1;
+    this.tagCutawaySurface(shade, wall);
+    this.architecturalShadeGroup.add(shade);
+  }
+
+  private addFloorPerimeterShade(snapshot: PlannerSnapshot) {
+    const bounds = roomBounds(snapshot.room.vertices);
+    const width = Math.min(0.9, Math.max(0.2, Math.min(bounds.width, bounds.depth) * 0.2));
+    const edge = this.insetRoomVertices(snapshot, WALL_THICKNESS / 2);
+    const inner = this.insetRoomVertices(snapshot, WALL_THICKNESS / 2 + width);
+    const walls = getRoomWalls(snapshot.room);
+
+    for (const wall of walls) {
+      const next = (wall.index + 1) % edge.length;
+      const geometry = this.makeQuadGeometry([
+        new THREE.Vector3(edge[wall.index].x, 0.004, edge[wall.index].z),
+        new THREE.Vector3(edge[next].x, 0.004, edge[next].z),
+        new THREE.Vector3(inner[next].x, 0.004, inner[next].z),
+        new THREE.Vector3(inner[wall.index].x, 0.004, inner[wall.index].z)
+      ]);
+      geometry.setAttribute('uv', new THREE.Float32BufferAttribute([
+        0, 0, wall.length, 0, wall.length, 1, 0, 1
+      ], 2));
+      const material = new THREE.ShaderMaterial({
+        uniforms: { wallLength: { value: wall.length } },
+        vertexShader: `
+          varying vec2 vEdgePosition;
+          void main() {
+            vEdgePosition = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform float wallLength;
+          varying vec2 vEdgePosition;
+          void main() {
+            float fromWall = 1.0 - smoothstep(0.0, 1.0, vEdgePosition.y);
+            float contact = 1.0 - smoothstep(0.0, 0.12, vEdgePosition.y);
+            float nearCorner = max(
+              1.0 - smoothstep(0.0, 0.8, vEdgePosition.x),
+              1.0 - smoothstep(0.0, 0.8, wallLength - vEdgePosition.x)
+            );
+            float opacity = fromWall * (0.12 + 0.05 * nearCorner) + 0.065 * contact;
+            gl_FragColor = vec4(0.045, 0.045, 0.055, opacity);
+          }
+        `,
+        transparent: true,
+        depthWrite: false,
+        side: THREE.DoubleSide
+      });
+      const shade = new THREE.Mesh(geometry, material);
+      shade.renderOrder = 1;
+      this.architecturalShadeGroup.add(shade);
+    }
   }
 
   private addBaseboard(
@@ -1632,10 +1782,9 @@ void main() {
   ) {
     if (end - start < 0.03) return;
     const height = 0.07;
-    // Match the door casing projection exactly: frameDepth is wall thickness +
-    // 12 mm, so its room-side face sits 6 mm proud of the finished wall. A flush
-    // skirting/casing junction reads as one trim system instead of two stacked rails.
-    const casingProjection = 0.012 / 2;
+    // A low skirting profile has a shaded face and a light, slightly projecting
+    // top cap. It reads separately from both the wall and the taller casings.
+    const casingProjection = 0.01;
     const backOffset = WALL_THICKNESS / 2;
     const frontOffset = backOffset + casingProjection;
     const back = this.wallSegmentEdgePoints(wall, start, end, backOffset, snapshot);
@@ -1663,12 +1812,19 @@ void main() {
     const flatGeometry = geometry.toNonIndexed();
     geometry.dispose();
     flatGeometry.computeVertexNormals();
+    flatGeometry.clearGroups();
+    flatGeometry.addGroup(0, 6, 0);
+    flatGeometry.addGroup(6, 6, 1);
+    flatGeometry.addGroup(12, 24, 0);
     const mesh = new THREE.Mesh(
       flatGeometry,
-      new THREE.MeshStandardMaterial({ color: TRIM_COLOR, roughness: 0.72, side: THREE.DoubleSide })
+      [
+        new THREE.MeshBasicMaterial({ color: 0xdedbd8, side: THREE.DoubleSide, toneMapped: false }),
+        new THREE.MeshBasicMaterial({ color: 0xf5f3f0, side: THREE.DoubleSide, toneMapped: false })
+      ]
     );
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
     mesh.name = `Baseboard ${wall.index + 1} Segment`;
     this.tagCutawaySurface(mesh, wall);
     this.tagExportPart(mesh, 'Floors', `baseboard:${wall.id}`, `Baseboard ${wall.index + 1}`, this.wallYaw(wall));
@@ -1678,8 +1834,10 @@ void main() {
   private addOpeningFrame(opening: PlannerSnapshot['openings'][number], snapshot: PlannerSnapshot, wallThickness: number) {
     const wall = getRoomWalls(snapshot.room).find((candidate) => candidate.id === opening.wallId);
     if (!wall) return;
-    const frame = 0.05;
-    const frameDepth = wallThickness + 0.012;
+    const isWindow = opening.type === 'window';
+    const frame = isWindow ? 0.04 : 0.075;
+    const frameDepth = wallThickness + (isWindow ? 0.02 : 0.04);
+    const casingColor = isWindow ? 0xdad8d5 : 0xe3e0dc;
     const bottom = opening.sillHeight;
     const top = Math.min(snapshot.room.height, bottom + opening.height);
     const yaw = this.wallYaw(wall);
@@ -1697,13 +1855,19 @@ void main() {
       this.wallsGroup.add(mesh);
       return mesh;
     };
-    const alignedBox = (along: number, y: number, alongSize: number, boxHeight: number, depth: number, normalOffset = 0, color: THREE.ColorRepresentation = TRIM_COLOR) => {
+    const alignedBox = (along: number, y: number, alongSize: number, boxHeight: number, depth: number, normalOffset = 0, color: THREE.ColorRepresentation = TRIM_COLOR, stableTrim = false) => {
       const point = wallPoint(wall, along);
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(alongSize, boxHeight, depth), material(color));
+      const trim = stableTrim || color === TRIM_COLOR;
+      const trimColor = color === TRIM_COLOR ? casingColor : color;
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(alongSize, boxHeight, depth),
+        trim ? new THREE.MeshBasicMaterial({ color: trimColor, toneMapped: false }) : material(color)
+      );
       mesh.rotation.y = yaw;
       mesh.position.set(point.x + wall.inward.x * normalOffset, y, point.z + wall.inward.z * normalOffset);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
+      if (trim && typeof trimColor === 'number') mesh.userData.stableTrimColor = trimColor;
+      mesh.castShadow = false;
+      mesh.receiveShadow = !trim;
       return tag(mesh);
     };
     const glassPanel = (along: number, panelWidth: number, panelBottom = bottom, panelTop = top, normalOffset = wallThickness / 2 + 0.004) => {
@@ -1739,11 +1903,16 @@ void main() {
       return;
     }
 
-    // White reveal/frame around every architectural opening.
+    // Door casings are wider and project farther into the room. Window frames
+    // remain slim, with a separate projecting sill instead of a door header.
     alignedBox(opening.offset - opening.width / 2, (top + bottom) / 2, frame, top - bottom, frameDepth);
     alignedBox(opening.offset + opening.width / 2, (top + bottom) / 2, frame, top - bottom, frameDepth);
-    alignedBox(opening.offset, top, opening.width, frame, frameDepth);
-    if (opening.type === 'window') alignedBox(opening.offset, bottom, opening.width, frame, frameDepth);
+    alignedBox(opening.offset, top, opening.width + frame, frame, frameDepth);
+    if (isWindow) {
+      alignedBox(opening.offset, bottom, opening.width + 0.1, 0.04, frameDepth + 0.02, 0.012, 0xf2f0ed, true);
+    } else {
+      alignedBox(opening.offset, top + frame * 0.42, opening.width + frame * 1.55, 0.014, frameDepth + 0.016, 0.008, 0xf3f1ee, true);
+    }
 
     if (opening.type === 'window') {
       const innerWidth = Math.max(0.08, opening.width - 0.08);
@@ -1802,6 +1971,12 @@ void main() {
       const materials = Array.isArray(object.material) ? object.material : [object.material];
       for (const mat of materials) {
         if (mat instanceof THREE.MeshBasicMaterial) {
+          if (typeof object.userData.stableTrimColor === 'number') {
+            mat.color.setHex(active ? SELECTION_COLOR : object.userData.stableTrimColor);
+            mat.opacity = 1;
+            mat.transparent = false;
+            continue;
+          }
           // Custom wall openings use a transparent pick plane only. Never tint/fill it:
           // a selected empty opening must remain a true void, not look like glass.
           if (object.userData.invisiblePick) {
@@ -1868,7 +2043,7 @@ void main() {
     const cutawayChanged = [...nextState.entries()].some(([id, hidden]) => this.wallHiddenState.get(id) !== hidden)
       || this.wallHiddenState.size !== nextState.size;
     this.wallHiddenState = nextState;
-    for (const group of [this.wallsGroup, this.floorGroup]) group.traverse((object) => {
+    for (const group of [this.wallsGroup, this.floorGroup, this.architecturalShadeGroup]) group.traverse((object) => {
       const wallId = typeof object.userData.cutawayWallId === 'string' ? object.userData.cutawayWallId : null;
       const wallIds = Array.isArray(object.userData.cutawayWallIds)
         ? object.userData.cutawayWallIds.filter((id: unknown): id is string => typeof id === 'string')
@@ -2551,7 +2726,7 @@ void main() {
       // Keep room dimensions tucked close to the wall shell so the diagonal end
       // marks nearly kiss the face, matching the product references more closely.
       const offset = hidden ? 0.11 : 0.095;
-      const dimensionY = hidden ? 0.052 : snapshot.room.height + 0.045;
+      const dimensionY = hidden ? -0.08 : snapshot.room.height + 0.045; // lower = farther down
       const start = new THREE.Vector3(wall.start.x + outward.x * offset, dimensionY, wall.start.z + outward.z * offset);
       const end = new THREE.Vector3(wall.end.x + outward.x * offset, dimensionY, wall.end.z + outward.z * offset);
 
