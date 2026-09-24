@@ -91,6 +91,7 @@ interface DomusExportSource {
 interface LoadedFloorMaps {
   color: THREE.Texture | null;
   normal: THREE.Texture | null;
+  height: THREE.Texture | null;
   roughness: THREE.Texture | null;
 }
 
@@ -867,55 +868,93 @@ export class PlannerScene {
     bottomY: number,
     topMaterialIndex = 0,
     bottomMaterialIndex = 0,
-    sideMaterialIndex = 0
+    sideMaterialIndex = 0,
+    topSubdivisionMetres = 0
   ) {
     const count = Math.min(topVertices.length, bottomVertices.length);
     const positions: number[] = [];
     const uvs: number[] = [];
-    // World-space planar UVs: one UV unit equals one metre. This keeps finish
-    // scale stable across rooms and also makes the texture mapping portable in glTF.
-    for (let i = 0; i < count; i += 1) {
-      positions.push(topVertices[i].x, topY, topVertices[i].z);
-      uvs.push(topVertices[i].x, topVertices[i].z);
-    }
-    for (let i = 0; i < count; i += 1) {
-      positions.push(bottomVertices[i].x, bottomY, bottomVertices[i].z);
-      uvs.push(bottomVertices[i].x, bottomVertices[i].z);
-    }
 
-    const indices: number[] = [];
+    const pushVertex = (point: Vec2, y: number) => {
+      positions.push(point.x, y, point.z);
+      // World-space planar UVs: one UV unit equals one metre. Texture.repeat then
+      // converts that into each material's documented physical tile size.
+      uvs.push(point.x, point.z);
+    };
+    const pushTriangle = (a: Vec2, b: Vec2, c: Vec2, y: number) => {
+      pushVertex(a, y);
+      pushVertex(b, y);
+      pushVertex(c, y);
+    };
+    const lerpTrianglePoint = (a: Vec2, b: Vec2, c: Vec2, i: number, j: number, segments: number): Vec2 => {
+      const u = i / segments;
+      const v = j / segments;
+      return {
+        x: a.x + (b.x - a.x) * u + (c.x - a.x) * v,
+        z: a.z + (b.z - a.z) * u + (c.z - a.z) * v
+      };
+    };
+    const pushSubdividedTopTriangle = (a: Vec2, b: Vec2, c: Vec2) => {
+      const longestEdge = Math.max(
+        Math.hypot(b.x - a.x, b.z - a.z),
+        Math.hypot(c.x - b.x, c.z - b.z),
+        Math.hypot(a.x - c.x, a.z - c.z)
+      );
+      const segments = topSubdivisionMetres > 0
+        ? Math.max(1, Math.min(96, Math.ceil(longestEdge / topSubdivisionMetres)))
+        : 1;
+
+      for (let i = 0; i < segments; i += 1) {
+        for (let j = 0; j < segments - i; j += 1) {
+          const p00 = lerpTrianglePoint(a, b, c, i, j, segments);
+          const p10 = lerpTrianglePoint(a, b, c, i + 1, j, segments);
+          const p01 = lerpTrianglePoint(a, b, c, i, j + 1, segments);
+          pushTriangle(p00, p10, p01, topY);
+
+          if (i + j < segments - 1) {
+            const p11 = lerpTrianglePoint(a, b, c, i + 1, j + 1, segments);
+            pushTriangle(p10, p11, p01, topY);
+          }
+        }
+      }
+    };
+
     const topContour = topVertices.slice(0, count).map((v) => new THREE.Vector2(v.x, v.z));
     const bottomContour = bottomVertices.slice(0, count).map((v) => new THREE.Vector2(v.x, v.z));
 
-    const topStart = indices.length;
-    for (const [a, b, c] of THREE.ShapeUtils.triangulateShape(topContour, [])) indices.push(a, b, c);
-    const topCount = indices.length - topStart;
+    const topStart = positions.length / 3;
+    for (const [a, b, c] of THREE.ShapeUtils.triangulateShape(topContour, [])) {
+      // Room contours are authored counter-clockwise in X/Z, which points
+      // their raw triangle normals downward in Y-up space. Reverse the top winding
+      // so normal mapping and vertex displacement operate on an upward floor normal.
+      pushSubdividedTopTriangle(topVertices[a], topVertices[c], topVertices[b]);
+    }
+    const topCount = positions.length / 3 - topStart;
 
-    const bottomStart = indices.length;
-    for (const [a, b, c] of THREE.ShapeUtils.triangulateShape(bottomContour, [])) indices.push(count + c, count + b, count + a);
-    const bottomCount = indices.length - bottomStart;
+    const bottomStart = positions.length / 3;
+    for (const [a, b, c] of THREE.ShapeUtils.triangulateShape(bottomContour, [])) {
+      pushTriangle(bottomVertices[a], bottomVertices[b], bottomVertices[c], bottomY);
+    }
+    const bottomCount = positions.length / 3 - bottomStart;
 
-    const sideStart = indices.length;
+    const sideStart = positions.length / 3;
     for (let i = 0; i < count; i += 1) {
       const j = (i + 1) % count;
-      indices.push(i, j, count + j, i, count + j, count + i);
+      pushVertex(topVertices[i], topY);
+      pushVertex(topVertices[j], topY);
+      pushVertex(bottomVertices[j], bottomY);
+      pushVertex(topVertices[i], topY);
+      pushVertex(bottomVertices[j], bottomY);
+      pushVertex(bottomVertices[i], bottomY);
     }
-    const sideCount = indices.length - sideStart;
+    const sideCount = positions.length / 3 - sideStart;
 
-    const indexed = new THREE.BufferGeometry();
-    indexed.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    indexed.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-    indexed.setIndex(indices);
-    indexed.addGroup(topStart, topCount, topMaterialIndex);
-    indexed.addGroup(bottomStart, bottomCount, bottomMaterialIndex);
-    indexed.addGroup(sideStart, sideCount, sideMaterialIndex);
-
-    // Mitered architectural panels need hard normals. Sharing the perimeter vertices
-    // makes Three.js average the face normals, which visually creates a second soft
-    // edge beside the real cut. Splitting the vertices gives the same crisp edge as
-    // BoxGeometry / the door casing, with no fake seam.
-    const geometry = indexed.toNonIndexed();
-    indexed.dispose();
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geometry.addGroup(topStart, topCount, topMaterialIndex);
+    geometry.addGroup(bottomStart, bottomCount, bottomMaterialIndex);
+    geometry.addGroup(sideStart, sideCount, sideMaterialIndex);
     geometry.computeVertexNormals();
     return geometry;
   }
@@ -939,46 +978,6 @@ export class PlannerScene {
     texture.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
     texture.needsUpdate = true;
     return texture;
-  }
-
-  /**
-   * Carpet011 has useful real fibre detail but its albedo is warm. This derives a
-   * neutral charcoal base-colour from that CC0 photograph while preserving the
-   * photographed pile variation. Normal and roughness maps remain untouched.
-   */
-  private makeDarkGreyCarpetTexture(source: THREE.Texture) {
-    const image = source.image as CanvasImageSource & { width?: number; height?: number; naturalWidth?: number; naturalHeight?: number };
-    const width = image.naturalWidth || image.width || 0;
-    const height = image.naturalHeight || image.height || 0;
-    if (!width || !height) return source;
-
-    try {
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const context = canvas.getContext('2d', { willReadFrequently: true });
-      if (!context) return source;
-      context.drawImage(image, 0, 0, width, height);
-      const pixels = context.getImageData(0, 0, width, height);
-      const data = pixels.data;
-      for (let index = 0; index < data.length; index += 4) {
-        const luminance = data[index] * 0.2126 + data[index + 1] * 0.7152 + data[index + 2] * 0.0722;
-        // Keep a little range in the fibres, but move the whole material into a
-        // dark neutral grey instead of multiplying the original beige/brown hue.
-        const grey = Math.max(48, Math.min(116, 40 + luminance * 0.34));
-        data[index] = grey * 0.94;
-        data[index + 1] = grey * 0.98;
-        data[index + 2] = grey;
-      }
-      context.putImageData(pixels, 0, 0);
-      const graded = new THREE.CanvasTexture(canvas);
-      source.dispose();
-      return graded;
-    } catch {
-      // A texture host without canvas-readable CORS data still gets the original
-      // CC0 colour map instead of breaking the finish load.
-      return source;
-    }
   }
 
   private async loadFloorMap(url: string, name: string, textureWidthMetres: number, srgb: boolean) {
@@ -1005,19 +1004,11 @@ export class PlannerScene {
     const load = Promise.all([
       this.loadFloorMap(definition.maps.color, `${definition.name} Base Color`, definition.textureWidthMetres, true),
       this.loadFloorMap(definition.maps.normal, `${definition.name} Normal`, definition.textureWidthMetres, false),
+      this.loadFloorMap(definition.maps.height, `${definition.name} Height`, definition.textureWidthMetres, false),
       this.loadFloorMap(definition.maps.roughness, `${definition.name} Roughness`, definition.textureWidthMetres, false)
-    ]).then(([loadedColor, normal, roughness]) => {
-      if (this.disposed) return { color: null, normal: null, roughness: null };
-      let color = loadedColor;
-      if (color && definition.colorTreatment === 'dark-grey-carpet') {
-        const treated = this.makeDarkGreyCarpetTexture(color);
-        if (treated !== color) {
-          this.floorMapAssets.delete(color);
-          color = this.configureFloorMap(treated, `${definition.name} Base Color`, definition.textureWidthMetres, true);
-          this.floorMapAssets.add(color);
-        }
-      }
-      const maps = { color, normal, roughness };
+    ]).then(([color, normal, height, roughness]) => {
+      if (this.disposed) return { color: null, normal: null, height: null, roughness: null };
+      const maps = { color, normal, height, roughness };
       this.floorMapResults.set(definition.id, maps);
       return maps;
     });
@@ -1033,10 +1024,11 @@ export class PlannerScene {
   }
 
   private disposeFloorMaterialMaps(material: THREE.MeshStandardMaterial) {
-    const maps = [material.map, material.normalMap, material.roughnessMap];
+    const maps = [material.map, material.normalMap, material.displacementMap, material.roughnessMap];
     for (const texture of maps) texture?.dispose();
     material.map = null;
     material.normalMap = null;
+    material.displacementMap = null;
     material.roughnessMap = null;
   }
 
@@ -1044,6 +1036,11 @@ export class PlannerScene {
     this.disposeFloorMaterialMaps(material);
     material.map = this.cloneFloorMap(maps.color);
     material.normalMap = this.cloneFloorMap(maps.normal);
+    material.displacementMap = this.cloneFloorMap(maps.height);
+    material.displacementScale = definition.heightScale;
+    // Centre authored grayscale displacement around the architectural floor plane
+    // instead of lifting the whole slab by the map's average value.
+    material.displacementBias = -definition.heightScale * 0.5;
     material.roughnessMap = this.cloneFloorMap(maps.roughness);
     material.color.set(maps.color ? 0xffffff : definition.fallbackColor);
     material.normalScale.set(definition.normalScale, definition.normalScale);
@@ -1117,7 +1114,8 @@ export class PlannerScene {
         -FLOOR_THICKNESS,
         1,
         0,
-        2
+        2,
+        0.08
       ),
       [
         new THREE.MeshStandardMaterial({ color: TRIM_COLOR, roughness: 0.82, side: THREE.DoubleSide }),

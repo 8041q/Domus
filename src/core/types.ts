@@ -18,7 +18,14 @@ export type OpeningVariant =
   | 'glass-door'
   | 'glass-double-door'
   | 'wall-opening';
-export type FloorFinish = 'light-oak' | 'warm-oak' | 'stone' | 'concrete';
+export type FloorFinish =
+  | 'carpet-012'
+  | 'wood-floor-057'
+  | 'wood-051'
+  | 'wood-floor-035'
+  | 'terrazzo-005'
+  | 'terrazzo-007'
+  | 'wood-floor-020';
 export type RoomShapeKind = 'rectangle' | 'l-shape' | 'recess' | 'custom';
 export type CeilingLightFixtureType = 'surface-mounted' | 'recessed';
 

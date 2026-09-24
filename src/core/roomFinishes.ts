@@ -9,97 +9,158 @@ export interface FloorFinishDefinition {
   /** Width of one texture tile in real-world metres. */
   textureWidthMetres: number;
   normalScale: number;
+  /** Height-map displacement strength in metres on the architectural floor surface. */
+  heightScale: number;
   /** Matte fallback used before the PBR maps are ready or when a request fails. */
   fallbackRoughness: number;
   /** Planner-only reflection strength. Lower values keep broad studio reflections from reading as gloss. */
   envMapIntensity: number;
-  /** Optional treatment applied to the CC0 base-colour map after it loads. */
-  colorTreatment?: 'dark-grey-carpet';
   previewUrl: string;
   maps: {
     color: string;
     normal: string;
+    height: string;
     roughness: string;
   };
 }
 
 /**
- * Finish ids are persisted in room snapshots, so keep the ids stable even when
- * the displayed material name or renderer treatment evolves.
- *
- * The PBR maps are CC0 assets. 1K maps are used in the planner to keep the UI
- * responsive; GLTFExporter can embed the loaded maps into the exported GLB.
+ * Floor finishes are local ambientCG 1K PNG assets supplied with the project.
+ * Their authored base-colour maps are used directly: there is no floor colour tint
+ * or recolouring option layered over the material.
  */
 export const FLOOR_FINISHES: FloorFinishDefinition[] = [
   {
-    id: 'light-oak',
-    name: 'Wood floor',
-    source: 'Poly Haven · Wood Floor (CC0)',
-    sourceUrl: 'https://polyhaven.com/a/wood_floor',
-    fallbackColor: '#9d7855',
-    textureWidthMetres: 1.7,
-    normalScale: 0.72,
-    fallbackRoughness: 0.92,
-    envMapIntensity: 0.46,
-    previewUrl: 'https://cdn.polyhaven.com/asset_img/map_previews/wood_floor/wood_floor_diff_1k.jpg?width=192&height=128&quality=90',
-    maps: {
-      color: 'https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/wood_floor/wood_floor_diff_1k.jpg',
-      normal: 'https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/wood_floor/wood_floor_nor_gl_1k.jpg',
-      roughness: 'https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/wood_floor/wood_floor_rough_1k.jpg'
-    }
-  },
-  {
-    id: 'warm-oak',
-    name: 'Floating floor',
-    source: 'Poly Haven · Laminate Floor 03 (CC0)',
-    sourceUrl: 'https://polyhaven.com/a/laminate_floor_03',
-    fallbackColor: '#a57a52',
-    textureWidthMetres: 2.1,
-    normalScale: 0.58,
-    fallbackRoughness: 0.9,
+    id: 'wood-floor-057',
+    name: 'Wood Floor 057',
+    source: 'ambientCG · WoodFloor057 (CC0)',
+    sourceUrl: 'https://ambientcg.com/view?id=WoodFloor057',
+    fallbackColor: '#9b7654',
+    textureWidthMetres: 3.2,
+    normalScale: 0.82,
+    heightScale: 0.0018,
+    fallbackRoughness: 0.72,
     envMapIntensity: 0.42,
-    previewUrl: 'https://cdn.polyhaven.com/asset_img/map_previews/laminate_floor_03/laminate_floor_03_diff_1k.jpg?width=192&height=128&quality=90',
+    previewUrl: '/materials/floors/wood-floor-057/color.png',
     maps: {
-      color: 'https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/laminate_floor_03/laminate_floor_03_diff_1k.jpg',
-      normal: 'https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/laminate_floor_03/laminate_floor_03_nor_gl_1k.jpg',
-      roughness: 'https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/laminate_floor_03/laminate_floor_03_rough_1k.jpg'
+      color: '/materials/floors/wood-floor-057/color.png',
+      normal: '/materials/floors/wood-floor-057/normalgl.png',
+      height: '/materials/floors/wood-floor-057/displacement.png',
+      roughness: '/materials/floors/wood-floor-057/roughness.png'
     }
   },
   {
-    id: 'stone',
-    name: 'Dark grey carpet',
-    source: 'ambientCG · Carpet 011 (CC0), neutral dark-grey grade',
-    sourceUrl: 'https://ambientcg.com/view?id=Carpet011',
-    fallbackColor: '#4d5153',
-    // ambientCG's legacy Carpet011 does not publish a physical scan width.
-    // Treating the seamless tile as 1 m keeps the pile detail at a useful room scale.
+    id: 'wood-051',
+    name: 'Wood 051',
+    source: 'ambientCG · Wood051 (CC0)',
+    sourceUrl: 'https://ambientcg.com/view?id=Wood051',
+    fallbackColor: '#8b6546',
+    textureWidthMetres: 0.8,
+    normalScale: 0.8,
+    heightScale: 0.0015,
+    fallbackRoughness: 0.76,
+    envMapIntensity: 0.4,
+    previewUrl: '/materials/floors/wood-051/color.png',
+    maps: {
+      color: '/materials/floors/wood-051/color.png',
+      normal: '/materials/floors/wood-051/normalgl.png',
+      height: '/materials/floors/wood-051/displacement.png',
+      roughness: '/materials/floors/wood-051/roughness.png'
+    }
+  },
+  {
+    id: 'wood-floor-035',
+    name: 'Wood Floor 035',
+    source: 'ambientCG · WoodFloor035 (CC0)',
+    sourceUrl: 'https://ambientcg.com/view?id=WoodFloor035',
+    fallbackColor: '#9c7652',
+    textureWidthMetres: 1.9,
+    normalScale: 0.82,
+    heightScale: 0.0018,
+    fallbackRoughness: 0.74,
+    envMapIntensity: 0.4,
+    previewUrl: '/materials/floors/wood-floor-035/color.png',
+    maps: {
+      color: '/materials/floors/wood-floor-035/color.png',
+      normal: '/materials/floors/wood-floor-035/normalgl.png',
+      height: '/materials/floors/wood-floor-035/displacement.png',
+      roughness: '/materials/floors/wood-floor-035/roughness.png'
+    }
+  },
+  {
+    id: 'wood-floor-020',
+    name: 'Wood Floor 020',
+    source: 'ambientCG · WoodFloor020 (CC0)',
+    sourceUrl: 'https://ambientcg.com/view?id=WoodFloor020',
+    fallbackColor: '#a7815e',
+    textureWidthMetres: 1,
+    normalScale: 0.78,
+    heightScale: 0.0015,
+    fallbackRoughness: 0.76,
+    envMapIntensity: 0.4,
+    previewUrl: '/materials/floors/wood-floor-020/color.png',
+    maps: {
+      color: '/materials/floors/wood-floor-020/color.png',
+      normal: '/materials/floors/wood-floor-020/normalgl.png',
+      height: '/materials/floors/wood-floor-020/displacement.png',
+      roughness: '/materials/floors/wood-floor-020/roughness.png'
+    }
+  },
+  {
+    id: 'terrazzo-005',
+    name: 'Terrazzo 005',
+    source: 'ambientCG · Terrazzo005 (CC0)',
+    sourceUrl: 'https://ambientcg.com/view?id=Terrazzo005',
+    fallbackColor: '#b7b1a8',
+    textureWidthMetres: 1,
+    normalScale: 0.65,
+    heightScale: 0.0008,
+    fallbackRoughness: 0.82,
+    envMapIntensity: 0.34,
+    previewUrl: '/materials/floors/terrazzo-005/color.png',
+    maps: {
+      color: '/materials/floors/terrazzo-005/color.png',
+      normal: '/materials/floors/terrazzo-005/normalgl.png',
+      height: '/materials/floors/terrazzo-005/displacement.png',
+      roughness: '/materials/floors/terrazzo-005/roughness.png'
+    }
+  },
+  {
+    id: 'terrazzo-007',
+    name: 'Terrazzo 007',
+    source: 'ambientCG · Terrazzo007 (CC0)',
+    sourceUrl: 'https://ambientcg.com/view?id=Terrazzo007',
+    fallbackColor: '#aaa49d',
+    textureWidthMetres: 1,
+    normalScale: 0.65,
+    heightScale: 0.0008,
+    fallbackRoughness: 0.82,
+    envMapIntensity: 0.34,
+    previewUrl: '/materials/floors/terrazzo-007/color.png',
+    maps: {
+      color: '/materials/floors/terrazzo-007/color.png',
+      normal: '/materials/floors/terrazzo-007/normalgl.png',
+      height: '/materials/floors/terrazzo-007/displacement.png',
+      roughness: '/materials/floors/terrazzo-007/roughness.png'
+    }
+  },
+  {
+    id: 'carpet-012',
+    name: 'Carpet 012',
+    source: 'ambientCG · Carpet012 (CC0)',
+    sourceUrl: 'https://ambientcg.com/view?id=Carpet012',
+    fallbackColor: '#77736d',
     textureWidthMetres: 1,
     normalScale: 1.05,
-    fallbackRoughness: 1,
-    envMapIntensity: 0.16,
-    colorTreatment: 'dark-grey-carpet',
-    previewUrl: 'https://commons.wikimedia.org/wiki/Special:Redirect/file/Carpet011%20PREVIEW.jpg?width=192',
+    heightScale: 0.004,
+    fallbackRoughness: 0.96,
+    envMapIntensity: 0.18,
+    previewUrl: '/materials/floors/carpet-012/color.png',
     maps: {
-      color: 'https://commons.wikimedia.org/wiki/Special:Redirect/file/Carpet011%208K%20Color.png?width=1024',
-      normal: 'https://commons.wikimedia.org/wiki/Special:Redirect/file/Carpet011%208K%20NormalGL.png?width=1024',
-      roughness: 'https://commons.wikimedia.org/wiki/Special:Redirect/file/Carpet011%208K%20Roughness.png?width=1024'
-    }
-  },
-  {
-    id: 'concrete',
-    name: 'Vinyl',
-    source: 'Poly Haven · Old Linoleum Flooring 01 (CC0)',
-    sourceUrl: 'https://polyhaven.com/a/old_linoleum_flooring_01',
-    fallbackColor: '#b59d78',
-    textureWidthMetres: 2,
-    normalScale: 0.46,
-    fallbackRoughness: 0.94,
-    envMapIntensity: 0.34,
-    previewUrl: 'https://cdn.polyhaven.com/asset_img/map_previews/old_linoleum_flooring_01/old_linoleum_flooring_01_diff_1k.jpg?width=192&height=128&quality=90',
-    maps: {
-      color: 'https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/old_linoleum_flooring_01/old_linoleum_flooring_01_diff_1k.jpg',
-      normal: 'https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/old_linoleum_flooring_01/old_linoleum_flooring_01_nor_gl_1k.jpg',
-      roughness: 'https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/old_linoleum_flooring_01/old_linoleum_flooring_01_rough_1k.jpg'
+      color: '/materials/floors/carpet-012/color.png',
+      normal: '/materials/floors/carpet-012/normalgl.png',
+      height: '/materials/floors/carpet-012/displacement.png',
+      roughness: '/materials/floors/carpet-012/roughness.png'
     }
   }
 ];
@@ -115,4 +176,8 @@ export const WALL_FINISHES = [
 
 export function floorFinishDefinition(id: FloorFinish) {
   return FLOOR_FINISHES.find((finish) => finish.id === id) ?? FLOOR_FINISHES[0];
+}
+
+export function normalizeFloorFinish(id: unknown): FloorFinish {
+  return FLOOR_FINISHES.find((finish) => finish.id === id)?.id ?? FLOOR_FINISHES[0].id;
 }

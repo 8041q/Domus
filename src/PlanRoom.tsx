@@ -169,8 +169,7 @@ function FinishesPanel({ onClose }: { onClose: () => void }) {
           >
             <span style={{
               backgroundImage: `url(${floor.previewUrl})`,
-              backgroundColor: floor.fallbackColor,
-              filter: floor.colorTreatment === 'dark-grey-carpet' ? 'grayscale(1) brightness(.48) contrast(1.12)' : undefined
+              backgroundColor: floor.fallbackColor
             }} />{floor.name}
           </button>
         ))}

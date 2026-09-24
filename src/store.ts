@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { PRODUCTS, rotatedFootprint } from './core/products';
 import { objectsOverlap, resolvePlacement, resolveRotationPlacement } from './core/placement';
 import { SnapshotHistory } from './core/history';
+import { normalizeFloorFinish } from './core/roomFinishes';
 import {
   findNearestValidPosition,
   getRoomWalls,
@@ -94,7 +95,7 @@ const defaultRoom: RoomState = {
   depth: 3.8,
   height: 2.6,
   wallColor: '#eeeae1',
-  floorFinish: 'light-oak',
+  floorFinish: 'wood-floor-057',
   lighting: {
     enabled: true,
     fixtureType: 'surface-mounted',
@@ -145,6 +146,7 @@ function ensureRoom(raw: Partial<RoomState>): RoomState {
     width,
     depth,
     height: Math.max(2.1, Math.min(Number(raw.height) || defaultRoom.height, 4.2)),
+    floorFinish: normalizeFloorFinish(raw.floorFinish),
     shapeKind: raw.shapeKind ?? (vertices.length === 4 ? 'rectangle' : 'custom'),
     vertices
   } as RoomState, vertices);
