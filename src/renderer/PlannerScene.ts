@@ -116,9 +116,12 @@ export class PlannerScene {
   private lightFixtureGroup = new THREE.Group();
   private interiorLightGroup = new THREE.Group();
   private daylightGroup = new THREE.Group();
+  private sunsetGroup = new THREE.Group();
+  private contactShadowGroup = new THREE.Group();
   private objectGroup = new THREE.Group();
   private helperGroup = new THREE.Group();
   private objectModels = new Map<string, THREE.Group>();
+  private contactShadows = new Map<string, THREE.Group>();
   private dragging: {
     id: string;
     before: PlannerSnapshot;
@@ -181,7 +184,7 @@ export class PlannerScene {
     // Start open by construction. The first camera evaluation may opt into the
     // ceiling, but there is never a one-frame closed-room flash while Plan Room mounts.
     this.ceilingGroup.visible = false;
-    this.scene.add(this.floorGroup, this.wallsGroup, this.ceilingGroup, this.architecturalShadeGroup, this.lightFixtureGroup, this.interiorLightGroup, this.daylightGroup, this.objectGroup, this.helperGroup);
+    this.scene.add(this.floorGroup, this.wallsGroup, this.ceilingGroup, this.architecturalShadeGroup, this.lightFixtureGroup, this.interiorLightGroup, this.daylightGroup, this.sunsetGroup, this.contactShadowGroup, this.objectGroup, this.helperGroup);
 
     // Screen-space silhouette outlining matches the reference planner: the selected
     // product gets one crisp yellow contour, independent of its component meshes.
@@ -289,6 +292,8 @@ export class PlannerScene {
     this.disposeGroup(this.lightFixtureGroup);
     this.disposeGroup(this.interiorLightGroup);
     this.disposeGroup(this.daylightGroup);
+    this.disposeGroup(this.sunsetGroup);
+    this.disposeGroup(this.contactShadowGroup);
     this.disposeGroup(this.objectGroup);
     this.disposeGroup(this.helperGroup);
     for (const texture of this.floorMapAssets) texture.dispose();
@@ -709,6 +714,7 @@ export class PlannerScene {
     } else if (openingsKey !== this.lastOpeningsKey) {
       this.rebuildWalls(snapshot);
       this.rebuildWindowDaylighting(snapshot);
+      this.rebuildSunset(snapshot);
       architectureChanged = true;
       this.lastOpeningsKey = openingsKey;
     }
@@ -966,8 +972,8 @@ export class PlannerScene {
     texture.name = name;
     texture.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
 
-    // Most finishes use ordinary repeat wrapping. Mirrored repeat remains available
-    // as an opt-in, but carpet anti-tiling is handled in the material shader instead.
+    // Carpets mirror at their mismatched image edges. Directional wood and
+    // terrazzo use ordinary repeat wrapping.
     const wrapping = wrapMode === 'mirror'
       ? THREE.MirroredRepeatWrapping
       : THREE.RepeatWrapping;
@@ -1092,11 +1098,7 @@ export class PlannerScene {
     material.needsUpdate = true;
   }
 
-  /**
-   * Break source-tile repetition for non-directional carpet and terrazzo. Three
-   * decorrelated samples blend on a triangular lattice instead of a square grid.
-   * Their unused PBR maps stay disabled so lighting cannot reveal the old repeat.
-   */
+  /** Remove the broad source-image shading and break terrazzo repetition. */
   private configureFloorMaterialShader(
     material: THREE.MeshStandardMaterial,
     definition: FloorFinishDefinition
@@ -1107,19 +1109,24 @@ export class PlannerScene {
       return;
     }
 
-    if (definition.id === 'carpet-011' || definition.id === 'carpet-012'
-      || definition.id === 'terrazzo-005' || definition.id === 'terrazzo-007') {
-      const coarseLevel = definition.id.startsWith('carpet') ? '5.0' : '6.0';
+    if (definition.id === 'carpet-011' || definition.id === 'carpet-012') {
       material.onBeforeCompile = (shader) => {
         shader.fragmentShader = shader.fragmentShader.replace(
           '#include <map_fragment>',
           `
 #ifdef USE_MAP
   // The carpet source has broad photographed light/dark patches and mismatched
-  // opposite edges. Mirrored wrapping closes the edges; subtracting the coarse
-  // mip removes the repeated photographic shading but keeps the fine pile.
-  vec4 carpetDetail = texture(map, vMapUv);
-  vec4 carpetCoarse = textureLod(map, vMapUv, ${coarseLevel});
+  // opposite edges. Mirrored wrapping closes the edges. A continuous UV warp
+  // hides mirror symmetry, while coarse-mip removal preserves only fine pile.
+  vec2 carpetUv = vMapUv;
+  vec2 warpedUv = carpetUv + vec2(
+    0.08 * sin(carpetUv.y * 2.7 + sin(carpetUv.x * 1.1))
+      + 0.025 * sin(carpetUv.x * 4.5 + carpetUv.y * 1.8),
+    0.08 * sin(carpetUv.x * 2.9 + sin(carpetUv.y * 1.3))
+      + 0.025 * sin(carpetUv.y * 4.2 - carpetUv.x * 1.7)
+  );
+  vec4 carpetDetail = texture(map, warpedUv);
+  vec4 carpetCoarse = textureLod(map, warpedUv, 5.0);
   vec4 carpetMean = textureLod(map, vec2(0.5), 10.0);
   vec4 sampledDiffuseColor = clamp(
     carpetDetail - 0.9 * (carpetCoarse - carpetMean),
@@ -1130,80 +1137,43 @@ export class PlannerScene {
 `
         );
       };
-      material.customProgramCacheKey = () => 'domus-carpet-highpass-v1';
+      material.customProgramCacheKey = () => 'domus-carpet-warp-highpass-v2';
       return;
     }
 
-    material.onBeforeCompile = (shader) => {
-      shader.fragmentShader = shader.fragmentShader.replace(
-        'void main() {',
-        `
-vec2 domusFloorHash(vec2 p) {
-  p = vec2(
-    dot(p, vec2(127.1, 311.7)),
-    dot(p, vec2(269.5, 183.3))
-  );
-  return fract(sin(p) * 43758.5453123);
-}
-
-void main() {
-`
-      );
-
-      shader.fragmentShader = shader.fragmentShader.replace(
-        '#include <map_fragment>',
-        `
+    if (definition.id === 'terrazzo-005' || definition.id === 'terrazzo-007') {
+      material.onBeforeCompile = (shader) => {
+        shader.fragmentShader = shader.fragmentShader.replace(
+          '#include <map_fragment>',
+          `
 #ifdef USE_MAP
+  // A gentle, continuous domain warp makes the 1 m chip pattern aperiodic
+  // without blending regions of different texture density into visible patches.
   vec2 floorUv = vMapUv;
-
-  // Barycentric blending stays continuous across the irregular triangle edges.
-  const float regionSize = 1.7;
-  vec2 latticeUv = vec2(
-    floorUv.x - floorUv.y * 0.57735027,
-    floorUv.y * 1.15470054
-  ) / regionSize;
-  vec2 cell = floor(latticeUv);
-  vec2 local = fract(latticeUv);
-  vec2 vertexA;
-  vec2 vertexB;
-  vec2 vertexC;
-  vec3 weights;
-  if (local.x + local.y < 1.0) {
-    vertexA = cell;
-    vertexB = cell + vec2(1.0, 0.0);
-    vertexC = cell + vec2(0.0, 1.0);
-    weights = vec3(1.0 - local.x - local.y, local.x, local.y);
-  } else {
-    vertexA = cell + vec2(1.0, 1.0);
-    vertexB = cell + vec2(0.0, 1.0);
-    vertexC = cell + vec2(1.0, 0.0);
-    weights = vec3(local.x + local.y - 1.0, 1.0 - local.x, 1.0 - local.y);
-  }
-
-  // Keep individual carpet fibres and terrazzo chips crisp across most of
-  // each region; blend only the transition between source phases.
-  weights *= weights;
-  weights *= weights;
-  weights /= weights.x + weights.y + weights.z;
-
-  vec2 dx = dFdx(floorUv);
-  vec2 dy = dFdy(floorUv);
-  vec4 sampleA = textureGrad(map, floorUv + domusFloorHash(vertexA) * 13.0, dx, dy);
-  vec4 sampleB = textureGrad(map, floorUv + domusFloorHash(vertexB) * 13.0, dx, dy);
-  vec4 sampleC = textureGrad(map, floorUv + domusFloorHash(vertexC) * 13.0, dx, dy);
-  vec4 sampledDiffuseColor = sampleA * weights.x + sampleB * weights.y + sampleC * weights.z;
-
-  #ifdef DECODE_VIDEO_TEXTURE
-    sampledDiffuseColor = sRGBTransferEOTF(sampledDiffuseColor);
-  #endif
-
+  vec2 warpedUv = floorUv + vec2(
+    0.065 * sin(floorUv.y * 2.7 + sin(floorUv.x * 1.1))
+      + 0.018 * sin(floorUv.x * 4.5 + floorUv.y * 1.8),
+    0.065 * sin(floorUv.x * 2.9 + sin(floorUv.y * 1.3))
+      + 0.018 * sin(floorUv.y * 4.2 - floorUv.x * 1.7)
+  );
+  vec4 terrazzoDetail = texture(map, warpedUv);
+  vec4 terrazzoCoarse = textureLod(map, warpedUv, 6.0);
+  vec4 terrazzoMean = textureLod(map, vec2(0.5), 10.0);
+  vec4 sampledDiffuseColor = clamp(
+    terrazzoDetail - 0.85 * (terrazzoCoarse - terrazzoMean),
+    0.0, 1.0
+  );
   diffuseColor *= sampledDiffuseColor;
 #endif
 `
-      );
-    };
+        );
+      };
+      material.customProgramCacheKey = () => 'domus-terrazzo-warp-v1';
+      return;
+    }
 
-    material.customProgramCacheKey = () => 'domus-floor-triangle-antitile-v3';
+    material.onBeforeCompile = () => {};
+    material.customProgramCacheKey = () => 'domus-floor-standard-v1';
   }
 
   private createFloorMaterial(definition: FloorFinishDefinition) {
@@ -1293,6 +1263,7 @@ void main() {
     this.rebuildCeiling(snapshot);
     this.rebuildCeilingLighting(snapshot);
     this.rebuildWindowDaylighting(snapshot);
+    this.rebuildSunset(snapshot);
     this.applyRoomLighting(snapshot);
   }
 
@@ -1555,11 +1526,78 @@ void main() {
     }
   }
 
+  /** One low, warm source enters through the first real window. It is additive to
+   * the established room rig and owns only its own furniture shadow map. */
+  private rebuildSunset(snapshot: PlannerSnapshot) {
+    this.disposeGroup(this.sunsetGroup);
+    const walls = getRoomWalls(snapshot.room);
+    const opening = snapshot.openings.find((candidate) =>
+      candidate.type === 'window' && walls.some((wall) => wall.id === candidate.wallId));
+    if (!opening) return;
+
+    const wall = walls.find((candidate) => candidate.id === opening.wallId)!;
+    const centre = wallPoint(wall, opening.offset);
+    const inward = new THREE.Vector3(wall.inward.x, 0, wall.inward.z);
+    const source = new THREE.Vector3(centre.x, opening.sillHeight + opening.height * 0.7, centre.z)
+      .addScaledVector(inward, -1.7);
+    const target = new THREE.Vector3(centre.x, 0.32, centre.z)
+      .addScaledVector(inward, 2.4);
+    // The cone extends beyond the glazing at the wall plane; the shadow-only
+    // aperture below, rather than the circular spot boundary, shapes the beam.
+    const angle = THREE.MathUtils.clamp(
+      Math.atan(Math.max(opening.width, opening.height) * 0.85 / 1.7),
+      THREE.MathUtils.degToRad(24),
+      THREE.MathUtils.degToRad(42)
+    );
+    const sunset = new THREE.SpotLight(0xff984e, 32, 9, angle, 0.35, 2);
+    sunset.position.copy(source);
+    sunset.target.position.copy(target);
+    sunset.castShadow = true;
+    sunset.shadow.mapSize.set(1024, 1024);
+    sunset.shadow.bias = -0.00012;
+    sunset.shadow.normalBias = 0.01;
+    sunset.shadow.radius = 4;
+    sunset.name = 'Window sunset';
+    this.sunsetGroup.add(sunset, sunset.target);
+
+    // Invisible wall pieces form a rectangular aperture in this light's shadow
+    // map. They write no pixels in the normal render and no depth in the
+    // established room shadow map, so only the sunset gains a window silhouette.
+    const maskMaterial = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });
+    const wallYaw = -Math.atan2(wall.tangent.z, wall.tangent.x);
+    const addMask = (along: number, bottom: number, width: number, height: number) => {
+      if (width <= 0.001 || height <= 0.001) return;
+      const point = wallPoint(wall, along);
+      const mask = new THREE.Mesh(new THREE.BoxGeometry(width, height, 0.04), maskMaterial);
+      mask.position.set(point.x, bottom + height / 2, point.z);
+      mask.rotation.y = wallYaw;
+      mask.castShadow = true;
+      mask.onBeforeShadow = (_renderer, _object, _camera, shadowCamera, _geometry, depthMaterial) => {
+        const isSunset = shadowCamera === sunset.shadow.camera;
+        depthMaterial.depthWrite = isSunset;
+        depthMaterial.colorWrite = isSunset;
+      };
+      mask.onAfterShadow = (_renderer, _object, _camera, _shadowCamera, _geometry, depthMaterial) => {
+        depthMaterial.depthWrite = true;
+        depthMaterial.colorWrite = true;
+      };
+      this.sunsetGroup.add(mask);
+    };
+    const left = Math.max(0, opening.offset - opening.width / 2);
+    const right = Math.min(wall.length, opening.offset + opening.width / 2);
+    const top = Math.min(snapshot.room.height, opening.sillHeight + opening.height);
+    addMask(left / 2, 0, left, snapshot.room.height);
+    addMask((wall.length + right) / 2, 0, wall.length - right, snapshot.room.height);
+    addMask((left + right) / 2, 0, right - left, opening.sillHeight);
+    addMask((left + right) / 2, top, right - left, snapshot.room.height - top);
+  }
+
   private applyRoomLighting(snapshot: PlannerSnapshot) {
     const enabled = snapshot.room.lighting.enabled;
     const hasDaylight = this.daylightGroup.children.length > 0;
     // The broad terms stand in for bounced indoor light. Fixtures supply a
-    // visible ceiling cue; the single shadow caster supplies depth on furniture.
+    // visible ceiling cue; the original shadow caster still projects furniture
+    // shadows onto the room, while contact AO sits beneath each model.
     this.hemiLight.intensity = enabled ? 1.15 : 0.95;
     this.ambientLight.intensity = enabled ? 0.38 : 0.28;
     this.mainLight.intensity = enabled ? 0.82 : (hasDaylight ? 0.78 : 0.88);
@@ -2170,6 +2208,10 @@ void main() {
         this.disposeGroup(this.objectGroup);
         this.objectModels.clear();
       }
+      if (this.contactShadows.size) {
+        this.disposeGroup(this.contactShadowGroup);
+        this.contactShadows.clear();
+      }
       return;
     }
 
@@ -2179,6 +2221,12 @@ void main() {
       this.disposeObject(group);
       this.objectGroup.remove(group);
       this.objectModels.delete(id);
+      const contact = this.contactShadows.get(id);
+      if (contact) {
+        this.disposeGroup(contact);
+        this.contactShadowGroup.remove(contact);
+        this.contactShadows.delete(id);
+      }
     }
 
     let outlined: THREE.Group | null = null;
@@ -2194,9 +2242,17 @@ void main() {
         group.traverse((node) => { node.userData.objectId = object.id; });
         this.objectModels.set(object.id, group);
         this.objectGroup.add(group);
+        const contact = this.createContactShadow(object.productId);
+        this.contactShadows.set(object.id, contact);
+        this.contactShadowGroup.add(contact);
       }
       group.position.set(object.x, 0, object.z);
       group.rotation.y = object.rotationY;
+      const contact = this.contactShadows.get(object.id);
+      if (contact) {
+        contact.position.set(object.x, 0, object.z);
+        contact.rotation.y = object.rotationY;
+      }
       if (object.id === snapshot.selectedId) outlined = group;
     }
     this.outlinePass.selectedObjects = outlined ? [outlined] : [];
@@ -2211,19 +2267,107 @@ void main() {
     });
   }
 
+  /** Soft floor occlusion follows the actual support points, independently of
+   * the directional and window shadows. It never alters the model material. */
+  private createContactShadow(id: keyof typeof PRODUCTS) {
+    const p = PRODUCTS[id];
+    const group = new THREE.Group();
+    const patch = (width: number, depth: number, x: number, z: number, feather: number, opacity: number, round = false) => {
+      const extent = new THREE.Vector2(width + feather * 2, depth + feather * 2);
+      const material = new THREE.ShaderMaterial({
+        transparent: true,
+        depthWrite: false,
+        uniforms: {
+          uExtent: { value: extent },
+          uHalf: { value: new THREE.Vector2(width / 2, depth / 2) },
+          uFeather: { value: feather },
+          uOpacity: { value: opacity },
+          uRound: { value: round ? 1 : 0 }
+        },
+        vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+        fragmentShader: `
+          varying vec2 vUv;
+          uniform vec2 uExtent;
+          uniform vec2 uHalf;
+          uniform float uFeather;
+          uniform float uOpacity;
+          uniform int uRound;
+          void main() {
+            vec2 p = (vUv - 0.5) * uExtent;
+            vec2 q = abs(p) - uHalf;
+            float rectDistance = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
+            float circleDistance = length(p) - uHalf.x;
+            float distanceToContact = uRound == 1 ? circleDistance : rectDistance;
+            float alpha = uOpacity * (1.0 - smoothstep(-0.012, uFeather, distanceToContact));
+            gl_FragColor = vec4(0.10, 0.09, 0.08, alpha);
+          }
+        `
+      });
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(extent.x, extent.y), material);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.set(x, 0.006, z);
+      mesh.renderOrder = 2;
+      mesh.frustumCulled = false;
+      group.add(mesh);
+    };
+
+    if (id === 'sofa' || id === 'armchair') {
+      patch(p.width * 0.72, p.depth * 0.55, 0, 0.03, 0.02, 0.10);
+      for (const x of [-p.width * 0.38, p.width * 0.38]) {
+        for (const z of [-p.depth * 0.28, p.depth * 0.28]) patch(0.07, 0.07, x, z, 0.02, 0.32);
+      }
+    } else if (id === 'dining-table' || id === 'coffee-table') {
+      for (const x of [-p.width * 0.39, p.width * 0.39]) {
+        for (const z of [-p.depth * 0.36, p.depth * 0.36]) patch(0.08, 0.08, x, z, 0.02, 0.32);
+      }
+    } else if (id === 'chair') {
+      for (const x of [-p.width * 0.32, p.width * 0.32]) {
+        for (const z of [-p.depth * 0.28, p.depth * 0.28]) patch(0.055, 0.055, x, z, 0.02, 0.28);
+      }
+    } else if (id === 'cabinet' || id === 'bookcase') {
+      patch(p.width, p.depth, 0, 0, 0.02, 0.36);
+    } else if (id === 'rug') {
+      patch(p.width, p.depth, 0, 0, 0.05, 0.10);
+    } else if (id === 'plant') {
+      patch(0.31, 0.31, 0, 0, 0.05, 0.34, true);
+    }
+    return group;
+  }
+
+  /** A fixed, neutral shape cue keeps unlit placeholder geometry readable.
+   * It depends only on face orientation, with no room lights or occlusion. */
+  private shadeModelFaces(group: THREE.Group) {
+    group.traverse((node) => {
+      if (!(node instanceof THREE.Mesh)) return;
+      const normals = node.geometry.getAttribute('normal');
+      if (!normals) return;
+      const colours = new Float32Array(normals.count * 3);
+      for (let i = 0; i < normals.count; i += 1) {
+        const shade = 0.75 + 0.19 * Math.max(0, normals.getY(i))
+          + 0.06 * Math.max(0, normals.getZ(i));
+        colours[i * 3] = shade;
+        colours[i * 3 + 1] = shade;
+        colours[i * 3 + 2] = shade;
+      }
+      node.geometry.setAttribute('color', new THREE.BufferAttribute(colours, 3));
+    });
+  }
+
   private createPlaceholderModel(id: keyof typeof PRODUCTS) {
     const p = PRODUCTS[id];
     const group = new THREE.Group();
-    const baseMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(p.swatch), roughness: 0.7 });
-    const darkMat = new THREE.MeshStandardMaterial({ color: 0x4d4c48, roughness: 0.7 });
-    const lightMat = new THREE.MeshStandardMaterial({ color: 0xe4dfd4, roughness: 0.76 });
-    const greenMat = new THREE.MeshStandardMaterial({ color: 0x54765a, roughness: 0.72 });
+    // Model colour remains independent of the room rig; contact AO belongs on
+    // the floor underneath it, while castShadow preserves the projected shadow.
+    const baseMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(p.swatch), vertexColors: true });
+    const darkMat = new THREE.MeshBasicMaterial({ color: 0x4d4c48, vertexColors: true });
+    const lightMat = new THREE.MeshBasicMaterial({ color: 0xe4dfd4, vertexColors: true });
+    const greenMat = new THREE.MeshBasicMaterial({ color: 0x54765a, vertexColors: true });
 
     const box = (w: number, h: number, d: number, x: number, y: number, z: number, mat: THREE.Material = baseMat) => {
       const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
       mesh.position.set(x, y, z);
       mesh.castShadow = true;
-      mesh.receiveShadow = true;
+      mesh.receiveShadow = false;
       group.add(mesh);
       return mesh;
     };
@@ -2257,13 +2401,13 @@ void main() {
     } else if (id === 'rug') {
       const rug = new THREE.Mesh(new THREE.BoxGeometry(p.width, p.height, p.depth), baseMat);
       rug.position.y = p.height / 2 + 0.004;
-      rug.receiveShadow = true;
+      rug.receiveShadow = false;
       group.add(rug);
     } else if (id === 'plant') {
       const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.16, 0.32, 18), baseMat);
       pot.position.y = 0.16;
       pot.castShadow = true;
-      pot.receiveShadow = true;
+      pot.receiveShadow = false;
       group.add(pot);
       const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.03, 0.72, 10), darkMat);
       stem.position.y = 0.65;
@@ -2279,6 +2423,7 @@ void main() {
       }
     }
 
+    this.shadeModelFaces(group);
     return group;
   }
 
