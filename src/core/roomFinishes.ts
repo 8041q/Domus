@@ -24,7 +24,7 @@ export interface FloorFinishDefinition {
   /** Disable the roughness texture and use fallbackRoughness as a constant. */
   useRoughnessMap?: boolean;
 
-  /** Apply stochastic colour anti-tiling. Intended for visually random carpets only. */
+  /** Apply stochastic colour anti-tiling to non-directional finishes. */
   antiTile?: boolean;
 
   /** Texture wrapping strategy. Keep directional materials on ordinary repeat wrapping. */
@@ -90,7 +90,7 @@ export const FLOOR_FINISHES: FloorFinishDefinition[] = [
     useHeightMap: false,
     useRoughnessMap: false,
     antiTile: true,
-    wrapMode: 'repeat',
+    wrapMode: 'mirror',
     anisotropy: 8,
     fallbackRoughness: 0.96,
     envMapIntensity: 0.12,
@@ -155,11 +155,13 @@ export const FLOOR_FINISHES: FloorFinishDefinition[] = [
     sourceUrl: 'https://ambientcg.com/view?id=Terrazzo005',
     fallbackColor: '#b7b1a8',
     textureWidthMetres: 1,
-    normalScale: 0.65,
-    heightScale: 0.0008,
-    useNormalMap: true,
-    useHeightMap: true,
-    wrapMode: 'repeat',
+    normalScale: 0,
+    heightScale: 0,
+    useNormalMap: false,
+    useHeightMap: false,
+    useRoughnessMap: false,
+    antiTile: true,
+    wrapMode: 'mirror',
     anisotropy: 8,
     fallbackRoughness: 0.82,
     envMapIntensity: 0.34,
@@ -178,11 +180,13 @@ export const FLOOR_FINISHES: FloorFinishDefinition[] = [
     sourceUrl: 'https://ambientcg.com/view?id=Terrazzo007',
     fallbackColor: '#aaa49d',
     textureWidthMetres: 1,
-    normalScale: 0.65,
-    heightScale: 0.0008,
-    useNormalMap: true,
-    useHeightMap: true,
-    wrapMode: 'repeat',
+    normalScale: 0,
+    heightScale: 0,
+    useNormalMap: false,
+    useHeightMap: false,
+    useRoughnessMap: false,
+    antiTile: true,
+    wrapMode: 'mirror',
     anisotropy: 8,
     fallbackRoughness: 0.82,
     envMapIntensity: 0.34,
@@ -207,7 +211,7 @@ export const FLOOR_FINISHES: FloorFinishDefinition[] = [
     useHeightMap: false,
     useRoughnessMap: false,
     antiTile: true,
-    wrapMode: 'repeat',
+    wrapMode: 'mirror',
     anisotropy: 8,
     fallbackRoughness: 0.96,
     envMapIntensity: 0.12,

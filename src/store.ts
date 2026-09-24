@@ -95,7 +95,7 @@ const defaultRoom: RoomState = {
   depth: 3.8,
   height: 2.6,
   wallColor: '#f2f2f3',
-  floorFinish: 'wood-floor-057',
+  floorFinish: 'carpet-011',
   lighting: {
     enabled: true,
     fixtureType: 'recessed',

@@ -1019,9 +1019,15 @@ export class PlannerScene {
     const anisotropy = definition.anisotropy ?? 8;
     const load = Promise.all([
       this.loadFloorMap(definition.maps.color, `${definition.name} Base Color`, definition.textureWidthMetres, true, wrapMode, anisotropy),
-      this.loadFloorMap(definition.maps.normal, `${definition.name} Normal`, definition.textureWidthMetres, false, wrapMode, anisotropy),
-      this.loadFloorMap(definition.maps.height, `${definition.name} Height`, definition.textureWidthMetres, false, wrapMode, anisotropy),
-      this.loadFloorMap(definition.maps.roughness, `${definition.name} Roughness`, definition.textureWidthMetres, false, wrapMode, anisotropy)
+      definition.useNormalMap === false
+        ? Promise.resolve(null)
+        : this.loadFloorMap(definition.maps.normal, `${definition.name} Normal`, definition.textureWidthMetres, false, wrapMode, anisotropy),
+      definition.useHeightMap === false
+        ? Promise.resolve(null)
+        : this.loadFloorMap(definition.maps.height, `${definition.name} Height`, definition.textureWidthMetres, false, wrapMode, anisotropy),
+      definition.useRoughnessMap === false
+        ? Promise.resolve(null)
+        : this.loadFloorMap(definition.maps.roughness, `${definition.name} Roughness`, definition.textureWidthMetres, false, wrapMode, anisotropy)
     ]).then(([color, normal, height, roughness]) => {
       if (this.disposed) return { color: null, normal: null, height: null, roughness: null };
       const maps = { color, normal, height, roughness };
@@ -1087,10 +1093,9 @@ export class PlannerScene {
   }
 
   /**
-   * Break obvious source-tile repetition for stochastic carpets while preserving the
-   * documented real-world texel scale. Wood and terrazzo keep the stock Three.js shader.
-   * Carpet normal/roughness maps are intentionally disabled in the finish definition so
-   * angled lighting cannot re-introduce the original 1 m tile grid through those channels.
+   * Break source-tile repetition for non-directional carpet and terrazzo. Three
+   * decorrelated samples blend on a triangular lattice instead of a square grid.
+   * Their unused PBR maps stay disabled so lighting cannot reveal the old repeat.
    */
   private configureFloorMaterialShader(
     material: THREE.MeshStandardMaterial,
@@ -1102,11 +1107,38 @@ export class PlannerScene {
       return;
     }
 
+    if (definition.id === 'carpet-011' || definition.id === 'carpet-012'
+      || definition.id === 'terrazzo-005' || definition.id === 'terrazzo-007') {
+      const coarseLevel = definition.id.startsWith('carpet') ? '5.0' : '6.0';
+      material.onBeforeCompile = (shader) => {
+        shader.fragmentShader = shader.fragmentShader.replace(
+          '#include <map_fragment>',
+          `
+#ifdef USE_MAP
+  // The carpet source has broad photographed light/dark patches and mismatched
+  // opposite edges. Mirrored wrapping closes the edges; subtracting the coarse
+  // mip removes the repeated photographic shading but keeps the fine pile.
+  vec4 carpetDetail = texture(map, vMapUv);
+  vec4 carpetCoarse = textureLod(map, vMapUv, ${coarseLevel});
+  vec4 carpetMean = textureLod(map, vec2(0.5), 10.0);
+  vec4 sampledDiffuseColor = clamp(
+    carpetDetail - 0.9 * (carpetCoarse - carpetMean),
+    0.0, 1.0
+  );
+  diffuseColor *= sampledDiffuseColor;
+#endif
+`
+        );
+      };
+      material.customProgramCacheKey = () => 'domus-carpet-highpass-v1';
+      return;
+    }
+
     material.onBeforeCompile = (shader) => {
       shader.fragmentShader = shader.fragmentShader.replace(
         'void main() {',
         `
-vec2 domusCarpetHash(vec2 p) {
+vec2 domusFloorHash(vec2 p) {
   p = vec2(
     dot(p, vec2(127.1, 311.7)),
     dot(p, vec2(269.5, 183.3))
@@ -1122,33 +1154,44 @@ void main() {
         '#include <map_fragment>',
         `
 #ifdef USE_MAP
-  vec2 carpetUv = vMapUv;
+  vec2 floorUv = vMapUv;
 
-  // One macro region spans several authored texture tiles. Four decorrelated
-  // source phases are smoothly blended, so the 1 m repeat remains physically
-  // correct without presenting as a visible 1 m x 1 m grid.
-  const float macroSize = 3.25;
-  vec2 macroUv = carpetUv / macroSize;
-  vec2 macroCell = floor(macroUv);
-  vec2 macroLocal = fract(macroUv);
-  vec2 blendWeight = macroLocal * macroLocal * (3.0 - 2.0 * macroLocal);
+  // Barycentric blending stays continuous across the irregular triangle edges.
+  const float regionSize = 1.7;
+  vec2 latticeUv = vec2(
+    floorUv.x - floorUv.y * 0.57735027,
+    floorUv.y * 1.15470054
+  ) / regionSize;
+  vec2 cell = floor(latticeUv);
+  vec2 local = fract(latticeUv);
+  vec2 vertexA;
+  vec2 vertexB;
+  vec2 vertexC;
+  vec3 weights;
+  if (local.x + local.y < 1.0) {
+    vertexA = cell;
+    vertexB = cell + vec2(1.0, 0.0);
+    vertexC = cell + vec2(0.0, 1.0);
+    weights = vec3(1.0 - local.x - local.y, local.x, local.y);
+  } else {
+    vertexA = cell + vec2(1.0, 1.0);
+    vertexB = cell + vec2(0.0, 1.0);
+    vertexC = cell + vec2(1.0, 0.0);
+    weights = vec3(local.x + local.y - 1.0, 1.0 - local.x, 1.0 - local.y);
+  }
 
-  vec2 phase00 = domusCarpetHash(macroCell) * 13.0;
-  vec2 phase10 = domusCarpetHash(macroCell + vec2(1.0, 0.0)) * 13.0;
-  vec2 phase01 = domusCarpetHash(macroCell + vec2(0.0, 1.0)) * 13.0;
-  vec2 phase11 = domusCarpetHash(macroCell + vec2(1.0, 1.0)) * 13.0;
+  // Keep individual carpet fibres and terrazzo chips crisp across most of
+  // each region; blend only the transition between source phases.
+  weights *= weights;
+  weights *= weights;
+  weights /= weights.x + weights.y + weights.z;
 
-  vec2 dx = dFdx(carpetUv);
-  vec2 dy = dFdy(carpetUv);
-
-  vec4 carpet00 = textureGrad(map, carpetUv + phase00, dx, dy);
-  vec4 carpet10 = textureGrad(map, carpetUv + phase10, dx, dy);
-  vec4 carpet01 = textureGrad(map, carpetUv + phase01, dx, dy);
-  vec4 carpet11 = textureGrad(map, carpetUv + phase11, dx, dy);
-
-  vec4 carpetX0 = mix(carpet00, carpet10, blendWeight.x);
-  vec4 carpetX1 = mix(carpet01, carpet11, blendWeight.x);
-  vec4 sampledDiffuseColor = mix(carpetX0, carpetX1, blendWeight.y);
+  vec2 dx = dFdx(floorUv);
+  vec2 dy = dFdy(floorUv);
+  vec4 sampleA = textureGrad(map, floorUv + domusFloorHash(vertexA) * 13.0, dx, dy);
+  vec4 sampleB = textureGrad(map, floorUv + domusFloorHash(vertexB) * 13.0, dx, dy);
+  vec4 sampleC = textureGrad(map, floorUv + domusFloorHash(vertexC) * 13.0, dx, dy);
+  vec4 sampledDiffuseColor = sampleA * weights.x + sampleB * weights.y + sampleC * weights.z;
 
   #ifdef DECODE_VIDEO_TEXTURE
     sampledDiffuseColor = sRGBTransferEOTF(sampledDiffuseColor);
@@ -1160,7 +1203,7 @@ void main() {
       );
     };
 
-    material.customProgramCacheKey = () => 'domus-carpet-antitile-v2';
+    material.customProgramCacheKey = () => 'domus-floor-triangle-antitile-v3';
   }
 
   private createFloorMaterial(definition: FloorFinishDefinition) {
@@ -2323,7 +2366,6 @@ void main() {
     overlay = true,
     labelHeight = themeMetric('dimension-label-height'),
     labelStyle = 'world',
-    keepUpright = true,
     textOutlinePx = themeMetric('dimension-text-outline-px'),
     targetPixelHeight = themeMetric('room-dimension-label-screen-px'),
     fontWeight = 700
@@ -2338,7 +2380,6 @@ void main() {
     overlay?: boolean;
     labelHeight?: number;
     labelStyle?: 'world' | 'camera-card';
-    keepUpright?: boolean;
     textOutlinePx?: number;
     targetPixelHeight?: number;
     fontWeight?: number;
@@ -2425,39 +2466,17 @@ void main() {
       .multiplyScalar(0.5);
 
     if (labelStyle === 'world') {
-      this.orientMeasurementLabel(
-        label,
-        start,
-        end
-      );
+      label.userData.cameraFacingMeasurementLabel = true;
 
-      if (keepUpright) {
-        label.userData.keepMeasurementUpright = true;
-        label.userData.measurementStart = start.clone();
-        label.userData.measurementEnd = end.clone();
+      label.userData.measurementStart = start.clone();
+      label.userData.measurementEnd = end.clone();
 
-        label.userData.measurementBaseQuaternion =
-          label.quaternion.clone();
-
-        label.userData.measurementFlipped = false;
-      }
-
-      // Data used by updateMeasurementLineGaps()
+      // Room dimensions use their own pair of Line2 objects.
       label.userData.dynamicMeasurementGap = true;
-
-      label.userData.measurementGapStart =
-        start.clone();
-
-      label.userData.measurementGapEnd =
-        end.clone();
-
-      label.userData.measurementGapFirstLine =
-        firstLine;
-
-      label.userData.measurementGapSecondLine =
-        secondLine;
-
-      // Empty screen-space space on EACH side of the text.
+      label.userData.measurementGapStart = start.clone();
+      label.userData.measurementGapEnd = end.clone();
+      label.userData.measurementGapFirstLine = firstLine;
+      label.userData.measurementGapSecondLine = secondLine;
       label.userData.measurementGapPaddingPx = 10;
     }
 
@@ -2644,28 +2663,257 @@ void main() {
     });
   }
 
-  /**
-   * World labels begin flat and aligned to their measurement line. Camera updates
-   * may then pitch the text around its local X axis only; the baseline/yaw remains
-   * tied to the measurement itself.
-   */
-  private orientMeasurementLabel(label: THREE.Object3D, start: THREE.Vector3, end: THREE.Vector3) {
-    const xAxis = end.clone().sub(start).normalize();
-    if (xAxis.lengthSq() < 1e-8) return;
+  private updateSpacingMeasurementLines() {
+    if (
+      !this.spacingDimensionGroup?.visible ||
+      !this.spacingDimensionLines
+    ) {
+      return;
+    }
 
-    // PlaneGeometry local X = text baseline, local Z = face normal. Horizontal
-    // room/spacing labels therefore start flat on the floor with their baseline
-    // following the dimension direction.
-    let zAxis = Math.abs(xAxis.y) > 0.78
-      ? new THREE.Vector3(0, 0, 1)
-      : new THREE.Vector3(0, 1, 0);
-    if (Math.abs(zAxis.dot(xAxis)) > 0.96) zAxis = new THREE.Vector3(1, 0, 0);
+    const viewportWidth =
+      Math.max(1, this.container.clientWidth);
 
-    const yAxis = zAxis.clone().cross(xAxis).normalize();
-    zAxis = xAxis.clone().cross(yAxis).normalize();
+    const viewportHeight =
+      Math.max(1, this.container.clientHeight);
 
-    const basis = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis);
-    label.quaternion.setFromRotationMatrix(basis);
+    const positions: number[] = [];
+
+    const projectedStart = new THREE.Vector3();
+    const projectedEnd = new THREE.Vector3();
+    const corner = new THREE.Vector3();
+
+    const addSegment = (
+      a: THREE.Vector3,
+      b: THREE.Vector3
+    ) => {
+      positions.push(
+        a.x, a.y, a.z,
+        b.x, b.y, b.z
+      );
+    };
+
+    for (const label of this.spacingDimensionLabels.values()) {
+      if (!label.visible) continue;
+
+      const start = label.userData.measurementStart as THREE.Vector3 | undefined;
+
+      const end = label.userData.measurementEnd as THREE.Vector3 | undefined;
+
+      const measurementDirection = label.userData.spacingMeasurementDirection as THREE.Vector3 | undefined;
+
+      if (!start || !end || !measurementDirection) {
+        continue;
+      }
+
+      const worldLength =
+        start.distanceTo(end);
+
+      if (worldLength < 1e-6) {
+        continue;
+      }
+
+      // --------------------------------------------------
+      // Dimension line length on screen
+      // --------------------------------------------------
+
+      projectedStart
+        .copy(start)
+        .project(this.camera);
+
+      projectedEnd
+        .copy(end)
+        .project(this.camera);
+
+      const startPxX =
+        (projectedStart.x * 0.5 + 0.5) *
+        viewportWidth;
+
+      const startPxY =
+        (-projectedStart.y * 0.5 + 0.5) *
+        viewportHeight;
+
+      const endPxX =
+        (projectedEnd.x * 0.5 + 0.5) *
+        viewportWidth;
+
+      const endPxY =
+        (-projectedEnd.y * 0.5 + 0.5) *
+        viewportHeight;
+
+      const dx = endPxX - startPxX;
+      const dy = endPxY - startPxY;
+
+      const screenLength =
+        Math.hypot(dx, dy);
+
+      let gap = Math.min(
+        0.2,
+        worldLength * 0.7
+      );
+
+      if (screenLength > 1e-4) {
+        const pixelsPerWorld =
+          screenLength / worldLength;
+
+        const screenDirX =
+          dx / screenLength;
+
+        const screenDirY =
+          dy / screenLength;
+
+        /*
+        * Spacing labels use a fixed-size canvas/plane,
+        * but the actual text may occupy only part of it.
+        *
+        * dynamicSpacingTextAspect therefore gives a more
+        * accurate visible-text width than labelAspect.
+        */
+        const visibleAspect =
+          Number(
+            label.userData.dynamicSpacingTextAspect
+          ) ||
+          Number(label.userData.labelAspect) ||
+          1;
+
+        label.updateWorldMatrix(true, false);
+
+        const localCorners = [
+          [-visibleAspect / 2, -0.5],
+          [ visibleAspect / 2, -0.5],
+          [ visibleAspect / 2,  0.5],
+          [-visibleAspect / 2,  0.5]
+        ];
+
+        let minProjection = Infinity;
+        let maxProjection = -Infinity;
+
+        for (const [x, y] of localCorners) {
+          corner
+            .set(x, y, 0)
+            .applyMatrix4(label.matrixWorld)
+            .project(this.camera);
+
+          const px =
+            (corner.x * 0.5 + 0.5) *
+            viewportWidth;
+
+          const py =
+            (-corner.y * 0.5 + 0.5) *
+            viewportHeight;
+
+          const projection =
+            px * screenDirX +
+            py * screenDirY;
+
+          minProjection =
+            Math.min(
+              minProjection,
+              projection
+            );
+
+          maxProjection =
+            Math.max(
+              maxProjection,
+              projection
+            );
+        }
+
+        const visibleLabelWidthPx =
+          maxProjection - minProjection;
+
+        const paddingPx =
+          Number(
+            label.userData.spacingGapPaddingPx
+          ) || 10;
+
+        const desiredGapPx =
+          visibleLabelWidthPx +
+          paddingPx * 2;
+
+        const desiredGapWorld =
+          desiredGapPx / pixelsPerWorld;
+
+        gap = THREE.MathUtils.clamp(
+          desiredGapWorld,
+          0.12,
+          worldLength * 0.72
+        );
+      }
+
+      // --------------------------------------------------
+      // Main measurement line
+      // --------------------------------------------------
+
+      if (worldLength > gap + 0.04) {
+        const direction =
+          end
+            .clone()
+            .sub(start)
+            .normalize();
+
+        const mid =
+          start
+            .clone()
+            .add(end)
+            .multiplyScalar(0.5);
+
+        addSegment(
+          start,
+          mid
+            .clone()
+            .addScaledVector(
+              direction,
+              -gap / 2
+            )
+        );
+
+        addSegment(
+          mid
+            .clone()
+            .addScaledVector(
+              direction,
+              gap / 2
+            ),
+          end
+        );
+      } else {
+        // Gap is too short to draw useful side segments.
+        // Leave only the end ticks visible.
+        // addSegment(start, end);
+      }
+
+      // --------------------------------------------------
+      // Spacing end ticks
+      // Keep these independent from the dynamic gap.
+      // --------------------------------------------------
+
+      const perpendicular =
+        new THREE.Vector3(
+          -measurementDirection.z,
+          0,
+          measurementDirection.x
+        ).multiplyScalar(0.05);
+
+      addSegment(
+        start.clone().sub(perpendicular),
+        start.clone().add(perpendicular)
+      );
+
+      addSegment(
+        end.clone().sub(perpendicular),
+        end.clone().add(perpendicular)
+      );
+    }
+
+    const geometry = this.spacingDimensionLines.geometry as LineSegmentsGeometry;
+
+    if (positions.length) {
+      geometry.setPositions(positions);
+      this.spacingDimensionLines.visible = true;
+    } else {
+      this.spacingDimensionLines.visible = false;
+    }
   }
 
   private configureAnnotationTexture(texture: THREE.CanvasTexture) {
@@ -2832,7 +3080,8 @@ void main() {
     this.helperGroup.updateWorldMatrix(true, true);
 
     this.helperGroup.traverse((object) => {
-      if (!object.userData.keepMeasurementUpright) return;
+      if (!object.userData.cameraFacingMeasurementLabel) return;
+      if (!object.visible) return;
 
       const start =
         object.userData.measurementStart as THREE.Vector3 | undefined;
@@ -2842,7 +3091,6 @@ void main() {
 
       if (!start || !end) return;
 
-      // Project the dimension line into screen space.
       projectedStart.copy(start).project(this.camera);
       projectedEnd.copy(end).project(this.camera);
 
@@ -2851,39 +3099,76 @@ void main() {
 
       if (dx * dx + dy * dy < 1e-10) return;
 
-      // Actual dimension-line angle on screen
-      let screenAngle = Math.atan2(dy, dx);
+      // Treat a dimension line as directionless:
+      // 0° and 180° represent the same line.
+      let lineAngle = Math.atan2(dy, dx);
 
-      // Keep text the right way up
-      if (screenAngle > Math.PI / 2) {
-        screenAngle -= Math.PI;
-      } else if (screenAngle < -Math.PI / 2) {
-        screenAngle += Math.PI;
-      }
-
-      // But DON'T allow the text to become vertical
-      const maxLabelRoll = THREE.MathUtils.degToRad(30);
-
-      const readableAngle = THREE.MathUtils.clamp(
-        screenAngle,
-        -maxLabelRoll,
-        maxLabelRoll
+      lineAngle = THREE.MathUtils.euclideanModulo(
+        lineAngle,
+        Math.PI
       );
 
-      // Face camera
-      desiredWorldQuaternion.copy(cameraWorldQuaternion);
+      const maxRoll =
+        THREE.MathUtils.degToRad(30);
 
-      // Apply only the limited screen-space rotation
+      // Instead of flipping instantly at 90°, transition smoothly
+      // from +30° to -30° around the vertical position.
+      const vertical =
+        Math.PI / 2;
+
+      const transitionWidth =
+        THREE.MathUtils.degToRad(18);
+
+      let readableAngle: number;
+
+      if (lineAngle < vertical - transitionWidth) {
+        readableAngle = Math.min(
+          lineAngle,
+          maxRoll
+        );
+      } else if (lineAngle > vertical + transitionWidth) {
+        const oppositeAngle =
+          lineAngle - Math.PI;
+
+        readableAngle = Math.max(
+          oppositeAngle,
+          -maxRoll
+        );
+      } else {
+        // Smooth transition through the "straight" / vertical point.
+        const t = THREE.MathUtils.smoothstep(
+          lineAngle,
+          vertical - transitionWidth,
+          vertical + transitionWidth
+        );
+
+        readableAngle = THREE.MathUtils.lerp(
+          maxRoll,
+          -maxRoll,
+          t
+        );
+      }
+
+      // Face camera.
+      desiredWorldQuaternion.copy(
+        cameraWorldQuaternion
+      );
+
+      // Apply readable screen-space roll.
       rollQuaternion.setFromAxisAngle(
         localZAxis,
         readableAngle
       );
 
-      desiredWorldQuaternion.multiply(rollQuaternion);
+      desiredWorldQuaternion.multiply(
+        rollQuaternion
+      );
 
-      // Convert world orientation back into the object's local space.
+      // Convert world orientation into local orientation.
       if (object.parent) {
-        object.parent.getWorldQuaternion(parentWorldQuaternion);
+        object.parent.getWorldQuaternion(
+          parentWorldQuaternion
+        );
 
         inverseParentQuaternion
           .copy(parentWorldQuaternion)
@@ -2893,7 +3178,9 @@ void main() {
           .copy(inverseParentQuaternion)
           .multiply(desiredWorldQuaternion);
       } else {
-        object.quaternion.copy(desiredWorldQuaternion);
+        object.quaternion.copy(
+          desiredWorldQuaternion
+        );
       }
     });
   }
@@ -3308,75 +3595,126 @@ void main() {
     this.helperGroup.add(parent);
   }
 
+  
   private syncSpacingHelpers(snapshot: SceneSnapshot) {
-    if (!snapshot.showSpacingDimensions || !snapshot.selectedId || !this.options.showFurniture) {
-      if (this.spacingDimensionGroup) this.spacingDimensionGroup.visible = false;
+    if (
+      !snapshot.showSpacingDimensions ||
+      !snapshot.selectedId ||
+      !this.options.showFurniture
+    ) {
+      if (this.spacingDimensionGroup) {
+        this.spacingDimensionGroup.visible = false;
+      }
+
       return;
     }
-    const selected = snapshot.objects.find((object) => object.id === snapshot.selectedId);
+
+    const selected = snapshot.objects.find(
+      (object) => object.id === snapshot.selectedId
+    );
+
     if (!selected) return;
 
     this.ensureSpacingHelpers();
+
     const parent = this.spacingDimensionGroup!;
-    const lines = this.spacingDimensionLines!;
+
     parent.visible = true;
-    for (const label of this.spacingDimensionLabels.values()) label.visible = false;
 
-    const system = snapshot.measurementSystem ?? 'metric';
-    const others = snapshot.objects.filter((object) => object.id !== selected.id);
-    const measurements = spacingMeasurements(selected, snapshot.room, others);
-    const segmentPositions: number[] = [];
+    for (const label of this.spacingDimensionLabels.values()) {
+      label.visible = false;
+    }
 
-    const addSegment = (a: THREE.Vector3, b: THREE.Vector3) => {
-      segmentPositions.push(a.x, a.y, a.z, b.x, b.y, b.z);
-    };
+    const system =
+      snapshot.measurementSystem ?? 'metric';
+
+    const others = snapshot.objects.filter(
+      (object) => object.id !== selected.id
+    );
+
+    const measurements = spacingMeasurements(
+      selected,
+      snapshot.room,
+      others
+    );
 
     for (const measurement of measurements) {
-      const origin = new THREE.Vector3(measurement.origin.x, 0.075, measurement.origin.z);
-      const end = new THREE.Vector3(measurement.end.x, 0.075, measurement.end.z);
-      const label = this.spacingDimensionLabels.get(measurement.side)!;
-      const text = formatLength(measurement.distance, system);
-      this.updateDynamicSpacingLabel(label, text);
+      const origin = new THREE.Vector3(
+        measurement.origin.x,
+        0.075,
+        measurement.origin.z
+      );
+
+      const end = new THREE.Vector3(
+        measurement.end.x,
+        0.075,
+        measurement.end.z
+      );
+
+      const label =
+        this.spacingDimensionLabels.get(
+          measurement.side
+        )!;
+
+      const text = formatLength(
+        measurement.distance,
+        system
+      );
+
+      this.updateDynamicSpacingLabel(
+        label,
+        text
+      );
+
       label.visible = true;
-      label.position.copy(origin).add(end).multiplyScalar(0.5);
-      this.orientMeasurementLabel(label, origin, end);
-      label.userData.keepMeasurementUpright = true;
-      const storedStart = (label.userData.measurementStart as THREE.Vector3 | undefined) ?? new THREE.Vector3();
-      const storedEnd = (label.userData.measurementEnd as THREE.Vector3 | undefined) ?? new THREE.Vector3();
-      const storedBase = (label.userData.measurementBaseQuaternion as THREE.Quaternion | undefined) ?? new THREE.Quaternion();
+
+      label.position
+        .copy(origin)
+        .add(end)
+        .multiplyScalar(0.5);
+
+      // Same orientation system as room dimensions.
+      label.userData.cameraFacingMeasurementLabel = true;
+
+      const storedStart =
+        (
+          label.userData.measurementStart as THREE.Vector3 | undefined
+        ) ?? new THREE.Vector3();
+
+      const storedEnd =
+        (
+          label.userData.measurementEnd as THREE.Vector3 | undefined
+        ) ?? new THREE.Vector3();
+
+      const storedDirection =
+        (
+          label.userData.spacingMeasurementDirection as THREE.Vector3 | undefined
+        ) ?? new THREE.Vector3();
+
       storedStart.copy(origin);
       storedEnd.copy(end);
-      storedBase.copy(label.quaternion);
-      label.userData.measurementStart = storedStart;
-      label.userData.measurementEnd = storedEnd;
-      label.userData.measurementBaseQuaternion = storedBase;
-      label.userData.measurementFlipped = false;
 
-      const length = origin.distanceTo(end);
-      const labelWorldWidth = (Number(label.userData.dynamicSpacingTextAspect) || Number(label.userData.labelAspect) || 1)
-        * Math.max(0.055, label.scale.x || themeMetric('dimension-label-height'));
-      const gap = Math.min(Math.max(labelWorldWidth + 0.09, 0.16), length * 0.7);
-      if (length > gap + 0.04) {
-        const direction = end.clone().sub(origin).normalize();
-        const mid = origin.clone().add(end).multiplyScalar(0.5);
-        addSegment(origin, mid.clone().addScaledVector(direction, -gap / 2));
-        addSegment(mid.clone().addScaledVector(direction, gap / 2), end);
-      } else {
-        addSegment(origin, end);
-      }
+      storedDirection.set(
+        measurement.direction.x,
+        0,
+        measurement.direction.z
+      );
 
-      const perpendicular = new THREE.Vector3(-measurement.direction.z, 0, measurement.direction.x).multiplyScalar(0.05);
-      addSegment(origin.clone().sub(perpendicular), origin.clone().add(perpendicular));
-      addSegment(end.clone().sub(perpendicular), end.clone().add(perpendicular));
+      label.userData.measurementStart =
+        storedStart;
+
+      label.userData.measurementEnd =
+        storedEnd;
+
+      label.userData.spacingMeasurementDirection =
+        storedDirection;
+
+      label.userData.spacingGapPaddingPx = 10;
     }
 
-    const geometry = lines.geometry as LineSegmentsGeometry;
-    if (segmentPositions.length) {
-      geometry.setPositions(segmentPositions);
-      lines.visible = true;
-    } else {
-      lines.visible = false;
-    }
+    // Spacing uses its shared LineSegments geometry,
+    // separate from the room-dimension Line2 implementation.
+    this.updateSpacingMeasurementLines();
   }
 
   private findObjectId(object: THREE.Object3D | null): string | null {
@@ -3714,6 +4052,7 @@ void main() {
     this.updateMeasurementLabelOrientation();
     this.updateMeasurementLabelScale();
     this.updateMeasurementLineGaps();
+    this.updateSpacingMeasurementLines();
 
     // Native MSAA keeps ordinary room geometry and floor textures crisp. Only a
     // selected product needs the composer's outline pass.
