@@ -1,12 +1,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { OutlinePass } from 'three/examples/jsm/postprocessing/OutlinePass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
-import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
-import { FXAAShader } from 'three/examples/jsm/shaders/FXAAShader.js';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
@@ -109,7 +106,6 @@ export class PlannerScene {
   private renderer: THREE.WebGLRenderer;
   private composer: EffectComposer;
   private outlinePass: OutlinePass;
-  private fxaaPass: ShaderPass;
   private controls: OrbitControls;
   private raycaster = new THREE.Raycaster();
   private pointer = new THREE.Vector2();
@@ -117,7 +113,6 @@ export class PlannerScene {
   private wallsGroup = new THREE.Group();
   private ceilingGroup = new THREE.Group();
   private lightFixtureGroup = new THREE.Group();
-  private lightIlluminationGroup = new THREE.Group();
   private daylightGroup = new THREE.Group();
   private objectGroup = new THREE.Group();
   private helperGroup = new THREE.Group();
@@ -150,7 +145,6 @@ export class PlannerScene {
   private lastSnapHelperKey = '';
   private currentCameraView: PlanCameraView = 'perspective';
   private ceilingVisible = false;
-  private environmentTexture: THREE.Texture | null = null;
   private hemiLight: THREE.HemisphereLight;
   private ambientLight: THREE.AmbientLight;
   private mainLight: THREE.DirectionalLight;
@@ -186,14 +180,13 @@ export class PlannerScene {
     // Start open by construction. The first camera evaluation may opt into the
     // ceiling, but there is never a one-frame closed-room flash while Plan Room mounts.
     this.ceilingGroup.visible = false;
-    this.scene.add(this.floorGroup, this.wallsGroup, this.ceilingGroup, this.lightFixtureGroup, this.lightIlluminationGroup, this.daylightGroup, this.objectGroup, this.helperGroup);
+    this.scene.add(this.floorGroup, this.wallsGroup, this.ceilingGroup, this.lightFixtureGroup, this.daylightGroup, this.objectGroup, this.helperGroup);
 
     // Screen-space silhouette outlining matches the reference planner: the selected
     // product gets one crisp yellow contour, independent of its component meshes.
-    // EffectComposer renders into off-screen targets, so the renderer's native
-    // framebuffer MSAA does not smooth the composed result. Keep one low-cost FXAA
-    // pass enabled on every display; HiDPI still benefits because outlines and
-    // oblique geometry are composed after the native framebuffer antialias stage.
+    // Only selected furniture needs the off-screen outline path. The ordinary
+    // room uses the renderer's native MSAA, avoiding a fullscreen filter and its
+    // softened texture detail on every camera movement.
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.outlinePass = new OutlinePass(new THREE.Vector2(1, 1), this.scene, this.camera);
@@ -204,18 +197,7 @@ export class PlannerScene {
     this.outlinePass.edgeGlow = 0;
     this.outlinePass.pulsePeriod = 0;
     this.composer.addPass(this.outlinePass);
-    this.fxaaPass = new ShaderPass(FXAAShader);
-    this.fxaaPass.enabled = true;
-    this.composer.addPass(this.fxaaPass);
     this.composer.addPass(new OutputPass());
-
-    const pmrem = new THREE.PMREMGenerator(this.renderer);
-    this.environmentTexture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    // Keep the PMREM around for future material-level use if needed, but do not
-    // feed a global environment into the room. The interior should read from
-    // explicit ceiling/daylight sources rather than a broad omnidirectional fill.
-    this.scene.environment = null;
-    pmrem.dispose();
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
@@ -253,12 +235,12 @@ export class PlannerScene {
     this.controls.addEventListener('start', this.onControlsStart);
     this.controls.addEventListener('end', this.onControlsEnd);
 
-    // Neutral base lighting plus optional interior ceiling lighting. Real shadowing
-    // stays concentrated in one directional light for performance; ceiling fixtures
-    // add the room mood and local brightness without multiplying shadow maps.
-    this.hemiLight = new THREE.HemisphereLight(0xf7f8fa, 0x666a70, 0.78);
-    this.ambientLight = new THREE.AmbientLight(0xffffff, 0.18);
-    this.mainLight = new THREE.DirectionalLight(0xfff6eb, 1.72);
+    // Broad bounced light keeps the architectural shell legible. A single
+    // directional shadow map supplies contact and furniture shadows; fixtures
+    // remain visual accents instead of carrying the room's entire exposure.
+    this.hemiLight = new THREE.HemisphereLight(0xf7f8fa, 0xb8b4ae, 1.1);
+    this.ambientLight = new THREE.AmbientLight(0xffffff, 0.35);
+    this.mainLight = new THREE.DirectionalLight(0xfff6eb, 0.9);
     this.mainLight.position.set(4.2, 7.2, 4.8);
     this.mainLight.castShadow = true;
     this.mainLight.shadow.mapSize.set(2048, 2048);
@@ -266,7 +248,7 @@ export class PlannerScene {
     this.mainLight.shadow.camera.far = 34;
     this.mainLight.shadow.bias = -0.00012;
     this.mainLight.shadow.normalBias = 0.012;
-    this.fillLight = new THREE.DirectionalLight(0xd7dde2, 0.34);
+    this.fillLight = new THREE.DirectionalLight(0xe9edf0, 0.3);
     this.fillLight.position.set(-4.5, 5.2, -4.2);
     this.scene.add(this.hemiLight, this.ambientLight, this.mainLight, this.mainLight.target, this.fillLight);
 
@@ -302,7 +284,6 @@ export class PlannerScene {
     this.disposeGroup(this.wallsGroup);
     this.disposeGroup(this.ceilingGroup);
     this.disposeGroup(this.lightFixtureGroup);
-    this.disposeGroup(this.lightIlluminationGroup);
     this.disposeGroup(this.daylightGroup);
     this.disposeGroup(this.objectGroup);
     this.disposeGroup(this.helperGroup);
@@ -313,8 +294,6 @@ export class PlannerScene {
     this.outlinePass.dispose();
     this.composer.dispose();
     this.scene.environment = null;
-    this.environmentTexture?.dispose();
-    this.environmentTexture = null;
     this.floorMaterial = null;
     this.renderer.dispose();
     this.renderer.forceContextLoss();
@@ -792,7 +771,11 @@ export class PlannerScene {
 
   private disposeGroup(group: THREE.Group) {
     const disposedTextures = new Set<THREE.Texture>();
+    const disposedMaterials = new Set<THREE.Material>();
+    const disposedGeometries = new Set<THREE.BufferGeometry>();
     const disposeMaterial = (material: THREE.Material) => {
+      if (disposedMaterials.has(material)) return;
+      disposedMaterials.add(material);
       // Floor finishes and annotation sprites own their textures. Dispose every
       // texture reference once so changing finishes repeatedly does not leak GPU memory.
       for (const value of Object.values(material)) {
@@ -809,7 +792,10 @@ export class PlannerScene {
         geometry?: THREE.BufferGeometry;
         material?: THREE.Material | THREE.Material[];
       };
-      renderable.geometry?.dispose();
+      if (renderable.geometry && !disposedGeometries.has(renderable.geometry)) {
+        disposedGeometries.add(renderable.geometry);
+        renderable.geometry.dispose();
+      }
       const material = renderable.material;
       if (Array.isArray(material)) material.forEach(disposeMaterial);
       else if (material) disposeMaterial(material);
@@ -968,19 +954,46 @@ export class PlannerScene {
   }
 
   /** Configure one loaded map at the material's documented physical tile size. */
-  private configureFloorMap(texture: THREE.Texture, name: string, textureWidthMetres: number, srgb: boolean) {
+  private configureFloorMap(
+    texture: THREE.Texture,
+    name: string,
+    textureWidthMetres: number,
+    srgb: boolean,
+    wrapMode: 'repeat' | 'mirror' = 'repeat',
+    anisotropy = 8
+  ) {
     texture.name = name;
     texture.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-    texture.wrapS = THREE.RepeatWrapping;
-    texture.wrapT = THREE.RepeatWrapping;
+
+    // Most finishes use ordinary repeat wrapping. Mirrored repeat remains available
+    // as an opt-in, but carpet anti-tiling is handled in the material shader instead.
+    const wrapping = wrapMode === 'mirror'
+      ? THREE.MirroredRepeatWrapping
+      : THREE.RepeatWrapping;
+    texture.wrapS = wrapping;
+    texture.wrapT = wrapping;
+
     const repeatsPerMetre = 1 / Math.max(0.1, textureWidthMetres);
     texture.repeat.set(repeatsPerMetre, repeatsPerMetre);
-    texture.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+
+    // Explicit trilinear mip filtering is important for high-frequency carpet
+    // fibres when the floor is viewed from normal planner camera distances.
+    texture.generateMipmaps = true;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.anisotropy = Math.min(anisotropy, this.renderer.capabilities.getMaxAnisotropy());
     texture.needsUpdate = true;
     return texture;
   }
 
-  private async loadFloorMap(url: string, name: string, textureWidthMetres: number, srgb: boolean) {
+  private async loadFloorMap(
+    url: string,
+    name: string,
+    textureWidthMetres: number,
+    srgb: boolean,
+    wrapMode: 'repeat' | 'mirror' = 'repeat',
+    anisotropy = 8
+  ) {
     const loader = new THREE.TextureLoader();
     loader.setCrossOrigin('anonymous');
     try {
@@ -990,7 +1003,7 @@ export class PlannerScene {
         return null;
       }
       this.floorMapAssets.add(texture);
-      return this.configureFloorMap(texture, name, textureWidthMetres, srgb);
+      return this.configureFloorMap(texture, name, textureWidthMetres, srgb, wrapMode, anisotropy);
     } catch {
       return null;
     }
@@ -1001,11 +1014,13 @@ export class PlannerScene {
     const cached = this.floorMapCache.get(definition.id);
     if (cached) return cached;
 
+    const wrapMode = definition.wrapMode ?? 'repeat';
+    const anisotropy = definition.anisotropy ?? 8;
     const load = Promise.all([
-      this.loadFloorMap(definition.maps.color, `${definition.name} Base Color`, definition.textureWidthMetres, true),
-      this.loadFloorMap(definition.maps.normal, `${definition.name} Normal`, definition.textureWidthMetres, false),
-      this.loadFloorMap(definition.maps.height, `${definition.name} Height`, definition.textureWidthMetres, false),
-      this.loadFloorMap(definition.maps.roughness, `${definition.name} Roughness`, definition.textureWidthMetres, false)
+      this.loadFloorMap(definition.maps.color, `${definition.name} Base Color`, definition.textureWidthMetres, true, wrapMode, anisotropy),
+      this.loadFloorMap(definition.maps.normal, `${definition.name} Normal`, definition.textureWidthMetres, false, wrapMode, anisotropy),
+      this.loadFloorMap(definition.maps.height, `${definition.name} Height`, definition.textureWidthMetres, false, wrapMode, anisotropy),
+      this.loadFloorMap(definition.maps.roughness, `${definition.name} Roughness`, definition.textureWidthMetres, false, wrapMode, anisotropy)
     ]).then(([color, normal, height, roughness]) => {
       if (this.disposed) return { color: null, normal: null, height: null, roughness: null };
       const maps = { color, normal, height, roughness };
@@ -1034,21 +1049,117 @@ export class PlannerScene {
 
   private applyFloorMaps(material: THREE.MeshStandardMaterial, definition: FloorFinishDefinition, maps: LoadedFloorMaps) {
     this.disposeFloorMaterialMaps(material);
+
     material.map = this.cloneFloorMap(maps.color);
-    material.normalMap = this.cloneFloorMap(maps.normal);
-    material.displacementMap = this.cloneFloorMap(maps.height);
-    material.displacementScale = definition.heightScale;
+    material.normalMap = definition.useNormalMap === false
+      ? null
+      : this.cloneFloorMap(maps.normal);
+
+    const useHeightMap = definition.useHeightMap !== false && definition.heightScale > 0;
+    material.displacementMap = useHeightMap
+      ? this.cloneFloorMap(maps.height)
+      : null;
+    material.displacementScale = material.displacementMap ? definition.heightScale : 0;
     // Centre authored grayscale displacement around the architectural floor plane
     // instead of lifting the whole slab by the map's average value.
-    material.displacementBias = -definition.heightScale * 0.5;
-    material.roughnessMap = this.cloneFloorMap(maps.roughness);
+    material.displacementBias = material.displacementMap
+      ? -definition.heightScale * 0.5
+      : 0;
+
+    material.roughnessMap = definition.useRoughnessMap === false
+      ? null
+      : this.cloneFloorMap(maps.roughness);
     material.color.set(maps.color ? 0xffffff : definition.fallbackColor);
-    material.normalScale.set(definition.normalScale, definition.normalScale);
-    material.roughness = maps.roughness ? 1 : definition.fallbackRoughness;
+    material.normalScale.set(
+      material.normalMap ? definition.normalScale : 0,
+      material.normalMap ? definition.normalScale : 0
+    );
+    material.roughness = material.roughnessMap ? 1 : definition.fallbackRoughness;
     material.metalness = 0;
     material.envMapIntensity = definition.envMapIntensity;
     material.name = `Floor - ${definition.name}`;
+
+    // Finish changes reuse this same material instance, so shader customisation must
+    // be switched here rather than only when the floor material is first created.
+    this.configureFloorMaterialShader(material, definition);
     material.needsUpdate = true;
+  }
+
+  /**
+   * Break obvious source-tile repetition for stochastic carpets while preserving the
+   * documented real-world texel scale. Wood and terrazzo keep the stock Three.js shader.
+   * Carpet normal/roughness maps are intentionally disabled in the finish definition so
+   * angled lighting cannot re-introduce the original 1 m tile grid through those channels.
+   */
+  private configureFloorMaterialShader(
+    material: THREE.MeshStandardMaterial,
+    definition: FloorFinishDefinition
+  ) {
+    if (!definition.antiTile) {
+      material.onBeforeCompile = () => {};
+      material.customProgramCacheKey = () => 'domus-floor-standard-v1';
+      return;
+    }
+
+    material.onBeforeCompile = (shader) => {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        'void main() {',
+        `
+vec2 domusCarpetHash(vec2 p) {
+  p = vec2(
+    dot(p, vec2(127.1, 311.7)),
+    dot(p, vec2(269.5, 183.3))
+  );
+  return fract(sin(p) * 43758.5453123);
+}
+
+void main() {
+`
+      );
+
+      shader.fragmentShader = shader.fragmentShader.replace(
+        '#include <map_fragment>',
+        `
+#ifdef USE_MAP
+  vec2 carpetUv = vMapUv;
+
+  // One macro region spans several authored texture tiles. Four decorrelated
+  // source phases are smoothly blended, so the 1 m repeat remains physically
+  // correct without presenting as a visible 1 m x 1 m grid.
+  const float macroSize = 3.25;
+  vec2 macroUv = carpetUv / macroSize;
+  vec2 macroCell = floor(macroUv);
+  vec2 macroLocal = fract(macroUv);
+  vec2 blendWeight = macroLocal * macroLocal * (3.0 - 2.0 * macroLocal);
+
+  vec2 phase00 = domusCarpetHash(macroCell) * 13.0;
+  vec2 phase10 = domusCarpetHash(macroCell + vec2(1.0, 0.0)) * 13.0;
+  vec2 phase01 = domusCarpetHash(macroCell + vec2(0.0, 1.0)) * 13.0;
+  vec2 phase11 = domusCarpetHash(macroCell + vec2(1.0, 1.0)) * 13.0;
+
+  vec2 dx = dFdx(carpetUv);
+  vec2 dy = dFdy(carpetUv);
+
+  vec4 carpet00 = textureGrad(map, carpetUv + phase00, dx, dy);
+  vec4 carpet10 = textureGrad(map, carpetUv + phase10, dx, dy);
+  vec4 carpet01 = textureGrad(map, carpetUv + phase01, dx, dy);
+  vec4 carpet11 = textureGrad(map, carpetUv + phase11, dx, dy);
+
+  vec4 carpetX0 = mix(carpet00, carpet10, blendWeight.x);
+  vec4 carpetX1 = mix(carpet01, carpet11, blendWeight.x);
+  vec4 sampledDiffuseColor = mix(carpetX0, carpetX1, blendWeight.y);
+
+  #ifdef DECODE_VIDEO_TEXTURE
+    sampledDiffuseColor = sRGBTransferEOTF(sampledDiffuseColor);
+  #endif
+
+  diffuseColor *= sampledDiffuseColor;
+#endif
+`
+      );
+    };
+
+    material.customProgramCacheKey = () => 'domus-carpet-antitile-v2';
   }
 
   private createFloorMaterial(definition: FloorFinishDefinition) {
@@ -1061,6 +1172,7 @@ export class PlannerScene {
     });
     material.normalScale.set(definition.normalScale, definition.normalScale);
     material.name = `Floor - ${definition.name}`;
+    this.configureFloorMaterialShader(material, definition);
     this.floorMaterial = material;
 
     // If this finish has already loaded once, room edits can rebuild the slab with
@@ -1158,14 +1270,10 @@ export class PlannerScene {
         1
       ),
       [
-        new THREE.MeshStandardMaterial({
-          color: TRIM_COLOR,
-          roughness: 0.78,
-          side: THREE.DoubleSide,
-          polygonOffset: true,
-          polygonOffsetFactor: -0.6,
-          polygonOffsetUnits: -0.6
-        }),
+        // This underside receives no bounced light in a forward renderer. Give
+        // it the reference's steady warm plaster tone instead of letting the
+        // directional shadow map turn it almost black.
+        new THREE.MeshBasicMaterial({ color: 0xd0cbc4, side: THREE.DoubleSide, toneMapped: false }),
         new THREE.MeshBasicMaterial({ color: JUNCTION_COLOR, side: THREE.DoubleSide, toneMapped: false })
       ]
     );
@@ -1198,10 +1306,10 @@ export class PlannerScene {
         const tx = cols === 1 ? 0.5 : c / (cols - 1);
         const x = THREE.MathUtils.lerp(bounds.minX + marginX, bounds.maxX - marginX, tx);
         if (!pointInRoom({ x, z }, snapshot.room, true)) continue;
-        positions.push(new THREE.Vector3(x, snapshot.room.height - 0.02, z));
+        positions.push(new THREE.Vector3(x, snapshot.room.height - CEILING_THICKNESS - 0.006, z));
       }
     }
-    if (!positions.length) positions.push(new THREE.Vector3((bounds.minX + bounds.maxX) / 2, snapshot.room.height - 0.02, (bounds.minZ + bounds.maxZ) / 2));
+    if (!positions.length) positions.push(new THREE.Vector3((bounds.minX + bounds.maxX) / 2, snapshot.room.height - CEILING_THICKNESS - 0.006, (bounds.minZ + bounds.maxZ) / 2));
     return positions;
   }
 
@@ -1245,9 +1353,28 @@ export class PlannerScene {
     return group;
   }
 
+  private createFixtureHalo() {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 64;
+    const context = canvas.getContext('2d');
+    if (context) {
+      const gradient = context.createRadialGradient(32, 32, 5, 32, 32, 32);
+      gradient.addColorStop(0, 'rgba(255,255,255,0)');
+      gradient.addColorStop(0.32, 'rgba(255,255,255,0.42)');
+      gradient.addColorStop(1, 'rgba(255,255,255,0)');
+      context.fillStyle = gradient;
+      context.fillRect(0, 0, 64, 64);
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    return {
+      geometry: new THREE.PlaneGeometry(0.46, 0.46),
+      material: new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false, side: THREE.DoubleSide, toneMapped: false })
+    };
+  }
+
   private rebuildCeilingLighting(snapshot: PlannerSnapshot) {
     this.disposeGroup(this.lightFixtureGroup);
-    this.disposeGroup(this.lightIlluminationGroup);
     const lighting = snapshot.room.lighting;
     if (!lighting.enabled) {
       this.updateLightFixtureVisibility(snapshot);
@@ -1255,17 +1382,19 @@ export class PlannerScene {
     }
 
     const positions = this.ceilingLightPositions(snapshot);
+    const halo = this.createFixtureHalo();
     for (const position of positions) {
+      const glow = new THREE.Mesh(halo.geometry, halo.material);
+      glow.rotation.x = Math.PI / 2;
+      glow.position.set(position.x, position.y - 0.003, position.z);
+      glow.renderOrder = 1;
+      this.lightFixtureGroup.add(glow);
+
       const fixture = lighting.fixtureType === 'recessed' ? this.createRecessedFixture() : this.createSurfaceFixture();
       fixture.position.copy(position);
       fixture.name = lighting.fixtureType === 'recessed' ? 'Recessed Downlight' : 'Surface Mounted Light';
       fixture.traverse((node) => { node.userData.roomLightFixture = true; });
       this.lightFixtureGroup.add(fixture);
-
-      const glow = new THREE.PointLight(0xfff0d8, lighting.fixtureType === 'recessed' ? 0.72 : 0.65, 3.6, 2);
-      glow.position.set(position.x, snapshot.room.height - 0.16, position.z);
-      glow.castShadow = false;
-      this.lightIlluminationGroup.add(glow);
     }
 
     this.updateLightFixtureVisibility(snapshot);
@@ -1288,7 +1417,7 @@ export class PlannerScene {
       const targetPosition = new THREE.Vector3(centre.x, Math.max(0.32, verticalCenter * 0.58), centre.z)
         .addScaledVector(inward, 1.45);
 
-      const light = new THREE.SpotLight(0xfff1db, 0.58, 8.5, THREE.MathUtils.degToRad(44), 0.58, 1.35);
+      const light = new THREE.SpotLight(0xf2f5ff, 0.12, 3.2, THREE.MathUtils.degToRad(52), 0.8, 2);
       light.position.copy(source);
       light.target.position.copy(targetPosition);
       light.castShadow = false;
@@ -1299,14 +1428,13 @@ export class PlannerScene {
   private applyRoomLighting(snapshot: PlannerSnapshot) {
     const enabled = snapshot.room.lighting.enabled;
     const hasDaylight = this.daylightGroup.children.length > 0;
-    // Keep the outside world visually separate from the room. The interior should
-    // get most of its brightness from explicit fixtures plus localized daylight, not
-    // from an omnidirectional ambient wash. This preserves darker corners.
-    this.hemiLight.intensity = enabled ? 0.16 : 0.22;
-    this.ambientLight.intensity = enabled ? 0.035 : 0.05;
-    this.mainLight.intensity = enabled ? 0.82 : (hasDaylight ? 0.68 : 0.9);
-    this.fillLight.intensity = enabled ? 0.08 : 0.06;
-    this.scene.background = new THREE.Color(enabled ? 0xbdbdbd : 0xc4c4c4);
+    // The broad terms stand in for bounced indoor light. Fixtures supply a
+    // visible ceiling cue; the single shadow caster supplies depth on furniture.
+    this.hemiLight.intensity = enabled ? 1.15 : 0.95;
+    this.ambientLight.intensity = enabled ? 0.38 : 0.28;
+    this.mainLight.intensity = enabled ? 0.82 : (hasDaylight ? 0.78 : 0.88);
+    this.fillLight.intensity = enabled ? 0.34 : 0.26;
+    this.scene.background = new THREE.Color(0xd4d5d6);
   }
 
   private updateCeilingVisibility(force = false) {
@@ -1474,7 +1602,15 @@ export class PlannerScene {
       geometry,
       [
         new THREE.MeshStandardMaterial({ color: TRIM_COLOR, roughness: 0.8, side: THREE.DoubleSide }),
-        new THREE.MeshStandardMaterial({ color: new THREE.Color(wallColor), roughness: 0.94, side: THREE.DoubleSide }),
+        // A small material-side bounce term replaces the indirect light that a
+        // single forward-rendered shadow map cannot calculate in an enclosed room.
+        new THREE.MeshStandardMaterial({
+          color: new THREE.Color(wallColor),
+          roughness: 0.94,
+          side: THREE.DoubleSide,
+          emissive: new THREE.Color(wallColor),
+          emissiveIntensity: 0.45
+        }),
         // Miter faces deliberately ignore scene lighting and shadowing so the
         // architectural cut stays the exact same white from every camera angle.
         new THREE.MeshBasicMaterial({ color: JUNCTION_COLOR, side: THREE.DoubleSide, toneMapped: false })
@@ -2105,8 +2241,7 @@ export class PlannerScene {
     });
     const plane = new THREE.Mesh(geometry, material);
     plane.scale.set(height, height, 1);
-    // Text is composited after scene FXAA. It remains in world space; this layer
-    // only changes render order so already-rasterized glyphs are not blurred again.
+    // Text remains in world space but draws after the scene and selection outline.
     plane.layers.set(ANNOTATION_TEXT_LAYER);
     plane.userData.measurementLabel = true;
     plane.userData.labelAspect = aspect;
@@ -2170,8 +2305,7 @@ export class PlannerScene {
     });
     const sprite = new THREE.Sprite(material);
     sprite.scale.set(height * aspect, height, 1);
-    // Product badges keep their existing Sprite behaviour, but like world labels
-    // they bypass the final FXAA pass to avoid filtering the glyph edges twice.
+    // Product badges keep their existing Sprite behaviour on the text layer.
     sprite.layers.set(ANNOTATION_TEXT_LAYER);
     sprite.userData.measurementLabel = true;
     sprite.userData.labelAspect = aspect;
@@ -2984,8 +3118,6 @@ export class PlannerScene {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height, false);
     this.composer.setSize(width, height);
-    const pixelRatio = this.renderer.getPixelRatio();
-    this.fxaaPass.material.uniforms.resolution.value.set(1 / (width * pixelRatio), 1 / (height * pixelRatio));
     this.helperGroup.traverse((object) => {
       const material = (object as THREE.Object3D & { material?: THREE.Material | THREE.Material[] }).material;
       const materials = Array.isArray(material) ? material : material ? [material] : [];
@@ -3048,13 +3180,11 @@ export class PlannerScene {
     this.updateMeasurementLabelOrientation();
     this.updateMeasurementLabelScale();
 
-    // Geometry/outlines receive FXAA, but annotation text does not. Canvas text is
-    // already antialiased when rasterized and then texture-filtered by WebGL; sending
-    // those tiny glyphs through a second screen-space edge filter is what made them
-    // look washed-out/pixelated. Layering changes only render order -- world labels
-    // keep the exact same positions and quaternions.
+    // Native MSAA keeps ordinary room geometry and floor textures crisp. Only a
+    // selected product needs the composer's outline pass.
     this.camera.layers.set(SCENE_LAYER);
-    this.composer.render();
+    if (this.outlinePass.selectedObjects.length) this.composer.render();
+    else this.renderer.render(this.scene, this.camera);
 
     const previousAutoClear = this.renderer.autoClear;
     const previousBackground = this.scene.background;
@@ -3063,7 +3193,7 @@ export class PlannerScene {
       this.renderer.autoClear = false;
       // Three.js WebGLBackground force-clears when Scene.background is a Color,
       // even if autoClear is false. Temporarily suppress only the background for
-      // the annotation overlay so the composer's completed 3D frame is preserved.
+      // the annotation overlay so the completed 3D frame is preserved.
       this.scene.background = null;
       this.camera.layers.set(ANNOTATION_TEXT_LAYER);
       this.renderer.setRenderTarget(null);

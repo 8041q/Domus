@@ -98,7 +98,7 @@ const defaultRoom: RoomState = {
   floorFinish: 'wood-floor-057',
   lighting: {
     enabled: true,
-    fixtureType: 'surface-mounted',
+    fixtureType: 'recessed',
     showWithoutCeiling: false
   },
   shapeKind: 'rectangle',

@@ -253,7 +253,7 @@ export function PlanRoom() {
                   <label><input type="checkbox" checked={showSpacingDimensions} onChange={(e) => setShowSpacingDimensions(e.target.checked)} /><span>Item spacing<small>Nearest free-space measurements</small></span></label>
                   <div className="view-options-section">
                     <strong>Ceiling lighting</strong>
-                    <label><input type="checkbox" checked={lighting.enabled} onChange={(e) => setRoomLighting({ enabled: e.target.checked })} /><span>Enable room lights<small>Add ceiling fixtures and darker interior lighting</small></span></label>
+                    <label><input type="checkbox" checked={lighting.enabled} onChange={(e) => setRoomLighting({ enabled: e.target.checked })} /><span>Enable room lights<small>Add ceiling fixtures and balanced interior lighting</small></span></label>
                     <label>
                       <span>Fixture type<small>Choose the ceiling light family</small></span>
                       <select value={lighting.fixtureType} onChange={(e) => setRoomLighting({ fixtureType: e.target.value as CeilingLightFixtureType })}>

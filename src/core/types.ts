@@ -21,7 +21,7 @@ export type OpeningVariant =
 export type FloorFinish =
   | 'carpet-012'
   | 'wood-floor-057'
-  | 'wood-051'
+  | 'carpet-011'
   | 'wood-floor-035'
   | 'terrazzo-005'
   | 'terrazzo-007'
