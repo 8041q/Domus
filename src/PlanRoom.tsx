@@ -7,7 +7,7 @@ import { formatArea, formatLength } from './core/units';
 import type { CeilingLightFixtureType, PlanCameraView, ProductCategory } from './core/types';
 import { FLOOR_FINISHES, WALL_FINISHES } from './core/roomFinishes';
 import { BASEBOARD_STYLES, TRIM_COLORS, isSunGlazedOpening } from './core/architecturalStyles';
-import type { BaseboardStyle } from './core/types';
+import type { BaseboardMaterial, BaseboardStyle } from './core/types';
 import { getSnapshot, usePlannerStore } from './store';
 import { Icon } from './ui';
 
@@ -176,17 +176,25 @@ function FinishesPanel({ onClose }: { onClose: () => void }) {
         onChange={(event) => updateRoom({ baseboardStyle: event.target.value as BaseboardStyle })}>
         {BASEBOARD_STYLES.map((style) => <option key={style.id} value={style.id}>{style.name} — {style.description}</option>)}
       </select>
-      <span className="sub-label finish-section-label">Baseboard colour</span>
-      <div className="swatch-row">
-        {TRIM_COLORS.map((swatch) => (
-          <button key={swatch.value} type="button" className={`swatch ${room.baseboardColor === swatch.value ? 'selected' : ''}`}
-            style={{ '--swatch': swatch.value } as CSSProperties} title={swatch.name} aria-label={`Baseboard ${swatch.name}`}
-            onClick={() => updateRoom({ baseboardColor: swatch.value })} />
-        ))}
-        <label className="finish-custom-color" title="Custom baseboard colour">
-          <input type="color" aria-label="Custom baseboard colour" value={room.baseboardColor} onChange={(event) => updateRoom({ baseboardColor: event.target.value })} />
-        </label>
-      </div>
+      <span className="sub-label finish-section-label">Baseboard material</span>
+      <select className="finish-style-select" aria-label="Baseboard material" value={room.baseboardMaterial}
+        onChange={(event) => updateRoom({ baseboardMaterial: event.target.value as BaseboardMaterial })}>
+        <option value="paint">Painted</option>
+        <option value="materials">Materials</option>
+      </select>
+      {room.baseboardMaterial === 'paint' && (<>
+        <span className="sub-label finish-section-label">Baseboard colour</span>
+        <div className="swatch-row">
+          {TRIM_COLORS.map((swatch) => (
+            <button key={swatch.value} type="button" className={`swatch ${room.baseboardColor === swatch.value ? 'selected' : ''}`}
+              style={{ '--swatch': swatch.value } as CSSProperties} title={swatch.name} aria-label={`Baseboard ${swatch.name}`}
+              onClick={() => updateRoom({ baseboardColor: swatch.value })} />
+          ))}
+          <label className="finish-custom-color" title="Custom baseboard colour">
+            <input type="color" aria-label="Custom baseboard colour" value={room.baseboardColor} onChange={(event) => updateRoom({ baseboardColor: event.target.value })} />
+          </label>
+        </div>
+      </>)}
       <span className="sub-label floor-label">Floor</span>
       <div className="floor-options">
         {FLOOR_FINISHES.map((floor) => (

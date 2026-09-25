@@ -100,6 +100,7 @@ const defaultRoom: RoomState = {
   ceilingColor: '#d0cbc4',
   baseboardColor: '#dedbd8',
   baseboardStyle: 'flat',
+  baseboardMaterial: 'paint',
   floorFinish: 'carpet-011',
   lighting: {
     enabled: true,
@@ -152,10 +153,16 @@ function ensureRoom(raw: Partial<RoomState>): RoomState {
     ...raw,
     width,
     depth,
-    height: Math.max(2.1, Math.min(Number(raw.height) || defaultRoom.height, 4.2)),
+    height: Math.max(1, Math.min(Number(raw.height) || defaultRoom.height, 3.3)),
     ceilingColor: typeof raw.ceilingColor === 'string' && /^#[0-9a-f]{6}$/i.test(raw.ceilingColor) ? raw.ceilingColor : defaultRoom.ceilingColor,
     baseboardColor: typeof raw.baseboardColor === 'string' && /^#[0-9a-f]{6}$/i.test(raw.baseboardColor) ? raw.baseboardColor : defaultRoom.baseboardColor,
     baseboardStyle: BASEBOARD_STYLES.some((style) => style.id === raw.baseboardStyle) ? raw.baseboardStyle : defaultRoom.baseboardStyle,
+    // Older projects stored this option as "terrazzo". Keep those projects
+    // compatible, but the option now means "match the selected floor material".
+    baseboardMaterial: (raw as { baseboardMaterial?: unknown }).baseboardMaterial === 'materials'
+      || (raw as { baseboardMaterial?: unknown }).baseboardMaterial === 'terrazzo'
+      ? 'materials'
+      : 'paint',
     floorFinish: normalizeFloorFinish(raw.floorFinish),
     lighting: {
       ...defaultRoom.lighting,

@@ -715,10 +715,17 @@ export class PlannerScene {
       this.controls.target.set((bounds.minX + bounds.maxX) / 2, snapshot.room.height * 0.5, (bounds.minZ + bounds.maxZ) / 2);
       this.updateShadowBounds(snapshot);
     } else if (floorFinish !== this.lastFloorFinish) {
-      // Finish changes are deliberately decoupled from geometry rebuilds. Keep the
-      // current floor visible until every map for the requested finish has settled,
-      // then replace the material channels atomically in one frame.
+      // Keep ordinary floor finish changes decoupled from geometry rebuilds. The
+      // current floor remains visible until the requested maps have settled. When
+      // the baseboard is set to Materials, however, its finish is intentionally
+      // linked to the floor, so rebuild the wall group immediately with the new
+      // floor definition as well. Cached maps apply synchronously and uncached maps
+      // finish loading on the replacement baseboard material independently.
       this.requestFloorFinish(floorFinish);
+      if (snapshot.room.baseboardMaterial === 'materials') {
+        this.rebuildWalls(snapshot);
+        architectureChanged = true;
+      }
       this.lastFloorFinish = floorFinish;
     } else if (openingsKey !== this.lastOpeningsKey) {
       this.rebuildWalls(snapshot);
@@ -2037,6 +2044,7 @@ export class PlannerScene {
     if (end - start < 0.03) return;
     const profile = (BASEBOARD_STYLES.find((style) => style.id === snapshot.room.baseboardStyle) ?? BASEBOARD_STYLES[0]).profile;
     const positions: number[] = [];
+    const uvs: number[] = [];
     const geometry = new THREE.BufferGeometry();
     const edges = profile.map(([projection, y]) => {
       const points = this.wallSegmentEdgePoints(wall, start, end, WALL_THICKNESS / 2 + projection, snapshot);
@@ -2045,39 +2053,107 @@ export class PlannerScene {
         end: new THREE.Vector3(points.end.x, y, points.end.z)
       };
     });
-    const triangle = (a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, materialIndex: number) => {
+
+    // UV coordinates are expressed in physical metres. Floor/baseboard textures are
+    // configured with repeats-per-metre, so a baseboard using the floor material
+    // keeps the same real-world texture scale on every profile and angled wall.
+    const profileDistances = [0];
+    for (let index = 1; index < profile.length; index += 1) {
+      const [prevX, prevY] = profile[index - 1];
+      const [x, y] = profile[index];
+      profileDistances[index] = profileDistances[index - 1] + Math.hypot(x - prevX, y - prevY);
+    }
+    const last = profile[profile.length - 1];
+    const first = profile[0];
+    const profilePerimeter = profileDistances[profile.length - 1] + Math.hypot(first[0] - last[0], first[1] - last[1]);
+    const runLength = end - start;
+
+    const triangle = (
+      a: THREE.Vector3,
+      b: THREE.Vector3,
+      c: THREE.Vector3,
+      materialIndex: number,
+      uvA: [number, number],
+      uvB: [number, number],
+      uvC: [number, number]
+    ) => {
       geometry.addGroup(positions.length / 3, 3, materialIndex);
       positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+      uvs.push(uvA[0], uvA[1], uvB[0], uvB[1], uvC[0], uvC[1]);
     };
     for (let index = 0; index < profile.length; index += 1) {
       const next = (index + 1) % profile.length;
       const a = edges[index];
       const b = edges[next];
       const highlight = profile[index][1] > 0.01 && Math.abs(profile[index][1] - profile[next][1]) < 0.001 ? 1 : 0;
-      triangle(a.start, a.end, b.end, highlight);
-      triangle(a.start, b.end, b.start, highlight);
+      const v0 = profileDistances[index];
+      const v1 = next === 0 ? profilePerimeter : profileDistances[next];
+      triangle(a.start, a.end, b.end, highlight, [0, v0], [runLength, v0], [runLength, v1]);
+      triangle(a.start, b.end, b.start, highlight, [0, v0], [runLength, v1], [0, v1]);
     }
     const caps = THREE.ShapeUtils.triangulateShape(profile.map(([x, y]) => new THREE.Vector2(x, y)), []);
     for (const [a, b, c] of caps) {
-      triangle(edges[a].start, edges[b].start, edges[c].start, 0);
-      triangle(edges[c].end, edges[b].end, edges[a].end, 0);
+      const uvA: [number, number] = [profile[a][0], profile[a][1]];
+      const uvB: [number, number] = [profile[b][0], profile[b][1]];
+      const uvC: [number, number] = [profile[c][0], profile[c][1]];
+      triangle(edges[a].start, edges[b].start, edges[c].start, 0, uvA, uvB, uvC);
+      triangle(edges[c].end, edges[b].end, edges[a].end, 0, uvC, uvB, uvA);
     }
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
     geometry.computeVertexNormals();
-    const baseColor = new THREE.Color(snapshot.room.baseboardColor);
-    const mesh = new THREE.Mesh(
-      geometry,
-      [
+
+    let materials: THREE.Material[];
+    let floorMatchedMaterial: THREE.MeshStandardMaterial | null = null;
+    let floorMatchedDefinition: FloorFinishDefinition | null = null;
+    if (snapshot.room.baseboardMaterial === 'materials') {
+      floorMatchedDefinition = floorFinishDefinition(snapshot.room.floorFinish);
+      floorMatchedMaterial = new THREE.MeshStandardMaterial({
+        color: floorMatchedDefinition.fallbackColor,
+        roughness: floorMatchedDefinition.fallbackRoughness,
+        metalness: 0,
+        envMapIntensity: floorMatchedDefinition.envMapIntensity,
+        side: THREE.DoubleSide
+      });
+      floorMatchedMaterial.normalScale.set(floorMatchedDefinition.normalScale, floorMatchedDefinition.normalScale);
+      floorMatchedMaterial.name = `Baseboard - ${floorMatchedDefinition.name}`;
+      this.configureFloorMaterialShader(floorMatchedMaterial, floorMatchedDefinition);
+      const cached = this.floorMapResults.get(floorMatchedDefinition.id);
+      if (cached) {
+        this.applyFloorMaps(floorMatchedMaterial, floorMatchedDefinition, cached);
+        floorMatchedMaterial.name = `Baseboard - ${floorMatchedDefinition.name}`;
+      }
+      // Use the same lit floor finish for profile faces and ledges. Their different
+      // normals provide the highlight naturally without tinting the texture.
+      materials = [floorMatchedMaterial, floorMatchedMaterial];
+    } else {
+      const baseColor = new THREE.Color(snapshot.room.baseboardColor);
+      materials = [
         new THREE.MeshBasicMaterial({ color: baseColor, side: THREE.DoubleSide, toneMapped: false }),
         new THREE.MeshBasicMaterial({ color: baseColor.clone().lerp(new THREE.Color(0xffffff), 0.28), side: THREE.DoubleSide, toneMapped: false })
-      ]
-    );
+      ];
+    }
+
+    const mesh = new THREE.Mesh(geometry, materials);
     mesh.castShadow = false;
     mesh.receiveShadow = false;
     mesh.name = `Baseboard ${wall.index + 1} Segment`;
     this.tagCutawaySurface(mesh, wall);
     this.tagExportPart(mesh, 'Floors', `baseboard:${wall.id}`, `Baseboard ${wall.index + 1}`, this.wallYaw(wall));
     this.wallsGroup.add(mesh);
+
+    if (floorMatchedMaterial && floorMatchedDefinition && !this.floorMapResults.has(floorMatchedDefinition.id)) {
+      const material = floorMatchedMaterial;
+      const definition = floorMatchedDefinition;
+      void this.loadFloorFinishMaps(definition).then((maps) => {
+        // If the room was rebuilt while the texture was loading, this mesh/material
+        // has already been disposed and should not be revived.
+        if (this.disposed || mesh.parent !== this.wallsGroup || mesh.material !== materials) return;
+        this.applyFloorMaps(material, definition, maps);
+        material.name = `Baseboard - ${definition.name}`;
+        this.requestRender();
+      });
+    }
   }
 
   private addOpeningFrame(opening: PlannerSnapshot['openings'][number], snapshot: PlannerSnapshot, wallThickness: number) {

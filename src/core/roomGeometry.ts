@@ -1,7 +1,7 @@
 import type { RoomShapeKind, RoomState, RoomVertex, RoomWallSegment, Vec2 } from './types';
 
 const EPS = 1e-6;
-export const MIN_WALL_LENGTH = 0.45;
+export const MIN_WALL_LENGTH = 0.20;
 
 export function wallId(start: RoomVertex, end: RoomVertex) {
   return `wall-${start.id}-${end.id}`;
@@ -10,6 +10,16 @@ export function wallId(start: RoomVertex, end: RoomVertex) {
 export function roomTemplate(kind: Exclude<RoomShapeKind, 'custom'>, width: number, depth: number): RoomVertex[] {
   const w = Math.max(2.2, width);
   const d = Math.max(2.2, depth);
+  if (kind === 'angled-corner') {
+    const cut = Math.min(w, d) * 0.22;
+    return [
+      { id: 'v0', x: 0, z: 0 },
+      { id: 'v1', x: w - cut, z: 0 },
+      { id: 'v2', x: w, z: cut },
+      { id: 'v3', x: w, z: d },
+      { id: 'v4', x: 0, z: d }
+    ];
+  }
   if (kind === 'l-shape') {
     return [
       { id: 'v0', x: 0, z: 0 },

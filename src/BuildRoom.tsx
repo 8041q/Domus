@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
 import { Plan2D } from './Plan2D';
-import { getRoomWalls, getWall, polygonArea } from './core/roomGeometry';
+import { getRoomWalls, getWall, MIN_WALL_LENGTH, polygonArea } from './core/roomGeometry';
 import { dimensionStepMetres, displayLengthValue, displayValueToMetres, formatArea, formatLength, lengthInputSuffix } from './core/units';
 import type { MeasurementSystem, OpeningVariant, RoomOpening, RoomShapeKind } from './core/types';
 import { getSnapshot, usePlannerStore } from './store';
@@ -39,6 +39,7 @@ function openingKindLabel(type: RoomOpening['type']) {
 
 const SHAPES: Array<{ id: Exclude<RoomShapeKind, 'custom'>; name: string; description: string }> = [
   { id: 'rectangle', name: 'Rectangle', description: 'Simple four-wall room' },
+  { id: 'angled-corner', name: 'Angled corner', description: 'Five walls with one diagonal corner' },
   { id: 'l-shape', name: 'L-shape', description: 'Connected spaces or alcoves' },
   { id: 'recess', name: 'Recess', description: 'Room with a built-in notch' }
 ];
@@ -88,6 +89,54 @@ function DimensionField({ label, value, min, max, system, metricStep = 0.05, onC
         <small>{lengthInputSuffix(system)}</small>
       </span>
     </label>
+  );
+}
+
+function EditableRangeValue({ label, value, min, max, system, metricStep = 0.01, onCommit }: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  system: MeasurementSystem;
+  metricStep?: number;
+  onCommit: (value: number) => void | boolean;
+}) {
+  const [draft, setDraft] = useState(displayLengthValue(value, system).toFixed(2));
+
+  useEffect(() => {
+    setDraft(displayLengthValue(value, system).toFixed(2));
+  }, [system, value]);
+
+  const commit = () => {
+    const parsed = Number(draft);
+    if (!Number.isFinite(parsed)) {
+      setDraft(displayLengthValue(value, system).toFixed(2));
+      return;
+    }
+
+    const rawMetres = displayValueToMetres(parsed, system);
+    const step = dimensionStepMetres(system, metricStep);
+    const next = Math.max(min, Math.min(max, Math.round(rawMetres / step) * step));
+    const accepted = Math.abs(next - value) > 0.0001 ? onCommit(next) : true;
+    setDraft(displayLengthValue(accepted === false ? value : next, system).toFixed(2));
+  };
+
+  return (
+    <div className="range-value-row">
+      <span>{label}</span>
+      <span className="range-editable-value">
+        <input
+          inputMode="decimal"
+          value={draft}
+          onFocus={(e) => e.currentTarget.select()}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+          aria-label={`${label} in ${system === 'metric' ? 'metres' : 'feet'}`}
+        />
+        <small>{lengthInputSuffix(system)}</small>
+      </span>
+    </div>
   );
 }
 
@@ -191,8 +240,15 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
           ))}
         </select>
       </label>
-      <label className="field-label range-field">Position along wall
-        <div className="range-value-row"><span>Position</span><strong>{formatLength(opening.offset, system)}</strong></div>
+      <label className="field-label range-field">
+        <EditableRangeValue
+          label="Horizontal Position"
+          value={opening.offset}
+          min={opening.width / 2 + 0.05}
+          max={Math.max(opening.width / 2 + 0.05, maxOffset - opening.width / 2 - 0.05)}
+          system={system}
+          onCommit={(offset) => updateOpening(opening.id, { offset })}
+        />
         <input
           className="range"
           type="range"
@@ -207,20 +263,16 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
           onBlur={finishSlider}
         />
       </label>
-      <div className="compact-dimensions">
-        <DimensionField label="Width" value={opening.width} min={minOpeningWidth} max={Math.max(minOpeningWidth, maxOffset - 0.2)} system={system} onCommit={(width) => updateOpening(opening.id, { width })} />
-        <DimensionField label="Height" value={opening.height} min={minOpeningHeight} max={room.height} system={system} onCommit={(height) => updateOpening(opening.id, { height })} />
-      </div>
       <div className="opening-size-sliders">
         <label className="field-label range-field">
-          <div className="range-value-row"><span>Width slider</span><strong>{formatLength(opening.width, system)}</strong></div>
+          <EditableRangeValue label="Width" value={opening.width} min={minOpeningWidth} max={Math.max(minOpeningWidth, maxOffset - 0.2)} system={system} onCommit={(width) => updateOpening(opening.id, { width })} />
           <input className="range" type="range" min={minOpeningWidth} max={Math.max(minOpeningWidth, maxOffset - 0.2)} step={system === 'metric' ? 0.01 : 0.0127} value={opening.width}
             onPointerDown={beginSize} onFocus={beginSize}
             onChange={(e) => updateOpening(opening.id, { width: Number(e.target.value) }, false)}
             onPointerUp={finishSize} onBlur={finishSize} />
         </label>
         <label className="field-label range-field">
-          <div className="range-value-row"><span>Height slider</span><strong>{formatLength(opening.height, system)}</strong></div>
+          <EditableRangeValue label="Height" value={opening.height} min={minOpeningHeight} max={Math.max(minOpeningHeight, room.height - opening.sillHeight)} system={system} onCommit={(height) => updateOpening(opening.id, { height })} />
           <input className="range" type="range" min={minOpeningHeight} max={Math.max(minOpeningHeight, room.height - opening.sillHeight)} step={system === 'metric' ? 0.01 : 0.0127} value={opening.height}
             onPointerDown={beginSize} onFocus={beginSize}
             onChange={(e) => updateOpening(opening.id, { height: Number(e.target.value) }, false)}
@@ -228,9 +280,23 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
         </label>
       </div>
       {opening.type !== 'door' && opening.variant !== 'full-height-window' && opening.variant !== 'sliding-window' && (
-        <DimensionField label={opening.type === 'opening' ? 'Bottom from floor' : 'Sill height'} value={opening.sillHeight} min={0} max={Math.max(0.3, room.height - opening.height)} system={system} metricStep={0.01} onCommit={(sillHeight) => updateOpening(opening.id, { sillHeight })} />
+        <label className="field-label range-field vertical-position-slider">
+          <EditableRangeValue label="Vertical Position" value={opening.sillHeight} min={0} max={Math.max(0, room.height - opening.height)} system={system} onCommit={(sillHeight) => updateOpening(opening.id, { sillHeight })} />
+          <input
+            className="range"
+            type="range"
+            min={0}
+            max={Math.max(0, room.height - opening.height)}
+            step={system === 'metric' ? 0.01 : 0.0127}
+            value={opening.sillHeight}
+            onPointerDown={beginSize}
+            onFocus={beginSize}
+            onChange={(e) => updateOpening(opening.id, { sillHeight: Number(e.target.value) }, false)}
+            onPointerUp={finishSize}
+            onBlur={finishSize}
+          />
+        </label>
       )}
-      <p className="hint">Drag this element directly in either the 2D or 3D view. Width, height and style remain editable here.</p>
     </div>
   );
 }
@@ -256,15 +322,13 @@ function WallEditor({ wallId }: { wallId: string }) {
           <strong>Wall {wall.index + 1}</strong>
           <span>{wallAngleLabel(wall.start, wall.end)}</span>
         </div>
-        <span className="wall-length-badge">{formatLength(wall.length, system)}</span>
       </div>
-      <DimensionField label="Exact wall length" value={wall.length} min={0.45} max={20} system={system} onCommit={(length) => resizeWallById(wall.id, length)} />
       <label className="field-label wall-length-slider">
-        <div className="range-value-row"><span>Adjust length</span><strong>{formatLength(wall.length, system)}</strong></div>
+        <EditableRangeValue label="Adjust length" value={wall.length} min={MIN_WALL_LENGTH} max={20} system={system} metricStep={0.05} onCommit={(length) => resizeWallById(wall.id, length)} />
         <input
           className="range"
           type="range"
-          min={0.45}
+          min={MIN_WALL_LENGTH}
           max={20}
           step={system === 'metric' ? 0.05 : 0.0254}
           value={wall.length}
@@ -275,7 +339,7 @@ function WallEditor({ wallId }: { wallId: string }) {
           onBlur={finishSlider}
         />
       </label>
-      <p className="hint">Drag the highlighted wall for spatial editing. The slider and exact field resize it symmetrically from its centre.</p>
+      <p className="hint">Drag the highlighted wall in the plan, or use the slider for symmetric resizing.</p>
     </div>
   );
 }
@@ -306,6 +370,7 @@ export function BuildRoom() {
   return (
     <div className="mode-layout builder-layout">
       <aside className="tool-panel builder-panel">
+        <div className="builder-scroll-content">
         <div className="panel-intro">
           <span className="eyebrow">Step 1</span>
           <h1>Build your room</h1>
@@ -340,32 +405,54 @@ export function BuildRoom() {
             </div>
           </div>
           <div className="dimension-grid">
-            <DimensionField label="Overall width" value={room.width} min={2.2} max={20} system={system} onCommit={(width) => updateRoom({ width })} />
-            <DimensionField label="Overall depth" value={room.depth} min={2.2} max={20} system={system} onCommit={(depth) => updateRoom({ depth })} />
-            <DimensionField label="Ceiling height" value={room.height} min={2.1} max={4.2} system={system} metricStep={0.01} onCommit={(height) => updateRoom({ height })} />
+            <DimensionField label="Room height" value={room.height} min={1} max={3.3} system={system} metricStep={0.01} onCommit={(height) => updateRoom({ height })} />
           </div>
-          {selectedWallId ? <WallEditor wallId={selectedWallId} /> : <p className="hint">Click a labelled wall to enter its exact length, or drag it directly in the plan.</p>}
         </section>
 
-        <section className="tool-section">
+        <section className="tool-section opening-section">
           <div className="section-title-row"><div><span className="section-step">3</span><h2>Doors, windows & openings</h2></div></div>
-          <div className="opening-buttons opening-buttons-three">
-            <button type="button" onClick={() => addOpening('door')}><span className="opening-icon door-icon" />Add door</button>
-            <button type="button" onClick={() => addOpening('window')}><span className="opening-icon window-icon" />Add window</button>
-            <button type="button" onClick={() => addOpening('opening')}><span className="opening-icon hole-icon" />Add wall opening</button>
+          <div className="opening-quick-add" aria-label="Add an opening">
+            <button type="button" onClick={() => addOpening('door')}><span className="opening-add-mark" aria-hidden="true">+</span><span>Door</span></button>
+            <button type="button" onClick={() => addOpening('window')}><span className="opening-add-mark" aria-hidden="true">+</span><span>Window</span></button>
+            <button type="button" onClick={() => addOpening('opening')}><span className="opening-add-mark" aria-hidden="true">+</span><span>Opening</span></button>
           </div>
-          <p className="hint compact-hint">Select a labelled wall first to add the opening there, or we'll choose a suitable wall automatically.</p>
+          <p className="hint compact-hint">Select a wall first to place the opening there.</p>
           {!!openings.length && (
-            <div className="opening-chips" aria-label="Room openings">
-              {openings.map((opening) => (
-                <button key={opening.id} type="button" className={opening.id === selectedOpeningId ? 'active' : ''} onClick={() => selectOpening(opening.id)}>
-                  {openingDisplayName(opening, openings)}
-                </button>
-              ))}
+            <label className="opening-selector">
+              <span>Selected opening</span>
+              <select
+                value={selectedOpeningId ?? ''}
+                onChange={(e: ChangeEvent<HTMLSelectElement>) => selectOpening(e.target.value || null)}
+                aria-label="Selected opening"
+              >
+                <option value="">Choose an opening…</option>
+                {openings.map((opening) => {
+                  const openingWall = getWall(room, opening.wallId);
+                  return (
+                    <option key={opening.id} value={opening.id}>
+                      {openingDisplayName(opening, openings)}{openingWall ? ` — Wall ${openingWall.index + 1}` : ''}
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
+          )}
+        </section>
+        </div>
+
+        <div className="builder-inspector-dock" aria-live="polite">
+          {selectedOpening ? (
+            <OpeningEditor opening={selectedOpening} />
+          ) : selectedWallId ? (
+            <WallEditor wallId={selectedWallId} />
+          ) : (
+            <div className="builder-inspector-empty">
+              <span className="eyebrow">Selection settings</span>
+              <strong>Select a wall, door, window or opening</strong>
+              <p>Its compact controls will stay in this fixed panel without moving the room tools above.</p>
             </div>
           )}
-          {selectedOpening && <OpeningEditor opening={selectedOpening} />}
-        </section>
+        </div>
 
         <div className="builder-continue">
           <button className="primary-button" type="button" onClick={() => setMode('plan')}>Continue to Plan Room <Icon name="chevronRight" /></button>

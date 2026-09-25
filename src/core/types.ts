@@ -28,9 +28,10 @@ export type FloorFinish =
   | 'terrazzo-005'
   | 'terrazzo-007'
   | 'wood-floor-020';
-export type RoomShapeKind = 'rectangle' | 'l-shape' | 'recess' | 'custom';
+export type RoomShapeKind = 'rectangle' | 'angled-corner' | 'l-shape' | 'recess' | 'custom';
 export type CeilingLightFixtureType = 'surface-mounted' | 'recessed';
 export type BaseboardStyle = 'flat' | 'flush' | 'rounded' | 'stepped' | 'sculpted' | 'sculpted-tall' | 'floating' | 'flash-coving';
+export type BaseboardMaterial = 'paint' | 'materials';
 
 export interface RoomLighting {
   enabled: boolean;
@@ -56,6 +57,7 @@ export interface RoomState {
   ceilingColor: string;
   baseboardColor: string;
   baseboardStyle: BaseboardStyle;
+  baseboardMaterial: BaseboardMaterial;
   floorFinish: FloorFinish;
   lighting: RoomLighting;
   shapeKind: RoomShapeKind;
