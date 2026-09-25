@@ -1578,22 +1578,15 @@ export class PlannerScene {
       (bounds.minZ + bounds.maxZ) / 2
     );
     const elevation = THREE.MathUtils.degToRad(snapshot.room.lighting.sunElevation);
-    const sideways = new THREE.Vector3(-direction.z, 0, direction.x);
-    const vertical = new THREE.Vector3(
-      -direction.x * Math.sin(elevation),
-      Math.cos(elevation),
-      -direction.z * Math.sin(elevation)
-    );
-    // Both sources orbit the room at a fixed radius. Their small offset in the
-    // tangent plane keeps their separation and two shadow directions constant.
+    // Both sources orbit the room at a fixed radius and share the configured
+    // direction. Their different colors and shadow filters still build the
+    // established soft/crisp ray, without a second angle sending narrow beams
+    // from the same aperture onto unrelated room corners.
     const source = centre.clone()
       .addScaledVector(direction, 50 * Math.cos(elevation));
     source.y += 50 * Math.sin(elevation);
-    this.sunsetLights.forEach((light, index) => {
-      const side = index === 0 ? -1 : 1;
-      light.position.copy(source)
-        .addScaledVector(sideways, side)
-        .addScaledVector(vertical, 0.45 * side);
+    this.sunsetLights.forEach((light) => {
+      light.position.copy(source);
       light.target.position.copy(centre);
       light.shadow.needsUpdate = true;
     });
@@ -1669,13 +1662,18 @@ export class PlannerScene {
     // Build each wall as one continuous mask with pane-shaped holes. The previous
     // tiled boxes met exactly at every pane edge and sash divider; shadow filtering
     // exposed those joins as long, false shafts of light on the opposite wall.
-    const maskOverlap = 0.05;
+    // PCF filtering samples beyond the geometric silhouette of a shadow caster.
+    // Grow only the room envelope by the soft sun's world-space filter footprint
+    // so those samples cannot see around wall and ceiling edges. Aperture holes
+    // remain exact, preserving the established window and glazed-door rays.
+    const shadowTexelSize = shadowSpan / softSun.shadow.mapSize.width;
+    const maskGuard = shadowTexelSize * (softSun.shadow.radius + 2);
     for (const wall of walls) {
       const shape = new THREE.Shape();
-      shape.moveTo(-maskOverlap, -maskOverlap);
-      shape.lineTo(wall.length + maskOverlap, -maskOverlap);
-      shape.lineTo(wall.length + maskOverlap, snapshot.room.height + maskOverlap);
-      shape.lineTo(-maskOverlap, snapshot.room.height + maskOverlap);
+      shape.moveTo(-maskGuard, -maskGuard);
+      shape.lineTo(wall.length + maskGuard, -maskGuard);
+      shape.lineTo(wall.length + maskGuard, snapshot.room.height + maskGuard);
+      shape.lineTo(-maskGuard, snapshot.room.height + maskGuard);
       shape.closePath();
 
       const panes = snapshot.openings
@@ -1704,7 +1702,8 @@ export class PlannerScene {
       mask.onAfterShadow = afterMaskShadow;
       this.sunsetGroup.add(mask);
     }
-    const ceilingShape = new THREE.Shape(snapshot.room.vertices.map((vertex) => new THREE.Vector2(vertex.x, vertex.z)));
+    const ceilingMaskVertices = this.insetRoomVertices(snapshot, -maskGuard);
+    const ceilingShape = new THREE.Shape(ceilingMaskVertices.map((vertex) => new THREE.Vector2(vertex.x, vertex.z)));
     const ceilingMask = new THREE.Mesh(new THREE.ShapeGeometry(ceilingShape), maskMaterial);
     ceilingMask.rotation.x = Math.PI / 2;
     ceilingMask.position.y = snapshot.room.height + 0.02;

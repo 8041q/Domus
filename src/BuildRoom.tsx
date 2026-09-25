@@ -449,7 +449,6 @@ export function BuildRoom() {
             <div className="builder-inspector-empty">
               <span className="eyebrow">Selection settings</span>
               <strong>Select a wall, door, window or opening</strong>
-              <p>Its compact controls will stay in this fixed panel without moving the room tools above.</p>
             </div>
           )}
         </div>
