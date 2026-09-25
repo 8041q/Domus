@@ -1,4 +1,4 @@
-import { lazy, Suspense, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from 'react';
+import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from 'react';
 import { PRODUCT_LIST, PRODUCTS } from './core/products';
 import { clearanceIssues } from './core/placement';
 import { polygonArea } from './core/roomGeometry';
@@ -216,18 +216,7 @@ function FinishesPanel({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function PlanRoom() {
-  const [search, setSearch] = useState('');
-  const [category, setCategory] = useState<'All' | ProductCategory>('All');
-  const [showFinishes, setShowFinishes] = useState(false);
-  const [showViewOptions, setShowViewOptions] = useState(false);
-  const objects = usePlannerStore((s) => s.objects);
-  const room = usePlannerStore((s) => s.room);
-  const selectedId = usePlannerStore((s) => s.selectedId);
-  const measurementSystem = usePlannerStore((s) => s.measurementSystem);
-  const activeSnap = usePlannerStore((s) => s.activeSnap);
-  const collisionId = usePlannerStore((s) => s.collisionId);
-  const collisionPush = usePlannerStore((s) => s.collisionPush);
+function ViewOptionsPopover() {
   const showRoomDimensions = usePlannerStore((s) => s.showRoomDimensions);
   const showProductDimensions = usePlannerStore((s) => s.showProductDimensions);
   const showSpacingDimensions = usePlannerStore((s) => s.showSpacingDimensions);
@@ -236,21 +225,11 @@ export function PlanRoom() {
   const setShowSpacingDimensions = usePlannerStore((s) => s.setShowSpacingDimensions);
   const lighting = usePlannerStore((s) => s.room.lighting);
   const windowCount = usePlannerStore((s) => s.openings.filter(isSunGlazedOpening).length);
-  const hasWindow = windowCount > 0;
-  const horizontalAngle = effectiveSunAzimuth(lighting.sunAzimuth, windowCount);
   const setRoomLighting = usePlannerStore((s) => s.setRoomLighting);
   const commitSnapshot = usePlannerStore((s) => s.commitSnapshot);
   const sunAngleBefore = useRef<ReturnType<typeof getSnapshot> | null>(null);
-  const planView = usePlannerStore((s) => s.planView);
-  const setPlanView = usePlannerStore((s) => s.setPlanView);
-  const addObject = usePlannerStore((s) => s.addObject);
-  const setMode = usePlannerStore((s) => s.setMode);
-
-  const filtered = useMemo(() => PRODUCT_LIST.filter((p) => {
-    const matchesCategory = category === 'All' || p.category === category;
-    const matchesSearch = p.name.toLowerCase().includes(search.trim().toLowerCase());
-    return matchesCategory && matchesSearch;
-  }), [category, search]);
+  const hasWindow = windowCount > 0;
+  const horizontalAngle = effectiveSunAzimuth(lighting.sunAzimuth, windowCount);
 
   const finishSunAngle = () => {
     if (sunAngleBefore.current) commitSnapshot(sunAngleBefore.current);
@@ -265,108 +244,198 @@ export function PlanRoom() {
   };
 
   return (
-    <div className="mode-layout plan-room-layout">
-      <aside className="catalog-panel">
-        <div className="catalog-heading">
-          <div><span className="eyebrow">Step 2</span><h1>Plan your room</h1></div>
-          <button type="button" className="edit-room-link" onClick={() => setMode('build')}><Icon name="arrowLeft" />Edit room</button>
-        </div>
-        <label className="search-box">
-          <span><Icon name="search" /></span>
-          <input value={search} onChange={(e: ChangeEvent<HTMLInputElement>) => setSearch(e.target.value)} placeholder="Search furniture" />
+    <div className="view-options-popover">
+      <strong>Annotations</strong>
+      <label><input type="checkbox" checked={showRoomDimensions} onChange={(e) => setShowRoomDimensions(e.target.checked)} /><span>Room dimensions<small>Perimeter measurements</small></span></label>
+      <label><input type="checkbox" checked={showProductDimensions} onChange={(e) => setShowProductDimensions(e.target.checked)} /><span>Product dimensions<small>Bounding-box width, depth and height</small></span></label>
+      <label><input type="checkbox" checked={showSpacingDimensions} onChange={(e) => setShowSpacingDimensions(e.target.checked)} /><span>Item spacing<small>Nearest free-space measurements</small></span></label>
+      <div className="view-options-section">
+        <strong>Ceiling lighting</strong>
+        <label><input type="checkbox" checked={lighting.enabled} onChange={(e) => setRoomLighting({ enabled: e.target.checked })} /><span>Enable room lights<small>Add ceiling fixtures and balanced interior lighting</small></span></label>
+        <label>
+          <span>Fixture type<small>Choose the ceiling light family</small></span>
+          <select value={lighting.fixtureType} onChange={(e) => setRoomLighting({ fixtureType: e.target.value as CeilingLightFixtureType })}>
+            <option value="surface-mounted">Surface-mounted / Slim wafers</option>
+            <option value="recessed">Recessed downlights / Cans</option>
+          </select>
         </label>
-        <div className="category-tabs" role="tablist" aria-label="Product categories">
-          {CATEGORIES.map((item) => <button key={item} className={category === item ? 'active' : ''} onClick={() => setCategory(item)}>{item}</button>)}
+        <label><input type="checkbox" checked={lighting.showWithoutCeiling} onChange={(e) => setRoomLighting({ showWithoutCeiling: e.target.checked })} /><span>Show fixtures without ceiling<small>Keep fixtures visible when the ceiling is hidden</small></span></label>
+      </div>
+      {hasWindow && <div className="view-options-section sun-angle-section">
+        <strong>Window and door sun</strong>
+        <label><input type="checkbox" checked={lighting.sunRaysEnabled} onChange={(e) => setRoomLighting({ sunRaysEnabled: e.target.checked })} /><span>Enable sun rays<small>Project direct sunlight through glazed openings</small></span></label>
+        <label>
+          <span>Sun style<small>Choose neutral paired shadows or a warm/cool cinematic environment</small></span>
+          <select value={lighting.sunStylePreset} disabled={!lighting.sunRaysEnabled} onChange={(e) => setRoomLighting({ sunStylePreset: e.target.value as SunStylePreset })}>
+            <option value="paired-shadows">Paired shadows</option>
+            <option value="cinematic-grade">Cinematic grade</option>
+          </select>
+        </label>
+        <div className="sun-angle-control">
+          <div><span>Horizontal</span><output>{horizontalAngle}°</output></div>
+          <input type="range" min={windowCount === 1 ? -SUN_SINGLE_WINDOW_LIMIT : SUN_AZIMUTH_MIN} max={windowCount === 1 ? SUN_SINGLE_WINDOW_LIMIT : SUN_AZIMUTH_MAX} step="1" value={horizontalAngle} aria-label="Sun horizontal angle" disabled={!lighting.sunRaysEnabled} {...sunAngleEvents}
+            onChange={(e) => setRoomLighting({ sunAzimuth: normalizeSunAzimuth(e.target.value) }, false)} />
         </div>
-        <div className="product-grid">
-          {filtered.map((product) => (
-            <button className="product-card" key={product.id} type="button" onClick={() => addObject(product.id)}>
-              <div className="product-visual"><ProductGlyph productId={product.id} /></div>
-              <strong>{product.name}</strong>
-              <small>{Math.round(product.width * 100)} × {Math.round(product.depth * 100)} cm</small>
-              <span>{product.priceLabel}</span>
-            </button>
-          ))}
+        <div className="sun-angle-control">
+          <div><span>Height</span><output>{lighting.sunElevation}°</output></div>
+          <input type="range" min={SUN_ELEVATION_MIN} max={SUN_ELEVATION_MAX} step="1" value={lighting.sunElevation} aria-label="Sun height angle" disabled={!lighting.sunRaysEnabled} {...sunAngleEvents}
+            onChange={(e) => setRoomLighting({ sunElevation: Number(e.target.value) }, false)} />
         </div>
-        {!filtered.length && <p className="empty-state">No placeholder products match that search.</p>}
-      </aside>
+        <small>{windowCount === 1 ? '0° faces the glazed opening; the slider stops at its horizon.' : '0° faces the first glazed opening. Rotate through 360° to reach the others.'}</small>
+      </div>}
+    </div>
+  );
+}
+
+function InteractionStatus() {
+  const activeSnap = usePlannerStore((s) => s.activeSnap);
+  const collisionId = usePlannerStore((s) => s.collisionId);
+  const collisionPush = usePlannerStore((s) => s.collisionPush);
+
+  return (
+    <div className={`interaction-status ${collisionId ? 'error' : collisionPush ? 'contact' : activeSnap.label === 'Free move' ? 'free' : activeSnap.kind !== 'none' ? 'snap' : ''}`}>
+      <span className="status-indicator" />
+      {collisionId
+        ? 'This item cannot fit at the current position.'
+        : collisionPush
+          ? 'Object contact - placement was nudged to the nearest free edge.'
+          : activeSnap.label === 'Free move'
+            ? 'Free move · snapping is off while Shift is held during an item drag.'
+            : activeSnap.kind !== 'none'
+              ? `Alignment assist · ${activeSnap.label ?? 'guide'}`
+              : 'Drag an item to move · hold Shift while dragging for free move / overlap · Shift + drag empty space to orbit without clearing selection'}
+    </div>
+  );
+}
+
+const ProductCatalog = memo(function ProductCatalog() {
+  const [search, setSearch] = useState('');
+  const [category, setCategory] = useState<'All' | ProductCategory>('All');
+  const addObject = usePlannerStore((s) => s.addObject);
+  const setMode = usePlannerStore((s) => s.setMode);
+
+  const filtered = useMemo(() => PRODUCT_LIST.filter((p) => {
+    const matchesCategory = category === 'All' || p.category === category;
+    const matchesSearch = p.name.toLowerCase().includes(search.trim().toLowerCase());
+    return matchesCategory && matchesSearch;
+  }), [category, search]);
+
+  return (
+    <aside className="catalog-panel">
+      <div className="catalog-heading">
+        <div><span className="eyebrow">Step 2</span><h1>Plan your room</h1></div>
+        <button type="button" className="edit-room-link" onClick={() => setMode('build')}><Icon name="arrowLeft" />Edit room</button>
+      </div>
+      <label className="search-box">
+        <span><Icon name="search" /></span>
+        <input value={search} onChange={(e: ChangeEvent<HTMLInputElement>) => setSearch(e.target.value)} placeholder="Search furniture" />
+      </label>
+      <div className="category-tabs" role="tablist" aria-label="Product categories">
+        {CATEGORIES.map((item) => <button key={item} className={category === item ? 'active' : ''} onClick={() => setCategory(item)}>{item}</button>)}
+      </div>
+      <div className="product-grid">
+        {filtered.map((product) => (
+          <button className="product-card" key={product.id} type="button" onClick={() => addObject(product.id)}>
+            <div className="product-visual"><ProductGlyph productId={product.id} /></div>
+            <strong>{product.name}</strong>
+            <small>{Math.round(product.width * 100)} × {Math.round(product.depth * 100)} cm</small>
+            <span>{product.priceLabel}</span>
+          </button>
+        ))}
+      </div>
+      {!filtered.length && <p className="empty-state">No placeholder products match that search.</p>}
+    </aside>
+  );
+});
+
+export function PlanRoom() {
+  const [showFinishes, setShowFinishes] = useState(false);
+  const [showViewOptions, setShowViewOptions] = useState(false);
+  const viewOptionsRef = useRef<HTMLDivElement>(null);
+  const finishesButtonRef = useRef<HTMLButtonElement>(null);
+  const objectCount = usePlannerStore((s) => s.objects.length);
+  const roomVertices = usePlannerStore((s) => s.room.vertices);
+  const selectedId = usePlannerStore((s) => s.selectedId);
+  const measurementSystem = usePlannerStore((s) => s.measurementSystem);
+  const sunRaysEnabled = usePlannerStore((s) => s.room.lighting.sunRaysEnabled);
+  const planView = usePlannerStore((s) => s.planView);
+  const setPlanView = usePlannerStore((s) => s.setPlanView);
+
+  useEffect(() => {
+    if (!showFinishes && !showViewOptions) return;
+
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+
+      if (showViewOptions && !viewOptionsRef.current?.contains(target)) {
+        setShowViewOptions(false);
+      }
+
+      if (showFinishes) {
+        const insideToggle = finishesButtonRef.current?.contains(target) ?? false;
+        const insidePanel = target instanceof Element && Boolean(target.closest('.finish-panel'));
+        if (!insideToggle && !insidePanel) setShowFinishes(false);
+      }
+    };
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setShowFinishes(false);
+      setShowViewOptions(false);
+    };
+
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [showFinishes, showViewOptions]);
+
+  return (
+    <div className="mode-layout plan-room-layout">
+      <ProductCatalog />
 
       <section className="designer-canvas">
-        <div className="designer-topbar">
-          <div className="view-preset-bar" role="group" aria-label="3D room view">
-            {VIEW_PRESETS.map((view) => <button key={view.id} type="button" className={planView === view.id ? 'active' : ''} onClick={() => setPlanView(view.id)}>{view.label}</button>)}
-          </div>
-          <div className="designer-meta">
-            <div className="room-count">{objects.length} item{objects.length === 1 ? '' : 's'} · {formatArea(Math.abs(polygonArea(room.vertices)), measurementSystem)} · {room.vertices.length} walls</div>
-            <div className="view-options-wrap">
-              <button type="button" className={`finish-toggle ${showViewOptions ? 'active' : ''}`} onClick={() => setShowViewOptions((value) => !value)}><Icon name="eye" />View options</button>
-              {showViewOptions && (
-                <div className="view-options-popover">
-                  <strong>Annotations</strong>
-                  <label><input type="checkbox" checked={showRoomDimensions} onChange={(e) => setShowRoomDimensions(e.target.checked)} /><span>Room dimensions<small>Perimeter measurements</small></span></label>
-                  <label><input type="checkbox" checked={showProductDimensions} onChange={(e) => setShowProductDimensions(e.target.checked)} /><span>Product dimensions<small>Bounding-box width, depth and height</small></span></label>
-                  <label><input type="checkbox" checked={showSpacingDimensions} onChange={(e) => setShowSpacingDimensions(e.target.checked)} /><span>Item spacing<small>Nearest free-space measurements</small></span></label>
-                  <div className="view-options-section">
-                    <strong>Ceiling lighting</strong>
-                    <label><input type="checkbox" checked={lighting.enabled} onChange={(e) => setRoomLighting({ enabled: e.target.checked })} /><span>Enable room lights<small>Add ceiling fixtures and balanced interior lighting</small></span></label>
-                    <label>
-                      <span>Fixture type<small>Choose the ceiling light family</small></span>
-                      <select value={lighting.fixtureType} onChange={(e) => setRoomLighting({ fixtureType: e.target.value as CeilingLightFixtureType })}>
-                        <option value="surface-mounted">Surface-mounted / Slim wafers</option>
-                        <option value="recessed">Recessed downlights / Cans</option>
-                      </select>
-                    </label>
-                    <label><input type="checkbox" checked={lighting.showWithoutCeiling} onChange={(e) => setRoomLighting({ showWithoutCeiling: e.target.checked })} /><span>Show fixtures without ceiling<small>Keep fixtures visible when the ceiling is hidden</small></span></label>
-                  </div>
-                  {hasWindow && <div className="view-options-section sun-angle-section">
-                    <strong>Window and door sun</strong>
-                    <label><input type="checkbox" checked={lighting.sunRaysEnabled} onChange={(e) => setRoomLighting({ sunRaysEnabled: e.target.checked })} /><span>Enable sun rays<small>Project direct sunlight through glazed openings</small></span></label>
-                    <label>
-                      <span>Sun style<small>Choose neutral paired shadows or a warm/cool cinematic environment</small></span>
-                      <select value={lighting.sunStylePreset} disabled={!lighting.sunRaysEnabled} onChange={(e) => setRoomLighting({ sunStylePreset: e.target.value as SunStylePreset })}>
-                        <option value="paired-shadows">Paired shadows</option>
-                        <option value="cinematic-grade">Cinematic grade</option>
-                      </select>
-                    </label>
-                    <div className="sun-angle-control">
-                      <div><span>Horizontal</span><output>{horizontalAngle}°</output></div>
-                      <input type="range" min={windowCount === 1 ? -SUN_SINGLE_WINDOW_LIMIT : SUN_AZIMUTH_MIN} max={windowCount === 1 ? SUN_SINGLE_WINDOW_LIMIT : SUN_AZIMUTH_MAX} step="1" value={horizontalAngle} aria-label="Sun horizontal angle" disabled={!lighting.sunRaysEnabled} {...sunAngleEvents}
-                        onChange={(e) => setRoomLighting({ sunAzimuth: normalizeSunAzimuth(e.target.value) }, false)} />
-                    </div>
-                    <div className="sun-angle-control">
-                      <div><span>Height</span><output>{lighting.sunElevation}°</output></div>
-                      <input type="range" min={SUN_ELEVATION_MIN} max={SUN_ELEVATION_MAX} step="1" value={lighting.sunElevation} aria-label="Sun height angle" disabled={!lighting.sunRaysEnabled} {...sunAngleEvents}
-                        onChange={(e) => setRoomLighting({ sunElevation: Number(e.target.value) }, false)} />
-                    </div>
-                    <small>{windowCount === 1 ? '0° faces the glazed opening; the slider stops at its horizon.' : '0° faces the first glazed opening. Rotate through 360° to reach the others.'}</small>
-                  </div>}
-                </div>
-              )}
-            </div>
-            <button type="button" className={`finish-toggle ${showFinishes ? 'active' : ''}`} onClick={() => setShowFinishes((value) => !value)}><Icon name="palette" />Room finishes</button>
-          </div>
-        </div>
-
         <div className="designer-stage">
+          <div className="designer-topbar" aria-label="Room view controls">
+            <div className="view-preset-bar" role="group" aria-label="3D room view">
+              {VIEW_PRESETS.map((view) => <button key={view.id} type="button" className={planView === view.id ? 'active' : ''} onClick={() => setPlanView(view.id)}>{view.label}</button>)}
+            </div>
+            <div className="designer-meta">
+              <div className="room-count">{objectCount} item{objectCount === 1 ? '' : 's'} · {formatArea(Math.abs(polygonArea(roomVertices)), measurementSystem)} · {roomVertices.length} walls</div>
+              <div className="view-options-wrap" ref={viewOptionsRef}>
+                <button
+                  type="button"
+                  className={`finish-toggle designer-icon-button ${showViewOptions ? 'active' : ''}`}
+                  onClick={() => { setShowFinishes(false); setShowViewOptions((value) => !value); }}
+                  aria-label="View options"
+                  title="View options"
+                  aria-expanded={showViewOptions}
+                ><Icon name="eye" /></button>
+              {showViewOptions && <ViewOptionsPopover />}
+              </div>
+              <button
+                ref={finishesButtonRef}
+                type="button"
+                className={`finish-toggle designer-icon-button ${showFinishes ? 'active' : ''}`}
+                onClick={() => { setShowViewOptions(false); setShowFinishes((value) => !value); }}
+                aria-label="Room finishes"
+                title="Room finishes"
+                aria-expanded={showFinishes}
+              ><Icon name="palette" /></button>
+            </div>
+          </div>
+
           <Suspense fallback={<div className="viewport-loading">Loading 3D room…</div>}>
-            <Viewport3D furniture interactive sunRays={lighting.sunRaysEnabled} view={planView} exportable />
+            <Viewport3D furniture interactive sunRays={sunRaysEnabled} view={planView} exportable />
           </Suspense>
           {showFinishes && <FinishesPanel onClose={() => setShowFinishes(false)} />}
           {selectedId && <SelectionPanel />}
         </div>
 
-        <div className={`interaction-status ${collisionId ? 'error' : collisionPush ? 'contact' : activeSnap.label === 'Free move' ? 'free' : activeSnap.kind !== 'none' ? 'snap' : ''}`}>
-          <span className="status-indicator" />
-          {collisionId
-            ? 'This item cannot fit at the current position.'
-            : collisionPush
-              ? 'Object contact - placement was nudged to the nearest free edge.'
-              : activeSnap.label === 'Free move'
-                ? 'Free move · snapping is off while Shift is held during an item drag.'
-                : activeSnap.kind !== 'none'
-                  ? `Alignment assist · ${activeSnap.label ?? 'guide'}`
-                  : 'Drag an item to move · hold Shift while dragging for free move / overlap · Shift + drag empty space to orbit without clearing selection'}
-        </div>
+        <InteractionStatus />
       </section>
     </div>
   );

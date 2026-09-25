@@ -459,24 +459,33 @@ export function BuildRoom() {
       </aside>
 
       <section className="workspace-panel">
-        <div className="workspace-toolbar">
-          <div>
-            <strong>{buildView === 'plan' ? 'Floor plan' : '3D preview'}</strong>
-            <span>{buildView === 'plan' ? 'Drag corners freely for angled walls, or move labelled wall segments' : 'Orbit the room, then drag doors, windows and wall openings directly on their walls'}</span>
-          </div>
-          <div className="workspace-toolbar-actions">
-            <span className="workspace-area-badge"><small>Room area</small><strong>{formatArea(roomArea, system)}</strong></span>
-            <div className="segmented-control" role="group" aria-label="Room builder view">
-              <button className={buildView === 'plan' ? 'active' : ''} onClick={() => setBuildView('plan')}>2D</button>
-              <button className={buildView === '3d' ? 'active' : ''} onClick={() => setBuildView('3d')}>3D</button>
+        <div className="workspace-content">
+          <div className="workspace-toolbar" aria-label="Room builder view controls">
+            <div className="workspace-toolbar-actions">
+              <span className="workspace-area-badge" title="Room area"><small>Room area</small><strong>{formatArea(roomArea, system)}</strong></span>
+              <div className="segmented-control" role="group" aria-label="Room builder view">
+                <button type="button" className={buildView === 'plan' ? 'active' : ''} onClick={() => setBuildView('plan')} aria-pressed={buildView === 'plan'}>2D</button>
+                <button type="button" className={buildView === '3d' ? 'active' : ''} onClick={() => setBuildView('3d')} aria-pressed={buildView === '3d'}>3D</button>
+              </div>
             </div>
           </div>
-        </div>
-        <div className="workspace-content">
+
           {buildView === 'plan' ? <Plan2D purpose="build" /> : (
-            <Suspense fallback={<div className="viewport-loading">Loading 3D preview…</div>}>
-              <Viewport3D furniture={false} interactive={false} architectureInteractive sunRays={false} />
-            </Suspense>
+            <div
+              className="builder-3d-selection-surface"
+              onPointerDownCapture={(event) => {
+                if (!selectedOpeningId && !selectedWallId) return;
+                const target = event.target;
+                if (target instanceof Element && target.closest('.floating-view-actions')) return;
+                // Clear the current architectural focus before the renderer handles the hit.
+                // Clicking a door/window immediately re-selects it; clicking empty 3D space leaves it cleared.
+                selectOpening(null);
+              }}
+            >
+              <Suspense fallback={<div className="viewport-loading">Loading 3D preview…</div>}>
+                <Viewport3D furniture={false} interactive={false} architectureInteractive sunRays={false} />
+              </Suspense>
+            </div>
           )}
         </div>
       </section>
