@@ -4,7 +4,7 @@ import { clearanceIssues } from './core/placement';
 import { polygonArea } from './core/roomGeometry';
 import { effectiveSunAzimuth, normalizeSunAzimuth, SUN_AZIMUTH_MAX, SUN_AZIMUTH_MIN, SUN_ELEVATION_MAX, SUN_ELEVATION_MIN, SUN_SINGLE_WINDOW_LIMIT } from './core/sun';
 import { formatArea, formatLength } from './core/units';
-import type { CeilingLightFixtureType, PlanCameraView, ProductCategory } from './core/types';
+import type { CeilingLightFixtureType, PlanCameraView, ProductCategory, SunStylePreset } from './core/types';
 import { FLOOR_FINISHES, WALL_FINISHES } from './core/roomFinishes';
 import { BASEBOARD_STYLES, TRIM_COLORS, isSunGlazedOpening } from './core/architecturalStyles';
 import type { BaseboardMaterial, BaseboardStyle } from './core/types';
@@ -321,6 +321,13 @@ export function PlanRoom() {
                   {hasWindow && <div className="view-options-section sun-angle-section">
                     <strong>Window and door sun</strong>
                     <label><input type="checkbox" checked={lighting.sunRaysEnabled} onChange={(e) => setRoomLighting({ sunRaysEnabled: e.target.checked })} /><span>Enable sun rays<small>Project direct sunlight through glazed openings</small></span></label>
+                    <label>
+                      <span>Sun style<small>Choose neutral paired shadows or a warm/cool cinematic environment</small></span>
+                      <select value={lighting.sunStylePreset} disabled={!lighting.sunRaysEnabled} onChange={(e) => setRoomLighting({ sunStylePreset: e.target.value as SunStylePreset })}>
+                        <option value="paired-shadows">Paired shadows</option>
+                        <option value="cinematic-grade">Cinematic grade</option>
+                      </select>
+                    </label>
                     <div className="sun-angle-control">
                       <div><span>Horizontal</span><output>{horizontalAngle}°</output></div>
                       <input type="range" min={windowCount === 1 ? -SUN_SINGLE_WINDOW_LIMIT : SUN_AZIMUTH_MIN} max={windowCount === 1 ? SUN_SINGLE_WINDOW_LIMIT : SUN_AZIMUTH_MAX} step="1" value={horizontalAngle} aria-label="Sun horizontal angle" disabled={!lighting.sunRaysEnabled} {...sunAngleEvents}

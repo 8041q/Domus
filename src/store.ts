@@ -32,7 +32,8 @@ import type {
   BuildWorkspaceView,
   PlanCameraView,
   MeasurementSystem,
-  RoomLighting
+  RoomLighting,
+  SunStylePreset
 } from './core/types';
 
 interface PlannerStore extends PlannerSnapshot {
@@ -107,6 +108,7 @@ const defaultRoom: RoomState = {
     fixtureType: 'recessed',
     showWithoutCeiling: false,
     sunRaysEnabled: true,
+    sunStylePreset: 'paired-shadows',
     sunAzimuth: SUN_DEFAULT_AZIMUTH,
     sunElevation: SUN_DEFAULT_ELEVATION
   },
@@ -171,6 +173,9 @@ function ensureRoom(raw: Partial<RoomState>): RoomState {
       sunRaysEnabled: typeof raw.lighting?.sunRaysEnabled === 'boolean'
         ? raw.lighting.sunRaysEnabled
         : defaultRoom.lighting.sunRaysEnabled,
+      sunStylePreset: (['paired-shadows', 'cinematic-grade'] as SunStylePreset[]).includes(raw.lighting?.sunStylePreset as SunStylePreset)
+        ? raw.lighting?.sunStylePreset as SunStylePreset
+        : defaultRoom.lighting.sunStylePreset,
       sunAzimuth: normalizeSunAzimuth(raw.lighting?.sunAzimuth),
       sunElevation: clampSunAngle(raw.lighting?.sunElevation, SUN_DEFAULT_ELEVATION, SUN_ELEVATION_MIN, SUN_ELEVATION_MAX)
     },

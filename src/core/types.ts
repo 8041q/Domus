@@ -30,6 +30,7 @@ export type FloorFinish =
   | 'wood-floor-020';
 export type RoomShapeKind = 'rectangle' | 'angled-corner' | 'l-shape' | 'recess' | 'custom';
 export type CeilingLightFixtureType = 'surface-mounted' | 'recessed';
+export type SunStylePreset = 'paired-shadows' | 'cinematic-grade';
 export type BaseboardStyle = 'flat' | 'flush' | 'rounded' | 'stepped' | 'sculpted' | 'sculpted-tall' | 'floating' | 'flash-coving';
 export type BaseboardMaterial = 'paint' | 'materials';
 
@@ -38,6 +39,7 @@ export interface RoomLighting {
   fixtureType: CeilingLightFixtureType;
   showWithoutCeiling: boolean;
   sunRaysEnabled: boolean;
+  sunStylePreset: SunStylePreset;
   /** Horizontal rotation in degrees from the first window's outward normal. */
   sunAzimuth: number;
   /** Height above the horizon in degrees. */

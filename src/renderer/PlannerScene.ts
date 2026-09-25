@@ -65,6 +65,11 @@ const JUNCTION_COLOR = 0xffffff;
 const WALL_THICKNESS = 0.05;
 const FLOOR_THICKNESS = WALL_THICKNESS;
 const CEILING_THICKNESS = WALL_THICKNESS;
+const SUN_PAIR_HALF_SEPARATION = THREE.MathUtils.degToRad(1);
+const SUN_PAIR_INTENSITY = 1.55;
+const SUN_SHADOW_MAP_SIZE = 1024;
+const SOFT_SUN_SHADOW_RADIUS = 5;
+const SHARP_SUN_SHADOW_RADIUS = 1;
 
 // Cutaway thresholds. `facing` is the horizontal dot product between a
 // wall's outward normal and the direction from that wall to the camera. Smaller
@@ -121,6 +126,7 @@ export class PlannerScene {
   private daylightGroup = new THREE.Group();
   private sunsetGroup = new THREE.Group();
   private sunsetLights: [THREE.DirectionalLight, THREE.DirectionalLight] | null = null;
+  private cinematicEnvironmentTarget: THREE.WebGLRenderTarget | null = null;
   private lastSunAnglesKey = '';
   private contactShadowGroup = new THREE.Group();
   private objectGroup = new THREE.Group();
@@ -312,6 +318,8 @@ export class PlannerScene {
     this.outlinePass.dispose();
     this.composer.dispose();
     this.scene.environment = null;
+    this.cinematicEnvironmentTarget?.dispose();
+    this.cinematicEnvironmentTarget = null;
     this.floorMaterial = null;
     this.renderer.dispose();
     this.renderer.forceContextLoss();
@@ -1578,14 +1586,19 @@ export class PlannerScene {
       (bounds.minZ + bounds.maxZ) / 2
     );
     const elevation = THREE.MathUtils.degToRad(snapshot.room.lighting.sunElevation);
-    // Both sources orbit the room at a fixed radius and share the configured
-    // direction. Their different colors and shadow filters still build the
-    // established soft/crisp ray, without a second angle sending narrow beams
-    // from the same aperture onto unrelated room corners.
-    const source = centre.clone()
-      .addScaledVector(direction, 50 * Math.cos(elevation));
-    source.y += 50 * Math.sin(elevation);
-    this.sunsetLights.forEach((light) => {
+    // The control orbits the midpoint of a fixed two-degree pair. Keeping both
+    // sources at the same elevation avoids the false ceiling/floor shafts caused
+    // by the former vertical offset, while the azimuth split gives the crisp and
+    // soft shadows distinct silhouettes instead of stacking one blur on the other.
+    const up = new THREE.Vector3(0, 1, 0);
+    const directions = [
+      direction.clone().applyAxisAngle(up, SUN_PAIR_HALF_SEPARATION),
+      direction.clone().applyAxisAngle(up, -SUN_PAIR_HALF_SEPARATION)
+    ];
+    this.sunsetLights.forEach((light, index) => {
+      const source = centre.clone()
+        .addScaledVector(directions[index], 50 * Math.cos(elevation));
+      source.y += 50 * Math.sin(elevation);
       light.position.copy(source);
       light.target.position.copy(centre);
       light.shadow.needsUpdate = true;
@@ -1594,7 +1607,7 @@ export class PlannerScene {
 
   private syncSunsetAngles(snapshot: PlannerSnapshot) {
     if (!this.options.sunRays) return;
-    const key = `${snapshot.room.lighting.sunAzimuth}:${snapshot.room.lighting.sunElevation}`;
+    const key = `${snapshot.room.lighting.sunAzimuth}:${snapshot.room.lighting.sunElevation}:${snapshot.room.lighting.sunStylePreset}`;
     if (key === this.lastSunAnglesKey) return;
     const direction = this.sunDirection(snapshot);
     if (direction) this.positionSunsetLights(snapshot, direction);
@@ -1605,7 +1618,7 @@ export class PlannerScene {
    * rig and furniture contact shadows remain independent. */
   private rebuildSunset(snapshot: PlannerSnapshot) {
     this.disposeSunsetRig();
-    this.lastSunAnglesKey = `${snapshot.room.lighting.sunAzimuth}:${snapshot.room.lighting.sunElevation}`;
+    this.lastSunAnglesKey = `${snapshot.room.lighting.sunAzimuth}:${snapshot.room.lighting.sunElevation}:${snapshot.room.lighting.sunStylePreset}`;
     if (!this.options.sunRays) return;
 
     const walls = getRoomWalls(snapshot.room);
@@ -1637,8 +1650,8 @@ export class PlannerScene {
       this.sunsetGroup.add(light, light.target);
       return light;
     };
-    const softSun = makeSun('Window sunset soft', 0xffc28a, 1.7, 512, 9);
-    const sharpSun = makeSun('Window sunset sharp', 0xffe5c7, 1.4, 1024, 1.25);
+    const softSun = makeSun('Window sunset soft', 0xffc28a, SUN_PAIR_INTENSITY, SUN_SHADOW_MAP_SIZE, SOFT_SUN_SHADOW_RADIUS);
+    const sharpSun = makeSun('Window sunset sharp', 0xffe5c7, SUN_PAIR_INTENSITY, SUN_SHADOW_MAP_SIZE, SHARP_SUN_SHADOW_RADIUS);
     this.sunsetLights = [softSun, sharpSun];
     this.positionSunsetLights(snapshot, direction);
     const sunsetShadowCameras = new Set<THREE.Camera>([
@@ -1667,7 +1680,9 @@ export class PlannerScene {
     // so those samples cannot see around wall and ceiling edges. Aperture holes
     // remain exact, preserving the established window and glazed-door rays.
     const shadowTexelSize = shadowSpan / softSun.shadow.mapSize.width;
-    const maskGuard = shadowTexelSize * (softSun.shadow.radius + 2);
+    const filterGuard = shadowTexelSize * (softSun.shadow.radius + 2);
+    const angularGuard = shadowSpan * Math.tan(SUN_PAIR_HALF_SEPARATION);
+    const maskGuard = filterGuard + angularGuard;
     for (const wall of walls) {
       const shape = new THREE.Shape();
       shape.moveTo(-maskGuard, -maskGuard);
@@ -1713,10 +1728,64 @@ export class PlannerScene {
     this.sunsetGroup.add(ceilingMask);
   }
 
+  private cinematicEnvironment() {
+    if (this.cinematicEnvironmentTarget) return this.cinematicEnvironmentTarget.texture;
+
+    // A vertical gradient alone is rotationally symmetric, so changing its Y
+    // rotation cannot create the requested warm/cool separation. Build a tiny
+    // linear-HDR equirectangular map with broad opposing lobes instead: the warm
+    // lobe follows the sun midpoint and the cool lobe wraps the opposite side.
+    const width = 128;
+    const height = 64;
+    const pixels = new Float32Array(width * height * 4);
+    const coolSky = new THREE.Color(0xdce8ff);
+    const warmGround = new THREE.Color(0x9b735e);
+    const warmLobeColor = new THREE.Color(0xffc28a);
+    const coolLobeColor = new THREE.Color(0xbacfff);
+    const base = new THREE.Color();
+    for (let y = 0; y < height; y += 1) {
+      const vertical = y / (height - 1);
+      const groundMix = THREE.MathUtils.smoothstep(vertical, 0.46, 0.72);
+      const horizon = Math.exp(-Math.pow((vertical - 0.54) / 0.2, 2));
+      base.copy(coolSky).lerp(warmGround, groundMix).multiplyScalar(0.72);
+      for (let x = 0; x < width; x += 1) {
+        const longitude = (x / width) * Math.PI * 2;
+        const warmLobe = Math.pow(Math.max(0, Math.cos(longitude)), 3) * (0.38 + 0.62 * horizon);
+        const coolLobe = Math.pow(Math.max(0, -Math.cos(longitude)), 2) * (0.42 + 0.58 * (1 - vertical));
+        const offset = (y * width + x) * 4;
+        pixels[offset] = base.r + warmLobeColor.r * warmLobe * 1.15 + coolLobeColor.r * coolLobe * 0.72;
+        pixels[offset + 1] = base.g + warmLobeColor.g * warmLobe * 1.15 + coolLobeColor.g * coolLobe * 0.72;
+        pixels[offset + 2] = base.b + warmLobeColor.b * warmLobe * 1.15 + coolLobeColor.b * coolLobe * 0.72;
+        pixels[offset + 3] = 1;
+      }
+    }
+
+    const source = new THREE.DataTexture(pixels, width, height, THREE.RGBAFormat, THREE.FloatType);
+    source.mapping = THREE.EquirectangularReflectionMapping;
+    source.colorSpace = THREE.LinearSRGBColorSpace;
+    source.needsUpdate = true;
+    const generator = new THREE.PMREMGenerator(this.renderer);
+    generator.compileEquirectangularShader();
+    this.cinematicEnvironmentTarget = generator.fromEquirectangular(source);
+    source.dispose();
+    generator.dispose();
+    return this.cinematicEnvironmentTarget.texture;
+  }
+
   private applyRoomLighting(snapshot: PlannerSnapshot) {
     const enabled = snapshot.room.lighting.enabled;
     const hasDaylight = this.daylightGroup.children.length > 0;
     const hasSunset = this.sunsetLights !== null;
+    const cinematic = hasSunset && snapshot.room.lighting.sunStylePreset === 'cinematic-grade';
+    this.hemiLight.color.setHex(cinematic ? 0xdce8ff : 0xf7f8fa);
+    this.hemiLight.groundColor.setHex(cinematic ? 0x9b735e : 0xb8b4ae);
+    this.ambientLight.color.setHex(cinematic ? 0xffead8 : 0xffffff);
+    this.fillLight.color.setHex(cinematic ? 0xbacfff : 0xe9edf0);
+    this.scene.environment = cinematic ? this.cinematicEnvironment() : null;
+    this.scene.environmentIntensity = cinematic ? 0.28 : 1;
+    const glazedOpeningCount = snapshot.openings.filter(isSunGlazedOpening).length;
+    const environmentAzimuth = effectiveSunAzimuth(snapshot.room.lighting.sunAzimuth, glazedOpeningCount);
+    this.scene.environmentRotation.set(0, THREE.MathUtils.degToRad(environmentAzimuth), 0);
     // The broad terms stand in for bounced indoor light. Fixtures supply a
     // visible ceiling cue; the original shadow caster still projects furniture
     // shadows onto the room, while contact AO sits beneath each model.
