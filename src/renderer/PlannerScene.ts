@@ -16,7 +16,7 @@ import { BASEBOARD_STYLES, glazingAreas, isSunGlazedOpening } from '../core/arch
 import { getRoomWalls, pointInRoom, roomBounds, wallPoint, wallProjectionDistance } from '../core/roomGeometry';
 import { effectiveSunAzimuth } from '../core/sun';
 import { formatLength } from '../core/units';
-import type { FloorFinish, PlanCameraView, MeasurementSystem, PlannerSnapshot, PlacedObject, RoomOpening, RoomWallSegment, SnapFeedback, Vec2 } from '../core/types';
+import type { FloorFinish, PlanCameraView, MeasurementSystem, PlannerSnapshot, PlacedObject, RoomOpening, SnapFeedback, Vec2 } from '../core/types';
 import { themeHex, themeMetric } from '../theme';
 
 export interface SceneSnapshot extends PlannerSnapshot {
@@ -45,6 +45,7 @@ interface SceneOptions {
   showFurniture: boolean;
   interactiveFurniture: boolean;
   interactiveArchitecture: boolean;
+  sunRays: boolean;
 }
 
 const DIMENSION_COLOR = themeHex('dimension-line');
@@ -1599,6 +1600,7 @@ export class PlannerScene {
   }
 
   private syncSunsetAngles(snapshot: PlannerSnapshot) {
+    if (!this.options.sunRays) return;
     const key = `${snapshot.room.lighting.sunAzimuth}:${snapshot.room.lighting.sunElevation}`;
     if (key === this.lastSunAnglesKey) return;
     const direction = this.sunDirection(snapshot);
@@ -1610,9 +1612,11 @@ export class PlannerScene {
    * rig and furniture contact shadows remain independent. */
   private rebuildSunset(snapshot: PlannerSnapshot) {
     this.disposeSunsetRig();
+    this.lastSunAnglesKey = `${snapshot.room.lighting.sunAzimuth}:${snapshot.room.lighting.sunElevation}`;
+    if (!this.options.sunRays) return;
+
     const walls = getRoomWalls(snapshot.room);
     const direction = this.sunDirection(snapshot);
-    this.lastSunAnglesKey = `${snapshot.room.lighting.sunAzimuth}:${snapshot.room.lighting.sunElevation}`;
     if (!direction) return;
 
     const bounds = roomBounds(snapshot.room.vertices);
@@ -1662,42 +1666,43 @@ export class PlannerScene {
       depthMaterial.depthWrite = true;
       depthMaterial.colorWrite = true;
     };
-    const addMask = (maskWall: RoomWallSegment, along: number, bottom: number, width: number, height: number) => {
-      if (width <= 0.001 || height <= 0.001) return;
-      const point = wallPoint(maskWall, along);
-      const mask = new THREE.Mesh(new THREE.BoxGeometry(width, height, 0.04), maskMaterial);
-      mask.position.set(point.x, bottom + height / 2, point.z);
-      mask.rotation.y = -Math.atan2(maskWall.tangent.z, maskWall.tangent.x);
+    // Build each wall as one continuous mask with pane-shaped holes. The previous
+    // tiled boxes met exactly at every pane edge and sash divider; shadow filtering
+    // exposed those joins as long, false shafts of light on the opposite wall.
+    const maskOverlap = 0.05;
+    for (const wall of walls) {
+      const shape = new THREE.Shape();
+      shape.moveTo(-maskOverlap, -maskOverlap);
+      shape.lineTo(wall.length + maskOverlap, -maskOverlap);
+      shape.lineTo(wall.length + maskOverlap, snapshot.room.height + maskOverlap);
+      shape.lineTo(-maskOverlap, snapshot.room.height + maskOverlap);
+      shape.closePath();
+
+      const panes = snapshot.openings
+        .filter((opening) => opening.wallId === wall.id)
+        .flatMap(glazingAreas);
+      for (const pane of panes) {
+        const left = Math.max(0, pane.left);
+        const right = Math.min(wall.length, pane.right);
+        const bottom = Math.max(0, pane.bottom);
+        const top = Math.min(snapshot.room.height, pane.top);
+        if (right - left <= 0.001 || top - bottom <= 0.001) continue;
+        const aperture = new THREE.Path();
+        aperture.moveTo(left, bottom);
+        aperture.lineTo(left, top);
+        aperture.lineTo(right, top);
+        aperture.lineTo(right, bottom);
+        aperture.closePath();
+        shape.holes.push(aperture);
+      }
+
+      const mask = new THREE.Mesh(new THREE.ShapeGeometry(shape), maskMaterial);
+      mask.position.set(wall.start.x, 0, wall.start.z);
+      mask.rotation.y = -Math.atan2(wall.tangent.z, wall.tangent.x);
       mask.castShadow = true;
       mask.onBeforeShadow = beforeMaskShadow;
       mask.onAfterShadow = afterMaskShadow;
       this.sunsetGroup.add(mask);
-    };
-    for (const wall of walls) {
-      const panes = snapshot.openings.filter((opening) => opening.wallId === wall.id).flatMap(glazingAreas);
-      const cuts = [0, wall.length, ...panes.flatMap((pane) => [
-        Math.max(0, pane.left),
-        Math.min(wall.length, pane.right)
-      ])].sort((a, b) => a - b);
-      for (let i = 1; i < cuts.length; i += 1) {
-        const left = cuts[i - 1];
-        const right = cuts[i];
-        if (right - left <= 0.001) continue;
-        const middle = (left + right) / 2;
-        const apertures = panes
-          .filter((pane) => middle > pane.left && middle < pane.right)
-          .map((pane) => ({
-            bottom: Math.max(0, pane.bottom),
-            top: Math.min(snapshot.room.height, pane.top)
-          }))
-          .sort((a, b) => a.bottom - b.bottom);
-        let cursor = 0;
-        for (const aperture of apertures) {
-          addMask(wall, middle, cursor, right - left, aperture.bottom - cursor);
-          cursor = Math.max(cursor, aperture.top);
-        }
-        addMask(wall, middle, cursor, right - left, snapshot.room.height - cursor);
-      }
     }
     const ceilingShape = new THREE.Shape(snapshot.room.vertices.map((vertex) => new THREE.Vector2(vertex.x, vertex.z)));
     const ceilingMask = new THREE.Mesh(new THREE.ShapeGeometry(ceilingShape), maskMaterial);
@@ -1712,7 +1717,7 @@ export class PlannerScene {
   private applyRoomLighting(snapshot: PlannerSnapshot) {
     const enabled = snapshot.room.lighting.enabled;
     const hasDaylight = this.daylightGroup.children.length > 0;
-    const hasSunset = snapshot.openings.some(isSunGlazedOpening);
+    const hasSunset = this.sunsetLights !== null;
     // The broad terms stand in for bounced indoor light. Fixtures supply a
     // visible ceiling cue; the original shadow caster still projects furniture
     // shadows onto the room, while contact AO sits beneath each model.
@@ -1769,6 +1774,7 @@ export class PlannerScene {
 
   private rebuildWalls(snapshot: PlannerSnapshot) {
     this.disposeGroup(this.wallsGroup);
+    this.disposeWallCornerShades();
     this.lastOpeningHighlightKey = '';
     const { height, wallColor } = snapshot.room;
     const thickness = WALL_THICKNESS;
@@ -1791,6 +1797,17 @@ export class PlannerScene {
       // Keep the normal footer requested earlier, but give the footer itself a
       // proper miter at room corners so it never sticks through a cutaway wall.
       this.addBaseboardRuns(wall, snapshot);
+    }
+  }
+
+  private disposeWallCornerShades() {
+    const shades = this.architecturalShadeGroup.children.filter((child) => child.userData.wallCornerShade);
+    for (const shade of shades) {
+      this.architecturalShadeGroup.remove(shade);
+      if (!(shade instanceof THREE.Mesh)) continue;
+      shade.geometry.dispose();
+      const materials = Array.isArray(shade.material) ? shade.material : [shade.material];
+      materials.forEach((material) => material.dispose());
     }
   }
 
@@ -1979,6 +1996,7 @@ export class PlannerScene {
       side: THREE.DoubleSide
     });
     const shade = new THREE.Mesh(geometry, material);
+    shade.userData.wallCornerShade = true;
     shade.renderOrder = 1;
     this.tagCutawaySurface(shade, wall);
     this.architecturalShadeGroup.add(shade);
@@ -2128,15 +2146,16 @@ export class PlannerScene {
       materials = [floorMatchedMaterial, floorMatchedMaterial];
     } else {
       const baseColor = new THREE.Color(snapshot.room.baseboardColor);
+      const ledgeColor = baseColor.clone().lerp(new THREE.Color(0xffffff), 0.28);
       materials = [
-        new THREE.MeshBasicMaterial({ color: baseColor, side: THREE.DoubleSide, toneMapped: false }),
-        new THREE.MeshBasicMaterial({ color: baseColor.clone().lerp(new THREE.Color(0xffffff), 0.28), side: THREE.DoubleSide, toneMapped: false })
+        new THREE.MeshStandardMaterial({ color: baseColor, emissive: baseColor, emissiveIntensity: 0.22, roughness: 0.8, side: THREE.DoubleSide }),
+        new THREE.MeshStandardMaterial({ color: ledgeColor, emissive: ledgeColor, emissiveIntensity: 0.22, roughness: 0.74, side: THREE.DoubleSide })
       ];
     }
 
     const mesh = new THREE.Mesh(geometry, materials);
     mesh.castShadow = false;
-    mesh.receiveShadow = false;
+    mesh.receiveShadow = true;
     mesh.name = `Baseboard ${wall.index + 1} Segment`;
     this.tagCutawaySurface(mesh, wall);
     this.tagExportPart(mesh, 'Floors', `baseboard:${wall.id}`, `Baseboard ${wall.index + 1}`, this.wallYaw(wall));
@@ -2171,7 +2190,12 @@ export class PlannerScene {
     const typeIndex = snapshot.openings.filter((candidate) => candidate.type === opening.type).findIndex((candidate) => candidate.id === opening.id) + 1;
     const exportName = `${typeLabel} ${Math.max(1, typeIndex)}`;
 
-    const material = (color: THREE.ColorRepresentation, roughness = 0.66) => new THREE.MeshStandardMaterial({ color, roughness });
+    const material = (color: THREE.ColorRepresentation, roughness = 0.66, emissiveIntensity = 0) => new THREE.MeshStandardMaterial({
+      color,
+      roughness,
+      emissive: emissiveIntensity > 0 ? color : 0x000000,
+      emissiveIntensity
+    });
     const tag = <T extends THREE.Object3D>(mesh: T): T => {
       this.tagCutawaySurface(mesh, wall);
       mesh.userData.openingId = opening.id;
@@ -2186,13 +2210,13 @@ export class PlannerScene {
       const trimColor = color === TRIM_COLOR ? casingColor : color;
       const mesh = new THREE.Mesh(
         new THREE.BoxGeometry(alongSize, boxHeight, depth),
-        trim ? new THREE.MeshBasicMaterial({ color: trimColor, toneMapped: false }) : material(color)
+        trim ? material(trimColor, 0.76, 0.22) : material(color)
       );
       mesh.rotation.y = yaw;
       mesh.position.set(point.x + wall.inward.x * normalOffset, y, point.z + wall.inward.z * normalOffset);
       if (trim && typeof trimColor === 'number') mesh.userData.stableTrimColor = trimColor;
       mesh.castShadow = false;
-      mesh.receiveShadow = !trim;
+      mesh.receiveShadow = true;
       return tag(mesh);
     };
     const glassPanel = (along: number, panelWidth: number, panelBottom = bottom, panelTop = top, normalOffset = wallThickness / 2 + 0.004) => {
@@ -2359,6 +2383,12 @@ export class PlannerScene {
           mat.emissive.setHex(active ? INTERACTION_STRONG_COLOR : 0x000000);
           mat.emissiveIntensity = active ? 0.16 : 0;
         } else if (mat instanceof THREE.MeshStandardMaterial) {
+          if (typeof object.userData.stableTrimColor === 'number') {
+            mat.color.setHex(active ? SELECTION_COLOR : object.userData.stableTrimColor);
+            mat.emissive.setHex(active ? INTERACTION_STRONG_COLOR : object.userData.stableTrimColor);
+            mat.emissiveIntensity = active ? 0.18 : 0.22;
+            continue;
+          }
           mat.emissive.setHex(active ? INTERACTION_STRONG_COLOR : 0x000000);
           mat.emissiveIntensity = active ? 0.18 : 0;
         }

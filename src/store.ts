@@ -106,6 +106,7 @@ const defaultRoom: RoomState = {
     enabled: true,
     fixtureType: 'recessed',
     showWithoutCeiling: false,
+    sunRaysEnabled: true,
     sunAzimuth: SUN_DEFAULT_AZIMUTH,
     sunElevation: SUN_DEFAULT_ELEVATION
   },
@@ -167,6 +168,9 @@ function ensureRoom(raw: Partial<RoomState>): RoomState {
     lighting: {
       ...defaultRoom.lighting,
       ...raw.lighting,
+      sunRaysEnabled: typeof raw.lighting?.sunRaysEnabled === 'boolean'
+        ? raw.lighting.sunRaysEnabled
+        : defaultRoom.lighting.sunRaysEnabled,
       sunAzimuth: normalizeSunAzimuth(raw.lighting?.sunAzimuth),
       sunElevation: clampSunAngle(raw.lighting?.sunElevation, SUN_DEFAULT_ELEVATION, SUN_ELEVATION_MIN, SUN_ELEVATION_MAX)
     },

@@ -3,6 +3,7 @@ import { PRODUCTS, rotatedFootprint } from './core/products';
 import { clearanceAabb, resolvePlacement } from './core/placement';
 import {
   distanceToWall,
+  MIN_WALL_LENGTH,
   getRoomWalls,
   getWall,
   moveCorner,
@@ -12,7 +13,7 @@ import {
   wallProjectionDistance,
   vertexInteriorAngle
 } from './core/roomGeometry';
-import { formatLength } from './core/units';
+import { dimensionStepMetres, displayLengthValue, displayValueToMetres, formatLength, lengthInputSuffix } from './core/units';
 import type { PlannerSnapshot, RoomOpening, SnapFeedback } from './core/types';
 import { getSnapshot, usePlannerStore } from './store';
 import { themeColor, themeMetric, themeRgba } from './theme';
@@ -183,6 +184,7 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
   const updateOpening = usePlannerStore((s) => s.updateOpening);
   const setRoomVertices = usePlannerStore((s) => s.setRoomVertices);
   const splitWallById = usePlannerStore((s) => s.splitWallById);
+  const resizeWallById = usePlannerStore((s) => s.resizeWallById);
   const commitSnapshot = usePlannerStore((s) => s.commitSnapshot);
   const setFeedback = usePlannerStore((s) => s.setFeedback);
   const [drag, setDrag] = useState<DragState | null>(null);
@@ -190,6 +192,9 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
   const [resizeTick, setResizeTick] = useState(0);
   const viewRef = useRef<(ViewTransform & { width: number; height: number }) | null>(null);
   const splitPositionsRef = useRef(new Map<string, { x: number; y: number }>());
+  const wallLabelRectsRef = useRef(new Map<string, LabelRect>());
+  const wallLabelInputRef = useRef<HTMLInputElement>(null);
+  const [wallLabelEdit, setWallLabelEdit] = useState<{ wallId: string; rect: LabelRect; draft: string } | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -240,6 +245,12 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
       setResizeTick((value) => value + 1);
     }
   }, [room.shapeKind]);
+
+  useEffect(() => {
+    if (!wallLabelEdit) return;
+    wallLabelInputRef.current?.focus();
+    wallLabelInputRef.current?.select();
+  }, [wallLabelEdit?.wallId]);
 
   const selected = useMemo(() => objects.find((o) => o.id === selectedId) ?? null, [objects, selectedId]);
 
@@ -666,6 +677,21 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
         placedWallLabels.push({ wall, text, idText, x: label.x, y: label.y, rect: label.rect, leader: label.leader });
       }
 
+      wallLabelRectsRef.current = new Map(placedWallLabels.map((label) => [label.wall.id, label.rect]));
+      if (wallLabelEdit) {
+        const currentRect = wallLabelRectsRef.current.get(wallLabelEdit.wallId);
+        if (currentRect && (
+          Math.abs(currentRect.x - wallLabelEdit.rect.x) > 0.5
+          || Math.abs(currentRect.y - wallLabelEdit.rect.y) > 0.5
+          || Math.abs(currentRect.width - wallLabelEdit.rect.width) > 0.5
+          || Math.abs(currentRect.height - wallLabelEdit.rect.height) > 0.5
+        )) {
+          setWallLabelEdit((current) => current && current.wallId === wallLabelEdit.wallId
+            ? { ...current, rect: currentRect }
+            : current);
+        }
+      }
+
       // Draw all connectors first, then labels. Label backgrounds therefore mask any
       // unavoidable connector/box contact, while connector-to-connector crossings are
       // prohibited by placement above.
@@ -797,6 +823,43 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
     }
   }, [activeSnap, drag, hover, measurementSystem, objects, openings, purpose, resizeTick, room, selected, selectedId, selectedOpeningId, selectedWallId, showClearance]);
 
+  const hitWallLabel = (px: number, py: number) => {
+    for (const [wallId, rect] of wallLabelRectsRef.current) {
+      if (pointInRect({ x: px, y: py }, rect, 2)) return { wallId, rect };
+    }
+    return null;
+  };
+
+  const beginWallLabelEdit = (wallId: string, rect: LabelRect) => {
+    const wall = getWall(room, wallId);
+    if (!wall) return;
+    // selectWall already clears any opening/object selection. Calling
+    // selectOpening(null) afterwards would also clear the wall we just selected.
+    selectWall(wallId);
+    setWallLabelEdit({
+      wallId,
+      rect,
+      draft: displayLengthValue(wall.length, measurementSystem).toFixed(2)
+    });
+  };
+
+  const commitWallLabelEdit = () => {
+    if (!wallLabelEdit) return;
+    const wall = getWall(room, wallLabelEdit.wallId);
+    if (!wall) {
+      setWallLabelEdit(null);
+      return;
+    }
+    const parsed = Number(wallLabelEdit.draft.replace(',', '.'));
+    if (Number.isFinite(parsed)) {
+      const rawMetres = displayValueToMetres(parsed, measurementSystem);
+      const step = dimensionStepMetres(measurementSystem, 0.05);
+      const next = Math.max(MIN_WALL_LENGTH, Math.min(20, Math.round(rawMetres / step) * step));
+      if (Math.abs(next - wall.length) > 0.0001) resizeWallById(wall.id, next);
+    }
+    setWallLabelEdit(null);
+  };
+
   const hitOpening = (px: number, py: number, scale: number, ox: number, oz: number) => {
     return [...openings].reverse().find((opening) => {
       const points = openingPoints(opening, room);
@@ -828,6 +891,12 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
   };
 
   const updateBuildHover = (canvas: HTMLCanvasElement, px: number, py: number, scale: number, ox: number, oz: number) => {
+    const wallLabel = hitWallLabel(px, py);
+    if (wallLabel) {
+      setHover((current) => current?.type === 'wall' && current.id === wallLabel.wallId ? current : { type: 'wall', id: wallLabel.wallId });
+      canvas.style.cursor = 'text';
+      return;
+    }
     const corner = hitCorner(px, py, scale, ox, oz);
     if (corner) {
       setHover((current) => current?.type === 'corner' && current.id === corner.id ? current : { type: 'corner', id: corner.id });
@@ -870,6 +939,16 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
     };
 
     if (purpose === 'build') {
+      const wallLabel = hitWallLabel(px, py);
+      if (wallLabel) {
+        // Prevent the canvas pointer-down default action from stealing focus back
+        // immediately after the inline wall-length input mounts. Without this, the
+        // input focuses and blurs in the same click, so editing appears to do nothing.
+        e.preventDefault();
+        beginWallLabelEdit(wallLabel.wallId, wallLabel.rect);
+        e.currentTarget.style.cursor = 'text';
+        return;
+      }
       const corner = hitCorner(px, py, scale, ox, oz);
       if (corner) {
         selectWall(null);
@@ -1005,6 +1084,57 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
         onPointerCancel={onPointerUp}
         onPointerLeave={onPointerLeave}
       />
+      {purpose === 'build' && wallLabelEdit && (
+        <div
+          style={{
+            position: 'absolute',
+            left: wallLabelEdit.rect.x + 4,
+            top: wallLabelEdit.rect.y + 2,
+            width: Math.max(24, wallLabelEdit.rect.width - 8),
+            height: Math.max(18, wallLabelEdit.rect.height / 2),
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(255,255,255,.99)',
+            borderRadius: 5,
+            zIndex: 4,
+            pointerEvents: 'auto',
+            font: `650 ${themeMetric('builder-wall-length-font-px')}px system-ui, sans-serif`,
+            color: themeColor('dimension-text')
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <input
+            ref={wallLabelInputRef}
+            aria-label={`Wall length in ${measurementSystem === 'metric' ? 'metres' : 'feet'}`}
+            inputMode="decimal"
+            value={wallLabelEdit.draft}
+            onChange={(e) => {
+              const next = e.target.value.replace(',', '.');
+              if (/^\d*(?:\.\d*)?$/.test(next)) setWallLabelEdit((current) => current ? { ...current, draft: next } : current);
+            }}
+            onBlur={commitWallLabelEdit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur();
+              if (e.key === 'Escape') setWallLabelEdit(null);
+            }}
+            style={{
+              width: `${Math.max(2, wallLabelEdit.draft.length)}ch`,
+              maxWidth: 'calc(100% - 22px)',
+              border: 0,
+              outline: 0,
+              padding: 0,
+              margin: 0,
+              background: 'transparent',
+              font: 'inherit',
+              color: 'inherit',
+              textAlign: 'right',
+              appearance: 'textfield'
+            }}
+          />
+          <span style={{ whiteSpace: 'pre' }}>{` ${lengthInputSuffix(measurementSystem)}`}</span>
+        </div>
+      )}
       {purpose === 'build' && (
         <div className="plan-help" aria-hidden="true">
           <span><i className="help-dot corner" /> Drag a corner</span>

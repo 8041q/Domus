@@ -7,12 +7,14 @@ export function Viewport3D({
   furniture = true,
   interactive = true,
   architectureInteractive = false,
+  sunRays = true,
   view,
   exportable = false
 }: {
   furniture?: boolean;
   interactive?: boolean;
   architectureInteractive?: boolean;
+  sunRays?: boolean;
   view?: PlanCameraView;
   exportable?: boolean;
 }) {
@@ -69,7 +71,12 @@ export function Viewport3D({
           state.setPlanView(nextView);
         }
       }
-    }, { showFurniture: furniture, interactiveFurniture: interactive, interactiveArchitecture: architectureInteractive });
+    }, {
+      showFurniture: furniture,
+      interactiveFurniture: interactive,
+      interactiveArchitecture: architectureInteractive,
+      sunRays
+    });
     sceneRef.current = scene;
     if (view) scene.setCameraView(view);
     let syncFrame = 0;
@@ -97,7 +104,7 @@ export function Viewport3D({
       scene.dispose();
       sceneRef.current = null;
     };
-  }, [furniture, interactive, architectureInteractive]);
+  }, [furniture, interactive, architectureInteractive, sunRays]);
 
   useEffect(() => {
     if (!view) return;

@@ -320,14 +320,15 @@ export function PlanRoom() {
                   </div>
                   {hasWindow && <div className="view-options-section sun-angle-section">
                     <strong>Window and door sun</strong>
+                    <label><input type="checkbox" checked={lighting.sunRaysEnabled} onChange={(e) => setRoomLighting({ sunRaysEnabled: e.target.checked })} /><span>Enable sun rays<small>Project direct sunlight through glazed openings</small></span></label>
                     <div className="sun-angle-control">
                       <div><span>Horizontal</span><output>{horizontalAngle}°</output></div>
-                      <input type="range" min={windowCount === 1 ? -SUN_SINGLE_WINDOW_LIMIT : SUN_AZIMUTH_MIN} max={windowCount === 1 ? SUN_SINGLE_WINDOW_LIMIT : SUN_AZIMUTH_MAX} step="1" value={horizontalAngle} aria-label="Sun horizontal angle" {...sunAngleEvents}
+                      <input type="range" min={windowCount === 1 ? -SUN_SINGLE_WINDOW_LIMIT : SUN_AZIMUTH_MIN} max={windowCount === 1 ? SUN_SINGLE_WINDOW_LIMIT : SUN_AZIMUTH_MAX} step="1" value={horizontalAngle} aria-label="Sun horizontal angle" disabled={!lighting.sunRaysEnabled} {...sunAngleEvents}
                         onChange={(e) => setRoomLighting({ sunAzimuth: normalizeSunAzimuth(e.target.value) }, false)} />
                     </div>
                     <div className="sun-angle-control">
                       <div><span>Height</span><output>{lighting.sunElevation}°</output></div>
-                      <input type="range" min={SUN_ELEVATION_MIN} max={SUN_ELEVATION_MAX} step="1" value={lighting.sunElevation} aria-label="Sun height angle" {...sunAngleEvents}
+                      <input type="range" min={SUN_ELEVATION_MIN} max={SUN_ELEVATION_MAX} step="1" value={lighting.sunElevation} aria-label="Sun height angle" disabled={!lighting.sunRaysEnabled} {...sunAngleEvents}
                         onChange={(e) => setRoomLighting({ sunElevation: Number(e.target.value) }, false)} />
                     </div>
                     <small>{windowCount === 1 ? '0° faces the glazed opening; the slider stops at its horizon.' : '0° faces the first glazed opening. Rotate through 360° to reach the others.'}</small>
@@ -341,7 +342,7 @@ export function PlanRoom() {
 
         <div className="designer-stage">
           <Suspense fallback={<div className="viewport-loading">Loading 3D room…</div>}>
-            <Viewport3D furniture interactive view={planView} exportable />
+            <Viewport3D furniture interactive sunRays={lighting.sunRaysEnabled} view={planView} exportable />
           </Suspense>
           {showFinishes && <FinishesPanel onClose={() => setShowFinishes(false)} />}
           {selectedId && <SelectionPanel />}

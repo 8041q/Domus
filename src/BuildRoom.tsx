@@ -476,7 +476,7 @@ export function BuildRoom() {
         <div className="workspace-content">
           {buildView === 'plan' ? <Plan2D purpose="build" /> : (
             <Suspense fallback={<div className="viewport-loading">Loading 3D preview…</div>}>
-              <Viewport3D furniture={false} interactive={false} architectureInteractive />
+              <Viewport3D furniture={false} interactive={false} architectureInteractive sunRays={false} />
             </Suspense>
           )}
         </div>
