@@ -322,6 +322,13 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .design-check p { margin: 2px 0 0; color: var(--muted-foreground); font-size: 8.5px; line-height: 1.35; }
 
 .finish-panel { position: absolute; z-index: 4; top: 12px; left: 12px; width: min(275px, calc(100% - 24px)); padding: 14px; }
+.finish-panel { max-height: calc(100% - 24px); overflow-y: auto; }
+.finish-section-label { margin-top: 15px; }
+.finish-style-select { width: 100%; min-height: 34px; margin-top: 7px; padding: 0 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--card); color: var(--foreground); font-size: 9px; }
+.finish-panel .swatch-row { gap: 6px; flex-wrap: wrap; }
+.finish-panel .swatch { width: 27px; height: 27px; flex: 0 0 27px; }
+.finish-custom-color { width: 27px; height: 27px; display: block; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; cursor: pointer; }
+.finish-custom-color input { width: 39px; height: 39px; margin: -6px; padding: 0; border: 0; cursor: pointer; }
 .finish-panel-heading { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 13px; }
 .finish-panel-heading h2 { margin: 3px 0 0; font-size: 14px; }
 .finish-panel-heading button { width: 28px; height: 28px; border: 1px solid var(--border); border-radius: 7px; background: var(--card); cursor: pointer; color: var(--muted-foreground); display: grid; place-items: center; padding: 0; }

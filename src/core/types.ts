@@ -9,6 +9,7 @@ export type OpeningType = 'door' | 'window' | 'opening';
 export type OpeningVariant =
   | 'single-window'
   | 'double-window'
+  | 'single-hung-window'
   | 'full-height-window'
   | 'high-window'
   | 'sliding-window'
@@ -16,6 +17,7 @@ export type OpeningVariant =
   | 'double-door'
   | 'door-frame'
   | 'glass-door'
+  | 'semi-glass-door'
   | 'glass-double-door'
   | 'wall-opening';
 export type FloorFinish =
@@ -28,6 +30,7 @@ export type FloorFinish =
   | 'wood-floor-020';
 export type RoomShapeKind = 'rectangle' | 'l-shape' | 'recess' | 'custom';
 export type CeilingLightFixtureType = 'surface-mounted' | 'recessed';
+export type BaseboardStyle = 'flat' | 'flush' | 'rounded' | 'stepped' | 'sculpted' | 'sculpted-tall' | 'floating' | 'flash-coving';
 
 export interface RoomLighting {
   enabled: boolean;
@@ -50,6 +53,9 @@ export interface RoomState {
   depth: number;
   height: number;
   wallColor: string;
+  ceilingColor: string;
+  baseboardColor: string;
+  baseboardStyle: BaseboardStyle;
   floorFinish: FloorFinish;
   lighting: RoomLighting;
   shapeKind: RoomShapeKind;

@@ -3,6 +3,7 @@ import { PRODUCTS, rotatedFootprint } from './core/products';
 import { objectsOverlap, resolvePlacement, resolveRotationPlacement } from './core/placement';
 import { SnapshotHistory } from './core/history';
 import { normalizeFloorFinish } from './core/roomFinishes';
+import { BASEBOARD_STYLES } from './core/architecturalStyles';
 import { clampSunAngle, normalizeSunAzimuth, SUN_DEFAULT_AZIMUTH, SUN_DEFAULT_ELEVATION, SUN_ELEVATION_MAX, SUN_ELEVATION_MIN } from './core/sun';
 import {
   findNearestValidPosition,
@@ -96,6 +97,9 @@ const defaultRoom: RoomState = {
   depth: 3.8,
   height: 2.6,
   wallColor: '#f2f2f3',
+  ceilingColor: '#d0cbc4',
+  baseboardColor: '#dedbd8',
+  baseboardStyle: 'flat',
   floorFinish: 'carpet-011',
   lighting: {
     enabled: true,
@@ -149,6 +153,9 @@ function ensureRoom(raw: Partial<RoomState>): RoomState {
     width,
     depth,
     height: Math.max(2.1, Math.min(Number(raw.height) || defaultRoom.height, 4.2)),
+    ceilingColor: typeof raw.ceilingColor === 'string' && /^#[0-9a-f]{6}$/i.test(raw.ceilingColor) ? raw.ceilingColor : defaultRoom.ceilingColor,
+    baseboardColor: typeof raw.baseboardColor === 'string' && /^#[0-9a-f]{6}$/i.test(raw.baseboardColor) ? raw.baseboardColor : defaultRoom.baseboardColor,
+    baseboardStyle: BASEBOARD_STYLES.some((style) => style.id === raw.baseboardStyle) ? raw.baseboardStyle : defaultRoom.baseboardStyle,
     floorFinish: normalizeFloorFinish(raw.floorFinish),
     lighting: {
       ...defaultRoom.lighting,
@@ -171,12 +178,14 @@ function defaultOpeningVariant(type: OpeningType): OpeningVariant {
 
 function openingPreset(type: OpeningType, variant: OpeningVariant, room: RoomState) {
   if (variant === 'double-window') return { width: 1.8, height: 1.25, sillHeight: 0.85 };
+  if (variant === 'single-hung-window') return { width: 1.2, height: 1.35, sillHeight: 0.8 };
   if (variant === 'full-height-window') return { width: 1.2, height: Math.max(0.6, room.height), sillHeight: 0 };
   if (variant === 'high-window') return { width: 1.35, height: 0.65, sillHeight: Math.max(0.7, room.height - 0.85) };
   if (variant === 'sliding-window') return { width: 2.4, height: Math.max(0.6, room.height), sillHeight: 0 };
   if (variant === 'double-door') return { width: 1.6, height: 2.08, sillHeight: 0 };
   if (variant === 'door-frame') return { width: 0.95, height: 2.1, sillHeight: 0 };
   if (variant === 'glass-door') return { width: 0.9, height: 2.08, sillHeight: 0 };
+  if (variant === 'semi-glass-door') return { width: 0.9, height: 2.08, sillHeight: 0 };
   if (variant === 'glass-double-door') return { width: 1.6, height: 2.08, sillHeight: 0 };
   if (variant === 'wall-opening') return { width: 1.2, height: 1.2, sillHeight: 0.75 };
   if (variant === 'single-door') return { width: 0.9, height: 2.08, sillHeight: 0 };

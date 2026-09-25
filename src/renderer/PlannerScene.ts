@@ -12,6 +12,7 @@ import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeome
 import { PRODUCTS } from '../core/products';
 import { floorFinishDefinition, type FloorFinishDefinition } from '../core/roomFinishes';
 import { clearanceRegions, resolvePlacement, spacingMeasurements, type SpacingMeasurement } from '../core/placement';
+import { BASEBOARD_STYLES, glazingAreas, isSunGlazedOpening } from '../core/architecturalStyles';
 import { getRoomWalls, pointInRoom, roomBounds, wallPoint, wallProjectionDistance } from '../core/roomGeometry';
 import { effectiveSunAzimuth } from '../core/sun';
 import { formatLength } from '../core/units';
@@ -1299,7 +1300,7 @@ export class PlannerScene {
         // This underside receives no bounced light in a forward renderer. Give
         // it the reference's steady warm plaster tone instead of letting the
         // directional shadow map turn it almost black.
-        new THREE.MeshBasicMaterial({ color: 0xd0cbc4, side: THREE.DoubleSide, toneMapped: false }),
+        new THREE.MeshBasicMaterial({ color: snapshot.room.ceilingColor, side: THREE.DoubleSide, toneMapped: false }),
         new THREE.MeshBasicMaterial({ color: JUNCTION_COLOR, side: THREE.DoubleSide, toneMapped: false })
       ]
     );
@@ -1514,7 +1515,7 @@ export class PlannerScene {
   private rebuildWindowDaylighting(snapshot: PlannerSnapshot) {
     this.disposeGroup(this.daylightGroup);
 
-    const windows = snapshot.openings.filter((opening) => opening.type === 'window' || opening.type === 'opening');
+    const windows = snapshot.openings.filter((opening) => isSunGlazedOpening(opening) || opening.type === 'opening');
     for (const opening of windows) {
       const wall = getRoomWalls(snapshot.room).find((candidate) => candidate.id === opening.wallId);
       if (!wall) continue;
@@ -1548,7 +1549,7 @@ export class PlannerScene {
     const walls = getRoomWalls(snapshot.room);
     const windows = snapshot.openings.flatMap((opening) => {
       const wall = walls.find((candidate) => candidate.id === opening.wallId);
-      return opening.type === 'window' && wall ? [{ opening, wall }] : [];
+      return isSunGlazedOpening(opening) && wall ? [{ opening, wall }] : [];
     });
     if (!windows.length) return null;
 
@@ -1666,21 +1667,21 @@ export class PlannerScene {
       this.sunsetGroup.add(mask);
     };
     for (const wall of walls) {
-      const windows = snapshot.openings.filter((opening) => opening.type === 'window' && opening.wallId === wall.id);
-      const cuts = [0, wall.length, ...windows.flatMap((opening) => [
-        Math.max(0, opening.offset - opening.width / 2),
-        Math.min(wall.length, opening.offset + opening.width / 2)
+      const panes = snapshot.openings.filter((opening) => opening.wallId === wall.id).flatMap(glazingAreas);
+      const cuts = [0, wall.length, ...panes.flatMap((pane) => [
+        Math.max(0, pane.left),
+        Math.min(wall.length, pane.right)
       ])].sort((a, b) => a - b);
       for (let i = 1; i < cuts.length; i += 1) {
         const left = cuts[i - 1];
         const right = cuts[i];
         if (right - left <= 0.001) continue;
         const middle = (left + right) / 2;
-        const apertures = windows
-          .filter((opening) => middle > opening.offset - opening.width / 2 && middle < opening.offset + opening.width / 2)
-          .map((opening) => ({
-            bottom: Math.max(0, opening.sillHeight),
-            top: Math.min(snapshot.room.height, opening.sillHeight + opening.height)
+        const apertures = panes
+          .filter((pane) => middle > pane.left && middle < pane.right)
+          .map((pane) => ({
+            bottom: Math.max(0, pane.bottom),
+            top: Math.min(snapshot.room.height, pane.top)
           }))
           .sort((a, b) => a.bottom - b.bottom);
         let cursor = 0;
@@ -1704,7 +1705,7 @@ export class PlannerScene {
   private applyRoomLighting(snapshot: PlannerSnapshot) {
     const enabled = snapshot.room.lighting.enabled;
     const hasDaylight = this.daylightGroup.children.length > 0;
-    const hasSunset = snapshot.openings.some((opening) => opening.type === 'window');
+    const hasSunset = snapshot.openings.some(isSunGlazedOpening);
     // The broad terms stand in for bounced indoor light. Fixtures supply a
     // visible ceiling cue; the original shadow caster still projects furniture
     // shadows onto the room, while contact AO sits beneath each model.
@@ -1808,15 +1809,14 @@ export class PlannerScene {
   }
 
   private addBaseboardRuns(wall: ReturnType<typeof getRoomWalls>[number], snapshot: PlannerSnapshot) {
-    const openingFrameWidth = 0.05;
     const blocked = snapshot.openings
       .filter((opening) => opening.wallId === wall.id && opening.sillHeight <= 0.025)
       .map((opening) => ({
         // Stop at the outside of the casing, not the raw opening. The old run
         // continued underneath half of the door frame, producing the little split
         // at the jamb. This makes baseboard and casing meet edge-to-edge.
-        start: Math.max(0, opening.offset - opening.width / 2 - openingFrameWidth / 2),
-        end: Math.min(wall.length, opening.offset + opening.width / 2 + openingFrameWidth / 2)
+        start: Math.max(0, opening.offset - opening.width / 2 - (opening.type === 'window' ? 0.04 : 0.075) / 2),
+        end: Math.min(wall.length, opening.offset + opening.width / 2 + (opening.type === 'window' ? 0.04 : 0.075) / 2)
       }))
       .sort((a, b) => a.start - b.start);
 
@@ -2035,46 +2035,41 @@ export class PlannerScene {
     snapshot: PlannerSnapshot
   ) {
     if (end - start < 0.03) return;
-    const height = 0.07;
-    // A low skirting profile has a shaded face and a light, slightly projecting
-    // top cap. It reads separately from both the wall and the taller casings.
-    const casingProjection = 0.01;
-    const backOffset = WALL_THICKNESS / 2;
-    const frontOffset = backOffset + casingProjection;
-    const back = this.wallSegmentEdgePoints(wall, start, end, backOffset, snapshot);
-    const front = this.wallSegmentEdgePoints(wall, start, end, frontOffset, snapshot);
+    const profile = (BASEBOARD_STYLES.find((style) => style.id === snapshot.room.baseboardStyle) ?? BASEBOARD_STYLES[0]).profile;
+    const positions: number[] = [];
     const geometry = new THREE.BufferGeometry();
-    const points = [
-      new THREE.Vector3(back.start.x, 0, back.start.z),
-      new THREE.Vector3(back.end.x, 0, back.end.z),
-      new THREE.Vector3(front.end.x, 0, front.end.z),
-      new THREE.Vector3(front.start.x, 0, front.start.z),
-      new THREE.Vector3(back.start.x, height, back.start.z),
-      new THREE.Vector3(back.end.x, height, back.end.z),
-      new THREE.Vector3(front.end.x, height, front.end.z),
-      new THREE.Vector3(front.start.x, height, front.start.z)
-    ];
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(points.flatMap((point) => [point.x, point.y, point.z]), 3));
-    geometry.setIndex([
-      0, 1, 2, 0, 2, 3,
-      4, 7, 6, 4, 6, 5,
-      0, 4, 5, 0, 5, 1,
-      1, 5, 6, 1, 6, 2,
-      2, 6, 7, 2, 7, 3,
-      3, 7, 4, 3, 4, 0
-    ]);
-    const flatGeometry = geometry.toNonIndexed();
-    geometry.dispose();
-    flatGeometry.computeVertexNormals();
-    flatGeometry.clearGroups();
-    flatGeometry.addGroup(0, 6, 0);
-    flatGeometry.addGroup(6, 6, 1);
-    flatGeometry.addGroup(12, 24, 0);
+    const edges = profile.map(([projection, y]) => {
+      const points = this.wallSegmentEdgePoints(wall, start, end, WALL_THICKNESS / 2 + projection, snapshot);
+      return {
+        start: new THREE.Vector3(points.start.x, y, points.start.z),
+        end: new THREE.Vector3(points.end.x, y, points.end.z)
+      };
+    });
+    const triangle = (a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, materialIndex: number) => {
+      geometry.addGroup(positions.length / 3, 3, materialIndex);
+      positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+    };
+    for (let index = 0; index < profile.length; index += 1) {
+      const next = (index + 1) % profile.length;
+      const a = edges[index];
+      const b = edges[next];
+      const highlight = profile[index][1] > 0.01 && Math.abs(profile[index][1] - profile[next][1]) < 0.001 ? 1 : 0;
+      triangle(a.start, a.end, b.end, highlight);
+      triangle(a.start, b.end, b.start, highlight);
+    }
+    const caps = THREE.ShapeUtils.triangulateShape(profile.map(([x, y]) => new THREE.Vector2(x, y)), []);
+    for (const [a, b, c] of caps) {
+      triangle(edges[a].start, edges[b].start, edges[c].start, 0);
+      triangle(edges[c].end, edges[b].end, edges[a].end, 0);
+    }
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.computeVertexNormals();
+    const baseColor = new THREE.Color(snapshot.room.baseboardColor);
     const mesh = new THREE.Mesh(
-      flatGeometry,
+      geometry,
       [
-        new THREE.MeshBasicMaterial({ color: 0xdedbd8, side: THREE.DoubleSide, toneMapped: false }),
-        new THREE.MeshBasicMaterial({ color: 0xf5f3f0, side: THREE.DoubleSide, toneMapped: false })
+        new THREE.MeshBasicMaterial({ color: baseColor, side: THREE.DoubleSide, toneMapped: false }),
+        new THREE.MeshBasicMaterial({ color: baseColor.clone().lerp(new THREE.Color(0xffffff), 0.28), side: THREE.DoubleSide, toneMapped: false })
       ]
     );
     mesh.castShadow = false;
@@ -2169,48 +2164,90 @@ export class PlannerScene {
     }
 
     if (opening.type === 'window') {
-      const innerWidth = Math.max(0.08, opening.width - 0.08);
-      if (opening.variant === 'double-window') {
-        glassPanel(opening.offset - innerWidth * 0.25, innerWidth / 2 - 0.022);
-        glassPanel(opening.offset + innerWidth * 0.25, innerWidth / 2 - 0.022);
-        alignedBox(opening.offset, (top + bottom) / 2, 0.035, top - bottom, 0.04, wallThickness / 2 + 0.006);
-      } else if (opening.variant === 'sliding-window') {
-        glassPanel(opening.offset - innerWidth * 0.23, innerWidth * 0.56, bottom, top, wallThickness / 2 + 0.001);
-        glassPanel(opening.offset + innerWidth * 0.23, innerWidth * 0.56, bottom, top, wallThickness / 2 + 0.012);
-        alignedBox(opening.offset, (top + bottom) / 2, 0.032, top - bottom, 0.035, wallThickness / 2 + 0.016);
-      } else {
-        glassPanel(opening.offset, innerWidth);
+      const sashDepth = 0.047;
+      const sashOffset = wallThickness / 2 + 0.007;
+      const sashRail = Math.min(0.055, opening.width * 0.095, opening.height * 0.095);
+      const panes = glazingAreas(opening);
+      for (const [index, pane] of panes.entries()) {
+        const paneWidth = pane.right - pane.left;
+        const paneHeight = pane.top - pane.bottom;
+        const centreAlong = (pane.left + pane.right) / 2;
+        const slideOffset = opening.variant === 'sliding-window' && index === 1 ? 0.014 : 0;
+        const face = sashOffset + slideOffset;
+        // Glass extends behind the sash by 8 mm on every side. Every rail then
+        // overlaps the outer casing or its neighbour as dimensions change.
+        glassPanel(centreAlong, paneWidth + 0.016, pane.bottom - 0.008, pane.top + 0.008, face + 0.003);
+        for (const side of [pane.left, pane.right]) {
+          alignedBox(side, (pane.bottom + pane.top) / 2, sashRail, paneHeight + sashRail + 0.002, sashDepth, face, 0xe3e0db);
+        }
+        for (const edge of [pane.bottom, pane.top]) {
+          alignedBox(centreAlong, edge, paneWidth + sashRail + 0.002, sashRail, sashDepth, face, 0xe3e0db);
+        }
+      }
+      if (opening.variant === 'single-hung-window') {
+        const split = bottom + opening.height * 0.53;
+        alignedBox(opening.offset, split, Math.min(0.075, opening.width * 0.12), 0.018, 0.017, sashOffset + sashDepth / 2 + 0.004, 0xa7a7a2);
+      }
+      if (opening.variant === 'sliding-window') {
+        alignedBox(opening.offset, bottom + 0.014, opening.width - 0.025, 0.018, 0.055, sashOffset + 0.012, 0xbab8b2);
       }
       return;
     }
 
     if (opening.variant === 'door-frame') return;
 
-    const innerWidth = Math.max(0.1, opening.width - 0.08);
-    const panelHeight = Math.max(0.1, opening.height - 0.055);
-    const interiorOffset = wallThickness / 2 + 0.022;
-    const makeDoorPanel = (along: number, width: number, glass = false) => {
-      if (glass) {
-        glassPanel(along, Math.max(0.08, width - 0.025), 0.045, Math.max(0.12, panelHeight - 0.015), interiorOffset + 0.002);
-        const edge = alignedBox(along, panelHeight / 2, width, panelHeight, 0.028, interiorOffset, 0xf4f4f1) as THREE.Mesh;
-        if (edge.material instanceof THREE.MeshStandardMaterial) {
-          edge.material.transparent = true;
-          edge.material.opacity = 0.22;
-          edge.material.depthWrite = false;
+    const leafWidth = Math.max(0.1, opening.width - frame + 0.018);
+    const leafTop = top - frame / 2 + 0.014;
+    const leafBottom = bottom + 0.003;
+    const leafDepth = 0.044;
+    const leafOffset = wallThickness / 2 + 0.023;
+    const isDouble = opening.variant === 'double-door' || opening.variant === 'glass-double-door';
+    const paneAreas = glazingAreas(opening);
+    const leafCentres = isDouble
+      ? [opening.offset - leafWidth / 4, opening.offset + leafWidth / 4]
+      : [opening.offset];
+    for (const [index, along] of leafCentres.entries()) {
+      const width = leafWidth / leafCentres.length;
+      const leafLeft = along - width / 2;
+      const leafRight = along + width / 2;
+      const pane = paneAreas.find((area) => (area.left + area.right) / 2 > leafLeft && (area.left + area.right) / 2 < leafRight);
+      const solid = (left: number, right: number, low: number, high: number, color: THREE.ColorRepresentation = 0xcbbca7) => {
+        if (right - left <= 0.001 || high - low <= 0.001) return;
+        alignedBox((left + right) / 2, (low + high) / 2, right - left, high - low, leafDepth, leafOffset, color);
+      };
+      if (pane) {
+        glassPanel((pane.left + pane.right) / 2, pane.right - pane.left + 0.016,
+          pane.bottom - 0.008, pane.top + 0.008, leafOffset + 0.008);
+        solid(leafLeft, pane.left + 0.012, leafBottom, leafTop);
+        solid(pane.right - 0.012, leafRight, leafBottom, leafTop);
+        solid(pane.left, pane.right, leafBottom, pane.bottom + 0.012);
+        solid(pane.left, pane.right, pane.top - 0.012, leafTop);
+        // A shallow raised panel gives the solid lower section of glazed doors
+        // the same crafted finish as an opaque leaf.
+        if (pane.bottom - leafBottom > 0.24) {
+          alignedBox(along, (leafBottom + pane.bottom) / 2, Math.max(0.08, width - 0.13), pane.bottom - leafBottom - 0.08,
+            0.006, leafOffset + leafDepth / 2 + 0.004, 0xd8c9b5);
         }
       } else {
-        alignedBox(along, panelHeight / 2, width, panelHeight, 0.035, interiorOffset, 0xcbbca7);
+        solid(leafLeft, leafRight, leafBottom, leafTop);
+        const insetWidth = Math.max(0.07, width - 0.13);
+        const panelFace = leafOffset + leafDepth / 2 + 0.004;
+        for (const [low, high] of [[leafBottom + 0.14, leafBottom + (leafTop - leafBottom) * 0.43],
+          [leafBottom + (leafTop - leafBottom) * 0.51, leafTop - 0.14]]) {
+          if (high - low < 0.07) continue;
+          alignedBox(along, (low + high) / 2, insetWidth, high - low, 0.006, panelFace, 0xd8c9b5);
+          for (const x of [along - insetWidth / 2, along + insetWidth / 2]) {
+            alignedBox(x, (low + high) / 2, 0.012, high - low, 0.012, panelFace + 0.005, 0xb6a48e);
+          }
+        }
       }
-    };
-
-    if (opening.variant === 'double-door' || opening.variant === 'glass-double-door') {
-      const half = innerWidth / 2;
-      makeDoorPanel(opening.offset - half / 2, half - 0.012, opening.variant === 'glass-double-door');
-      makeDoorPanel(opening.offset + half / 2, half - 0.012, opening.variant === 'glass-double-door');
-      alignedBox(opening.offset, panelHeight / 2, 0.025, panelHeight, 0.04, interiorOffset, TRIM_COLOR);
-    } else {
-      makeDoorPanel(opening.offset, innerWidth, opening.variant === 'glass-door');
+      const latchSide = isDouble ? (index === 0 ? 1 : -1) : 1;
+      const handleX = along + latchSide * Math.max(0.035, width / 2 - 0.075);
+      const handleY = Math.min(1.05, leafTop * 0.57);
+      alignedBox(handleX, handleY, 0.032, 0.12, 0.012, leafOffset + leafDepth / 2 + 0.015, 0xaaa399);
+      alignedBox(handleX - latchSide * 0.035, handleY, 0.08, 0.014, 0.022, leafOffset + leafDepth / 2 + 0.026, 0xc8c1b5);
     }
+    if (isDouble) alignedBox(opening.offset, (leafBottom + leafTop) / 2, 0.022, leafTop - leafBottom, 0.049, leafOffset, 0xb4a794);
   }
 
   private syncOpeningHighlight(snapshot: SceneSnapshot) {

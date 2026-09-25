@@ -6,6 +6,8 @@ import { effectiveSunAzimuth, normalizeSunAzimuth, SUN_AZIMUTH_MAX, SUN_AZIMUTH_
 import { formatArea, formatLength } from './core/units';
 import type { CeilingLightFixtureType, PlanCameraView, ProductCategory } from './core/types';
 import { FLOOR_FINISHES, WALL_FINISHES } from './core/roomFinishes';
+import { BASEBOARD_STYLES, TRIM_COLORS, isSunGlazedOpening } from './core/architecturalStyles';
+import type { BaseboardStyle } from './core/types';
 import { getSnapshot, usePlannerStore } from './store';
 import { Icon } from './ui';
 
@@ -158,6 +160,33 @@ function FinishesPanel({ onClose }: { onClose: () => void }) {
           />
         ))}
       </div>
+      <span className="sub-label finish-section-label">Ceiling colour</span>
+      <div className="swatch-row">
+        {WALL_FINISHES.map((swatch) => (
+          <button key={swatch.value} type="button" className={`swatch ${room.ceilingColor === swatch.value ? 'selected' : ''}`}
+            style={{ '--swatch': swatch.value } as CSSProperties} title={swatch.name} aria-label={`Ceiling ${swatch.name}`}
+            onClick={() => updateRoom({ ceilingColor: swatch.value })} />
+        ))}
+        <label className="finish-custom-color" title="Custom ceiling colour">
+          <input type="color" aria-label="Custom ceiling colour" value={room.ceilingColor} onChange={(event) => updateRoom({ ceilingColor: event.target.value })} />
+        </label>
+      </div>
+      <span className="sub-label finish-section-label">Baseboard style</span>
+      <select className="finish-style-select" aria-label="Baseboard style" value={room.baseboardStyle}
+        onChange={(event) => updateRoom({ baseboardStyle: event.target.value as BaseboardStyle })}>
+        {BASEBOARD_STYLES.map((style) => <option key={style.id} value={style.id}>{style.name} — {style.description}</option>)}
+      </select>
+      <span className="sub-label finish-section-label">Baseboard colour</span>
+      <div className="swatch-row">
+        {TRIM_COLORS.map((swatch) => (
+          <button key={swatch.value} type="button" className={`swatch ${room.baseboardColor === swatch.value ? 'selected' : ''}`}
+            style={{ '--swatch': swatch.value } as CSSProperties} title={swatch.name} aria-label={`Baseboard ${swatch.name}`}
+            onClick={() => updateRoom({ baseboardColor: swatch.value })} />
+        ))}
+        <label className="finish-custom-color" title="Custom baseboard colour">
+          <input type="color" aria-label="Custom baseboard colour" value={room.baseboardColor} onChange={(event) => updateRoom({ baseboardColor: event.target.value })} />
+        </label>
+      </div>
       <span className="sub-label floor-label">Floor</span>
       <div className="floor-options">
         {FLOOR_FINISHES.map((floor) => (
@@ -198,7 +227,7 @@ export function PlanRoom() {
   const setShowProductDimensions = usePlannerStore((s) => s.setShowProductDimensions);
   const setShowSpacingDimensions = usePlannerStore((s) => s.setShowSpacingDimensions);
   const lighting = usePlannerStore((s) => s.room.lighting);
-  const windowCount = usePlannerStore((s) => s.openings.filter((opening) => opening.type === 'window').length);
+  const windowCount = usePlannerStore((s) => s.openings.filter(isSunGlazedOpening).length);
   const hasWindow = windowCount > 0;
   const horizontalAngle = effectiveSunAzimuth(lighting.sunAzimuth, windowCount);
   const setRoomLighting = usePlannerStore((s) => s.setRoomLighting);
@@ -282,7 +311,7 @@ export function PlanRoom() {
                     <label><input type="checkbox" checked={lighting.showWithoutCeiling} onChange={(e) => setRoomLighting({ showWithoutCeiling: e.target.checked })} /><span>Show fixtures without ceiling<small>Keep fixtures visible when the ceiling is hidden</small></span></label>
                   </div>
                   {hasWindow && <div className="view-options-section sun-angle-section">
-                    <strong>Window sun</strong>
+                    <strong>Window and door sun</strong>
                     <div className="sun-angle-control">
                       <div><span>Horizontal</span><output>{horizontalAngle}°</output></div>
                       <input type="range" min={windowCount === 1 ? -SUN_SINGLE_WINDOW_LIMIT : SUN_AZIMUTH_MIN} max={windowCount === 1 ? SUN_SINGLE_WINDOW_LIMIT : SUN_AZIMUTH_MAX} step="1" value={horizontalAngle} aria-label="Sun horizontal angle" {...sunAngleEvents}
@@ -293,7 +322,7 @@ export function PlanRoom() {
                       <input type="range" min={SUN_ELEVATION_MIN} max={SUN_ELEVATION_MAX} step="1" value={lighting.sunElevation} aria-label="Sun height angle" {...sunAngleEvents}
                         onChange={(e) => setRoomLighting({ sunElevation: Number(e.target.value) }, false)} />
                     </div>
-                    <small>{windowCount === 1 ? '0° faces the window; the slider stops at its horizon.' : '0° faces the first window. Rotate through 360° to reach other windows.'}</small>
+                    <small>{windowCount === 1 ? '0° faces the glazed opening; the slider stops at its horizon.' : '0° faces the first glazed opening. Rotate through 360° to reach the others.'}</small>
                   </div>}
                 </div>
               )}

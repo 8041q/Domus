@@ -13,6 +13,7 @@ const OPENING_VARIANTS: Record<RoomOpening['type'], Array<{ id: OpeningVariant; 
   window: [
     { id: 'single-window', label: 'Single glass window' },
     { id: 'double-window', label: 'Double glass window' },
+    { id: 'single-hung-window', label: 'Single-hung window' },
     { id: 'full-height-window', label: 'Floor-to-ceiling window' },
     { id: 'high-window', label: 'High / top window' },
     { id: 'sliding-window', label: 'Sliding glass / pathway' }
@@ -22,6 +23,7 @@ const OPENING_VARIANTS: Record<RoomOpening['type'], Array<{ id: OpeningVariant; 
     { id: 'double-door', label: 'Double doors' },
     { id: 'door-frame', label: 'Door frame only' },
     { id: 'glass-door', label: 'Glass door' },
+    { id: 'semi-glass-door', label: 'Semi-glazed panel door' },
     { id: 'glass-double-door', label: 'Double glass doors' }
   ],
   opening: [
