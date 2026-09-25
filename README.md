@@ -1,232 +1,99 @@
-# Domus - Room Planner Prototype
+# Domus
 
-TypeScript-first browser room planner with two focused workflows:
+Domus is a browser-based room builder and layout planner. It keeps the room,
+openings, finishes, and furniture as semantic data and uses Three.js only to
+render and interact with that data.
 
-1. **Build Room** - room geometry, dimensions and architectural openings.
-2. **Plan Room** - finishes, product placement, snapping, views and spatial guidance.
+The application is currently a local frontend prototype. It has no backend,
+accounts, cloud sync, or AI runtime yet.
 
-Both workflows share one semantic room state. Three.js renders that state; it is not the source of truth.
+## What it does
 
-## UI refactor - unified shadcn-style system
+### Build Room
 
-The interface now uses one semantic design language inspired by shadcn/ui rather than screen-specific styling:
+- Start from rectangle, angled-corner, L-shaped, or recessed room templates.
+- Drag walls and corners in a dimensioned 2D workspace; split a wall by adding a
+  corner.
+- Work in metric or imperial units.
+- Add, position, resize, and restyle windows, doors, and custom openings.
+- Inspect the architecture in a neutral 3D preview. Direct sun rays are
+  intentionally disabled in this workspace.
 
-- `src/styles.css` owns the global semantic tokens (`background`, `foreground`, `card`, `primary`, `secondary`, `muted`, `border`, `input`, `ring`, `radius`) and the reusable layout/component styling.
-- `src/ui.tsx` contains dependency-free shared TypeScript/React UI primitives and icons so common buttons, badges, cards and helpers do not get reimplemented per page.
-- The former **Furnish Room** workflow is now **Plan Room** throughout the app model, store, types, component names and documentation.
-- Build Room keeps its world-anchored checker grid plus the existing thick-wall / corner-dot interaction model. Its labels, controls, cards, selection states and toolbar now use the shared UI language.
-- Plan Room keeps the existing 3D work/view scene. The catalogue, inspectors, view controls, finish controls and status UI are redesigned, while room/product/spacing annotations now use a consistent neutral line-and-badge system.
-- Desktop and compact layouts share the same component shapes, focus treatment, spacing scale and typography rather than switching to unrelated mobile styles.
+### Plan Room
 
-The project intentionally does not add Tailwind/Radix dependencies just for appearance. The current Vite app keeps its existing runtime stack while adopting shadcn's semantic-token/component principles, which keeps the room-planning engine isolated from a framework migration.
+- Place, move, rotate, duplicate, and remove procedural furniture.
+- Use wall, object, and room-centre snapping with deterministic collision and
+  clearance checks.
+- Switch between Cutaway, Top, Front, Right, Back, and Left views.
+- Toggle room, product, spacing, and clearance annotations.
+- Change PBR floor finishes, wall and ceiling colours, baseboard styles, and
+  ceiling-light settings.
+- Enable paired sun shadows or the warm/cool Cinematic Grade in rooms with
+  glazed openings.
+- Export the complete physical room as a semantic GLB.
 
+Both workspaces edit the same project. A change made in Build Room is available
+immediately in Plan Room and vice versa.
 
-## Phase 9 - reference-style cutaway interaction
+## Run locally
 
-This pass brings the 3D workspace closer to the supplied reference images/video:
-
-- **Cutaway dimensions** now follow the visible room silhouette: far/visible walls dimension above the wall top, while cut-away foreground walls dimension around the floor edge. Metric drafting labels use centimetres.
-- **Selected products** use a crisp yellow screen-space silhouette rather than a blue bounding box.
-- **Product dimensions** use a neutral dashed measurement cage, matching extension lines, and the same white bordered measurement badges used by the rest of the annotation UI while keeping the scene selection outline visible.
-- **Wall junctions** overlap their structural cores, finish faces and skirting slightly at true wall ends to remove hairline corner gaps in the cutaway view.
-- **Furniture dragging** is more magnetic: wall-affinity products auto-rotate and settle on the visible interior wall face, object-edge snaps have practical enter/exit hysteresis, rotated collision tests use the real oriented footprint, and Shift can still provide free-move/overlap after a drag has started.
-- Perspective framing/background were tuned toward the lighter reference presentation, and furniture now exposes a move cursor while draggable.
-
-## Phase 8 - stabilization before core-focus work
-
-This phase intentionally adds very little surface area. It fixes coordinate-system, camera-transition and architectural-opening behavior so the next core phase can build on a predictable baseline.
-
-### Stable room/world coordinates
-
-- Room vertices are no longer normalized back to `(0, 0)` after every wall/corner edit.
-- Moving a wall now moves **that wall**, rather than sometimes leaving the edited edge apparently fixed while the rest of the polygon translates.
-- Centered wall-length edits preserve the selected wall midpoint in world space.
-- Overall width/depth scaling now expands/contracts around the room center instead of rebasing the room to the origin.
-- Negative world coordinates are valid; bounds are metadata rather than an implicit coordinate reset.
-
-### Drafting grid rebuilt as a real guide
-
-The Build Room checker is now world-anchored and represents physical dimensions:
-
-- Metric: **50 cm major cells**, 10 cm minor lines.
-- Imperial: **1 ft major cells**, 6 in minor lines.
-- Direct dragging still snaps at 5 cm / 2 in by default, with Shift precision at 1 cm / 1/2 in.
-- The plan viewport keeps a stable drafting scale while dimensions change, so growing a room makes it occupy more guide cells instead of automatically zooming it back to the same apparent size.
-- The view is re-fit on an explicit template change or actual canvas resize, not every geometry edit.
-
-### Persistent corner angles
-
-Every room corner now keeps its interior-angle annotation visible. Hovering or dragging a corner promotes that label to the shared selection blue, but the numeric angle remains available at rest as drafting information.
-
-### Camera / wall crossing without jitter
-
-The previous camera fix physically pushed the camera out of the 10 cm wall core. That solved the wall-colour flood but created visible OrbitControls jitter.
-
-Phase 8 removes camera collision entirely. Instead:
-
-- Camera motion remains continuous.
-- Each wall has a small hysteresis-based **crossing transition zone** around its structural core.
-- While the camera is physically crossing that zone, the complete wall assembly is cut away temporarily.
-- After the camera is clearly inside or outside, normal cutaway logic resumes.
-- Wall body, interior finish, frames and attached opening visuals share the same wall-level visibility state.
-
-This prevents both the all-wall-colour failure and the camera snapping/jitter introduced by the earlier protection.
-
-### Wall openings are true structural voids
-
-Custom wall openings no longer gain a cyan translucent fill when selected. The invisible 3D picking plane remains ray-pickable but stays visually invisible at all times.
-
-Custom openings also support smaller true custom sizes (down to 10 cm in width/height at prototype level).
-
-### Openings now meet the floor correctly
-
-Architectural openings now affect the wall/floor junction:
-
-- A floor-reaching door/window/custom opening interrupts the white perimeter floor trim.
-- The selected floor finish continues through the 10 cm wall thickness as a threshold/bridge.
-- Skirting is interrupted whenever an opening reaches into the 7 cm footer zone, even if its bottom is slightly above floor level.
-- Full-height openings already remove the wall header automatically; floor-level openings remove the lower wall segment automatically.
-
-This means a custom opening can be a floating hole, a low opening, a floor-level passage, or a full-height passage without fake glass or a white footer running through it.
-
-### 3D presentation
-
-- Wall thickness remains **10 cm**.
-- Structural wall body/reveals remain white; only the room-facing finish carries wall colour.
-- The 3D stage background is slightly lighter (`#d6d7d4`).
-- Phase 6's simpler direct-light/shadow path remains in place; no SSAO post-process was reintroduced.
-
-## Existing Build Room baseline
-
-- Rectangle, L-shape and recessed templates.
-- Arbitrary simple polygons and angled walls.
-- Direct wall and corner dragging.
-- Shared selection-blue hover feedback and pointer/grabbing cursors.
-- Mid-wall `+` control to insert a real corner and split the wall.
-- Metric / Imperial presentation.
-- Up to 20 m overall span / selected-wall length.
-- Per-wall length labels and `Wall N` IDs.
-- Doors, windows and custom wall openings attached to semantic wall IDs.
-- 2D and 3D opening dragging.
-- Window/door architectural variants.
-
-## Existing Plan Room baseline
-
-- Procedural placeholder furniture; GLBs are not required.
-- Cutaway, Top, Front, Right, Back and Left views.
-- Sectional Cutaway.
-- Direct furniture dragging and arbitrary rotation.
-- Light snapping plus Shift free-move.
-- Spatial wall auto-alignment.
-- Deterministic collision and clearance checks.
-- Optional room dimensions, product dimensions and spacing annotations.
-- Gesture-level undo/redo and local save/load.
-
-## Technology
-
-- TypeScript
-- React
-- Vite
-- Three.js
-- Zustand
-
-The geometry/placement model remains renderer-independent so future AI can consume deterministic room facts rather than infer geometry from pixels.
-
-## Run
+You need Node.js and npm.
 
 ```bash
 npm install
 npm run dev
 ```
 
-Production build:
+Vite serves the app at `http://localhost:5173` by default.
+
+Create and preview a production build with:
 
 ```bash
 npm run build
+npm run preview
 ```
 
-## Useful controls
+## Main controls
 
-- `Ctrl/Cmd + Z` - undo
-- `Ctrl/Cmd + Y` - redo
-- `R` - rotate selected furniture 90°
-- `Delete` / `Backspace` - remove selected furniture
-- Drag empty 3D space - orbit
-- Hold `Shift` before left-dragging - orbit without clearing the active furniture selection/dimensions
-- Mouse wheel / trackpad - zoom
-- Start dragging furniture, then hold `Shift` - free movement / snapping off
-- Build Room: drag walls/corners/openings directly
-- Build Room: click a wall-centre `+` to create a new corner
-- Build Room: Shift while drafting uses the finer snap step
+| Action | Control |
+| --- | --- |
+| Undo | `Ctrl/Cmd + Z` |
+| Redo | `Ctrl/Cmd + Y` or `Ctrl/Cmd + Shift + Z` |
+| Rotate selected furniture 90° | `R` |
+| Remove selected furniture | `Delete` or `Backspace` |
+| Orbit the 3D view | Drag empty space with the left mouse button |
+| Pan the 3D view | Drag with the right mouse button |
+| Zoom | Mouse wheel or trackpad |
+| Keep a furniture selection while orbiting | Hold `Shift` and drag empty space |
+| Move furniture without snapping | Start dragging it, then hold `Shift` |
+| Use the fine Build Room snap | Hold `Shift` while dragging in 2D |
 
-## Validation performed here
+Build Room walls, corners, and openings can be dragged directly. Selecting an
+item opens its numeric controls for precise edits.
 
-- Renderer-independent geometry/units/placement modules pass strict TypeScript compilation.
-- Geometry checks confirm a wall can move into negative world coordinates without rebasing the rest of the room.
-- Centered wall resizing preserves the wall midpoint.
-- All 14 TS/TSX files pass TypeScript syntax/transpile validation.
-- The supplied dependency bundle was used to run a full TypeScript + Vite production build successfully after the GLB export changes.
+## Saving and export
 
-## Blender / GLB export organization
+`Save` stores one project snapshot in this browser under
+`room-planner-project-v3`; `Load` restores it. Older local snapshot keys are
+accepted and normalized when possible. Clearing site data removes the save.
+There is no automatic save or cloud backup.
 
-`Export GLB` now builds a semantic export scene rather than serializing the live cutaway view.
-Camera cutaways and `helperGroup` UI are therefore irrelevant to the output.
+`Export GLB` is available in Plan Room. It exports the complete room rather
+than the current cutaway: walls, floor, baseboards, frames, ceiling, and
+furniture are grouped by semantic category. Cameras, selection outlines,
+measurements, and other editing helpers are excluded.
 
-The portable glTF hierarchy is:
+## Current limitations
 
-```text
-DomusRoom
-├── Walls
-│   ├── Wall 1
-│   ├── Wall 2
-│   └── ...
-├── Floors
-│   ├── Floor
-│   ├── Baseboard 1
-│   └── ...
-├── Frames
-│   ├── Window 1
-│   ├── Door 1
-│   └── ...
-├── Ceiling
-│   └── Ceiling
-└── Furniture
-    ├── 3-seat sofa
-    └── ...
-```
+- The furniture catalogue uses procedural placeholder models and sample prices.
+- Projects are local to one browser and there is one manual save slot.
+- The renderer requires a browser with WebGL support.
+- AI assistance is designed but not implemented.
+- Multi-user projects, authentication, and cloud services are not implemented.
 
-Every logical item receives a centred parent pivot. Leaf static meshes are also re-centred safely where possible, while multipart model hierarchy is preserved. The parent contains `domusCategory` and `domusItemId` glTF extras so downstream tools can retain semantic identity.
+## Developer guides
 
-### Future models and ceiling lights
-
-The exporter automatically includes new direct children added to the physical scene groups:
-
-- `floorGroup` -> `Floors`
-- `wallsGroup` -> `Walls` unless explicitly tagged as another semantic category
-- `ceilingGroup` -> `Ceiling`
-- `objectGroup` -> `Furniture`
-
-A future ceiling-light fixture implemented as one `THREE.Group` under `ceilingGroup` will therefore export automatically as one multipart item. When several independent scene meshes should be treated as one logical item (as happens with wall segments, baseboard runs, and window/door frame parts), tag them with `tagExportPart`. Complete model groups can use `tagExportRoot`.
-
-
-## Floor finish assets
-
-The floor finish picker uses real PBR texture sets rather than generated canvas patterns. The persisted finish ids remain unchanged for snapshot compatibility, but the visible choices are **Wood floor**, **Floating floor**, **Dark grey carpet**, and **Vinyl**.
-
-Each finish defines a base-colour map, OpenGL normal map, roughness map, physical texture width, source link and matte fallback in `src/core/roomFinishes.ts`. `PlannerScene` maps those textures with metre-based UVs, so changing the room dimensions does not stretch the flooring. The currently loaded maps are also used by `GLTFExporter`, keeping the Blender handoff on standard PBR material channels. Normal strength and planner environment intensity are tuned per material so the normal/roughness response reads clearly instead of every floor appearing polished.
-
-Finish loading is atomic. Selecting another finish leaves the currently rendered floor untouched until the requested base-colour, normal and roughness maps have all settled, then swaps the channels together. On the very first load a matte representative fallback is shown immediately, never an empty/uninitialised texture. Successfully loaded texture sets are cached, so editing room geometry does not cause repeated texture flashes.
-
-The wood, laminate and vinyl sets are CC0 assets from Poly Haven. The dark carpet keeps ambientCG Carpet 011's CC0 fibre/normal/roughness data and derives a neutral charcoal base colour from its photographic albedo. Source/licence metadata stays alongside each finish definition in code.
-
-## Builder plan annotation layout
-
-Builder measurements deliberately use separate visual lanes: wall length/name labels start outside the room, while the `+` split-wall controls start inside. Wall-label placement is collision-aware and scored by actual screen travel rather than a rigid horizontal-then-vertical order. Horizontal motion remains slightly cheaper, but a substantially shorter vertical or diagonal move can win. This keeps compact recesses readable without sending a label far away simply to preserve one axis.
-
-Moved labels use a subtle leader line back to the wall. Those leaders are now part of layout geometry: a candidate is rejected when its connector would cross an already placed connector, run through another label/annotation, or when its label box would cut an existing connector. Connectors attach to the nearest edge of the label rather than its centre. In an extreme layout where no legal connector exists, the connector is omitted instead of drawing crossed lines.
-
-Wall-label rectangles are also a hard non-overlap constraint. The layout searches the full usable viewport rather than falling back to an overlapping local candidate, and its collision rectangle is based on the measured two-line text size plus padding. If an exceptionally small viewport has literally no legal text slot, that one measurement is omitted rather than drawn over another label.
-
-Corner handles, interior-angle text and the natural split-button positions are treated as layout blockers. Split controls then get their own collision pass, also avoid committed leader lines, and can move deeper into the room (with only a small along-wall adjustment as a last resort); hit testing uses the final drawn position. This prevents the `+` affordance and wall/angle text from occupying the same pixels in tight edge cases.
-
-The room area is no longer painted into the top-left corner of the plan. It lives in the builder toolbar beside the 2D/3D control, so it cannot collide with walls or corner angles. Split-wall controls use one shared adaptive visibility rule for drawing and hit testing; they remain available on shorter walls than before, but still hide when there is not enough screen space between the two corner handles.
+- [Architecture](docs/ARCHITECTURE.md) — current state, data flow, renderer, and
+  lifecycle.
+- [AI design](docs/AI.md) — planned provider-neutral assistance using OpenAI,
+  Gemini, or server-hosted Ollama.
