@@ -1682,18 +1682,39 @@ export class PlannerScene {
     const shadowTexelSize = shadowSpan / softSun.shadow.mapSize.width;
     const filterGuard = shadowTexelSize * (softSun.shadow.radius + 2);
     const angularGuard = shadowSpan * Math.tan(SUN_PAIR_HALF_SEPARATION);
-    const maskGuard = filterGuard + angularGuard;
-    for (const wall of walls) {
+    const verticalGuard = filterGuard + angularGuard;
+    const panesByWall = new Map(walls.map((wall) => [
+      wall.id,
+      snapshot.openings
+        .filter((opening) => opening.wallId === wall.id)
+        .flatMap(glazingAreas)
+    ]));
+    for (const [wallIndex, wall] of walls.entries()) {
+      const previousWall = walls[(wallIndex - 1 + walls.length) % walls.length];
+      const nextWall = walls[(wallIndex + 1) % walls.length];
+      const previousHasCornerPane = (panesByWall.get(previousWall.id) ?? [])
+        .some((pane) => previousWall.length - pane.right <= verticalGuard);
+      const nextHasCornerPane = (panesByWall.get(nextWall.id) ?? [])
+        .some((pane) => pane.left <= verticalGuard);
+      const startGuard = previousHasCornerPane ? 0 : filterGuard;
+      const endGuard = nextHasCornerPane ? 0 : filterGuard;
       const shape = new THREE.Shape();
-      shape.moveTo(-maskGuard, -maskGuard);
-      shape.lineTo(wall.length + maskGuard, -maskGuard);
-      shape.lineTo(wall.length + maskGuard, snapshot.room.height + maskGuard);
-      shape.lineTo(-maskGuard, snapshot.room.height + maskGuard);
+      // Keep the large projection allowance above the ceiling and below the
+      // floor, where it closes filtered shadow-map seams without intersecting
+      // an opening. Along the wall, only the PCF footprint may cross a corner.
+      // Extending the full angular allowance there creates an invisible fin
+      // that can shade a window on the neighbouring wall before the ray reaches
+      // its pane.
+      // If the neighbouring wall has glazing within the guard footprint, omit
+      // this wall's corner fin entirely. Any positive fin can intercept a
+      // sufficiently oblique ray before it reaches that neighbouring pane.
+      shape.moveTo(-startGuard, -verticalGuard);
+      shape.lineTo(wall.length + endGuard, -verticalGuard);
+      shape.lineTo(wall.length + endGuard, snapshot.room.height + verticalGuard);
+      shape.lineTo(-startGuard, snapshot.room.height + verticalGuard);
       shape.closePath();
 
-      const panes = snapshot.openings
-        .filter((opening) => opening.wallId === wall.id)
-        .flatMap(glazingAreas);
+      const panes = panesByWall.get(wall.id) ?? [];
       for (const pane of panes) {
         const left = Math.max(0, pane.left);
         const right = Math.min(wall.length, pane.right);
@@ -1717,7 +1738,10 @@ export class PlannerScene {
       mask.onAfterShadow = afterMaskShadow;
       this.sunsetGroup.add(mask);
     }
-    const ceilingMaskVertices = this.insetRoomVertices(snapshot, -maskGuard);
+    // The wall masks already extend above this plane. Keep the ceiling mask on
+    // the real room perimeter: an outward expansion acts like an invisible eave
+    // and shades low-angle sunlight before it can pass through a window.
+    const ceilingMaskVertices = this.insetRoomVertices(snapshot, 0);
     const ceilingShape = new THREE.Shape(ceilingMaskVertices.map((vertex) => new THREE.Vector2(vertex.x, vertex.z)));
     const ceilingMask = new THREE.Mesh(new THREE.ShapeGeometry(ceilingShape), maskMaterial);
     ceilingMask.rotation.x = Math.PI / 2;
