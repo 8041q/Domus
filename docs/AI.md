@@ -1,182 +1,118 @@
-# Planned AI Assistance
+# Experimental AI Assistant
 
-> **Status:** This is a design contract, not a description of a shipped feature.
-> Domus currently has no backend, AI settings, provider SDKs, prompts, or model
-> calls.
+> **Status:** The assistant is implemented as an opt-in experiment for trusted
+> local installations. It is furniture-only and is not ready for a public or
+> untrusted deployment.
 
-The goal is to let a user bring an OpenAI or Gemini API key, or use an Ollama
-installation reachable by the Domus server. Every provider must feed the same
-safe preview-and-approve workflow; the model never edits the project directly.
+Domus supports Gemini, OpenAI, and Ollama behind one proposal workflow. Models
+can answer questions or suggest furniture changes, but they never mutate the
+project directly.
 
-## Product behavior
+## Try it with Gemini
 
-The first AI experience should explain a room, answer layout questions, and
-propose changes such as moving or rotating furniture. A proposal is shown in
-the room before anything is committed. The user can accept or reject it, and an
-accepted proposal becomes one undoable action.
+1. Run `npm run dev` and open Plan Room.
+2. Choose **AI Experimental**, select **Gemini**, and enter your API key.
+3. Save the key, then choose **Test connection & load models**.
+4. Pick a model, ask for a layout change, review the returned operations, and
+   choose **Apply proposal** only if they are correct.
 
-AI is not responsible for measurements, polygon math, collision detection,
-clearances, or final validity. Those remain deterministic application rules.
-Unsupported local models may provide advice, but cannot produce executable
-changes.
+Do not put an API key in source code, an environment file, a room project, or a
+chat message. The settings panel is the intended input path.
 
-## Provider-neutral design
+## Current implementation
 
-The initial provider IDs are `openai`, `gemini`, and `ollama`.
+The Vite development and preview servers mount three routes:
 
-```text
-Browser AI panel
-  ├─ app-owned messages and current PlannerSnapshot
-  ├─ provider/model choice
-  └─ temporary cloud credential, when required
-                    │ HTTPS
-                    ▼
-              POST /api/ai/turn
-                    │
-          provider-neutral orchestrator
-             ┌──────┼────────┐
-             ▼      ▼        ▼
-          OpenAI  Gemini   Ollama
-                    │
-                    ▼
-       normalized text / calls / proposal / error
+- `GET /api/ai/config` returns approved, non-secret Ollama endpoints.
+- `POST /api/ai/models` tests a provider connection and lists models.
+- `POST /api/ai/turn` sends one app-owned conversation turn and returns a
+  normalized assistant message and optional proposal.
+
+Adapters currently use:
+
+- Gemini's native `generateContent` API with a response JSON schema.
+- OpenAI's Responses API with `store: false` and `text.format` structured
+  output.
+- Ollama's native chat API with a JSON schema. If a model cannot produce valid
+  structured output, Domus retries it as advice-only chat and disables Apply.
+
+The gateway does not persist messages, snapshots, or credentials. A proposal
+may contain at most eight operations and can only add, move, rotate, or remove
+catalogue furniture.
+
+## Safety and approval
+
+The provider result is only a suggestion. The gateway checks its response
+envelope, operation count, product/type names, and finite numbers. The browser
+then:
+
+1. verifies that the room still matches the revision sent to the model;
+2. validates object and product identifiers;
+3. applies every operation to a cloned snapshot;
+4. runs the normal exact placement, collision, and clearance rules;
+5. commits the complete result as one undoable action only after approval.
+
+Any failure leaves the project unchanged. The current preview is an operation
+card, not an in-room ghost rendering. AI cannot edit room geometry, openings,
+materials, lighting, persistence, or export settings.
+
+## Browser-held cloud keys
+
+Gemini and OpenAI keys are saved as AES-GCM ciphertext in IndexedDB. Domus
+generates a non-exportable Web Crypto key in the same browser profile, decrypts
+the credential only for a request, and sends it through the gateway to a fixed
+official provider host. The gateway keeps no copy after forwarding the request.
+
+Raw keys are not stored in localStorage, cookies, project files, server
+configuration, analytics, or a backend database. Removing a provider credential
+deletes its encrypted record. Clearing site data deletes both the ciphertext and
+its local encryption key; there is no recovery mechanism.
+
+This design prevents casual extraction from stored browser data, but it is not
+a defence against compromised code executing under the same origin: such code
+could ask the browser to decrypt or use the credential. The gateway also sees
+the key transiently while forwarding it. Public deployment therefore requires
+HTTPS, a strict Content Security Policy, dependency review, log redaction, and
+a narrowly scoped authenticated proxy.
+
+## Ollama
+
+Ollama is reached from the machine running the Domus server, not directly from
+the browser. The default is `http://127.0.0.1:11434`. Approve exact LAN endpoints
+with a comma-separated environment variable:
+
+```bash
+OLLAMA_ALLOWED_ENDPOINTS=http://192.168.1.50:11434,http://192.168.1.51:11434 npm run dev
 ```
 
-The adapters translate one internal request into:
+The UI can select only configured endpoints, and the gateway rejects arbitrary
+URLs so it cannot be used as a general network proxy. Installed models are read
+from Ollama's tags endpoint. Models capable of the required structured output
+can propose operations; other models remain useful for advice-only chat.
 
-- OpenAI's Responses API with function tools and `store: false`.
-- Gemini function calling and structured responses.
-- Ollama's native chat, tool-calling, and structured-output API.
+## Known experimental limits
 
-Conversation messages belong to Domus and are sent as needed on each turn.
-Provider conversation IDs are not the source of truth. Adapters normalize text,
-tool calls, refusals, usage metadata, and errors so UI and room logic do not
-branch on provider-specific response shapes.
+- The gateway is a Vite development/preview plugin. Static `dist` hosting alone
+  does not expose `/api/ai/*`.
+- There is no authentication, rate limiting, streaming, audit log, or multi-user
+  credential isolation.
+- Each request includes the relevant conversation and full semantic snapshot;
+  there is no provider-side conversation state or function-tool loop yet.
+- Conversation history is panel-local and disappears when the panel unmounts or
+  the page reloads.
+- Provider and model support for strict schemas varies. Human review remains
+  required even when a response validates.
 
-## Planned API contract
+Before public deployment, move the gateway into an authenticated production
+server, add quotas and redacted observability, stream long turns, add contract
+tests against provider fixtures, and build an in-room ghost preview.
 
-`POST /api/ai/turn` accepts a provider and model, app-owned conversation input,
-the current `PlannerSnapshot`, a project revision, and an optional cloud
-credential. It returns a normalized assistant message plus one of:
-
-- a schema-validated `LayoutProposal`;
-- an advice-only response;
-- a capability, provider, validation, or connection error.
-
-A proposal contains its base project revision, an explanation, warnings, and a
-list of typed room operations. It does not contain arbitrary code or a complete
-replacement snapshot.
-
-Tools exposed to a model are read-only queries over semantic project data and
-deterministic calculations, such as reading wall dimensions, checking a proposed
-footprint, or finding valid placement candidates. The model cannot call store
-mutators, browser APIs, network fetches, or the GLB exporter.
-
-## Proposal safety flow
-
-1. Capture the snapshot and monotonic project revision used for the request.
-2. Let the provider call approved read/calculation tools within bounded turn,
-   tool-call, token, and timeout limits.
-3. Validate the returned proposal against a strict provider-neutral schema.
-4. Re-run every operation through current geometry, collision, and clearance
-   rules; reject unknown IDs, stale revisions, invalid numbers, and unsupported
-   operations.
-5. Render the valid result as a preview without changing saved project state.
-6. Apply only after explicit user approval and record the original snapshot as
-   one undo entry.
-
-Changing the project while a request or preview is open makes that proposal
-stale. Provider timeouts, malformed output, partial tool loops, or rejected
-placements leave the project unchanged.
-
-## In-app provider settings
-
-The planned settings screen lets the user:
-
-- select OpenAI, Gemini, or Ollama;
-- enter or replace a cloud API key;
-- choose a model and test the connection;
-- select an approved Ollama endpoint and one of its installed models;
-- see whether the model supports advice, tool calling, and structured proposals;
-- remove a saved credential and all local AI conversation data.
-
-AI settings are separate from `PlannerSnapshot`. They are not included in local
-room saves or GLB exports.
-
-### Cloud credentials
-
-OpenAI and Gemini keys are persisted only in the user's browser:
-
-1. Generate a non-exportable AES-GCM `CryptoKey` with Web Crypto.
-2. Store that key and the encrypted provider credential in IndexedDB for the
-   current browser profile and origin.
-3. Decrypt into memory only when making a request.
-4. Send the credential to the Domus backend over HTTPS for that request.
-5. Have the backend forward it only to the provider's fixed official endpoint,
-   redact it from logs and errors, and discard it after the call.
-
-The raw key must never enter cookies, localStorage, project files, analytics,
-server configuration, or a backend database. Settings show only masked key
-metadata after saving.
-
-This protects a key from casual inspection of stored browser data and avoids
-server-side retention; it is not a defence against compromised code running on
-the same origin. Such code can ask the browser to use the non-exportable key
-while the application is open. A malicious backend can also observe a key that
-must transit it. A strict Content Security Policy, dependency review, HTTPS,
-request-log redaction, and a narrowly scoped proxy are therefore required.
-
-IndexedDB normally survives browser restarts. Clearing site data, changing the
-origin or browser profile, or losing the stored `CryptoKey` makes the credential
-unrecoverable; the user must enter a new one.
-
-### Ollama connections
-
-Ollama is contacted by the Domus backend, not by the browser. The default
-endpoint is `http://127.0.0.1:11434` on the application server. This supports a
-server that hosts both Domus and Ollama.
-
-A deployment may configure an exact allowlist of additional HTTP(S) endpoints
-for Ollama running on another machine on the server's network. The settings UI
-can select only those endpoints; arbitrary browser-supplied URLs are rejected so
-the AI route cannot become a general server-side request proxy. Connection
-tests use short timeouts, and the backend lists the installed models through
-Ollama's model-list API.
-
-The chosen endpoint and model are non-secret browser preferences. Before
-enabling executable proposals, Domus performs a capability probe for reliable
-tool calls and schema-constrained output. A model that fails the probe remains
-available in clearly labelled advice-only mode.
-
-## Deployment boundary
-
-The first implementation is suitable for a single-user or otherwise
-access-controlled installation. Before exposing it publicly, Domus needs
-authentication, request quotas, abuse protection, per-user isolation, bounded
-payload sizes, audit-safe logs, and explicit authorization for settings changes.
-
-Cloud provider destinations are fixed in server code. Ollama allowlists are
-deployment configuration, not project data. No endpoint may return a raw cloud
-credential to the browser after it has been submitted for a request.
-
-## Implementation acceptance checks
-
-- OpenAI, Gemini, and a capable Ollama model produce the same validated proposal
-  shape and preview behavior.
-- An advice-only Ollama model can answer but cannot enable Apply.
-- Accepting a proposal creates one undo entry; rejection, stale state, timeout,
-  malformed output, and validation failure create none.
-- Cloud keys survive a browser restart, remain unreadable as plain IndexedDB
-  values, and disappear when the user removes them or clears site data.
-- Server logs and errors contain no API key or complete sensitive request body.
-- Only official cloud hosts and allowlisted Ollama endpoints are reachable.
-- Provider switching does not move credentials or AI settings into room saves.
-
-## Primary references
+## Provider references
 
 - OpenAI: [Responses API migration](https://developers.openai.com/api/docs/guides/migrate-to-responses)
-  and [function calling](https://developers.openai.com/api/docs/guides/function-calling)
-- Gemini: [Function calling](https://ai.google.dev/gemini-api/docs/function-calling)
-- Ollama: [Tool calling](https://docs.ollama.com/capabilities/tool-calling),
+  and [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
+- Gemini: [Structured output](https://ai.google.dev/gemini-api/docs/generate-content/structured-output)
+  and [model listing](https://ai.google.dev/api/models)
+- Ollama: [chat API](https://docs.ollama.com/api/chat),
   [structured outputs](https://docs.ollama.com/capabilities/structured-outputs),
   and [model listing](https://docs.ollama.com/api/tags)

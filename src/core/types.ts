@@ -30,7 +30,7 @@ export type FloorFinish =
   | 'wood-floor-020';
 export type RoomShapeKind = 'rectangle' | 'angled-corner' | 'l-shape' | 'recess' | 'custom';
 export type CeilingLightFixtureType = 'surface-mounted' | 'recessed';
-export type SunStylePreset = 'paired-shadows' | 'cinematic-grade';
+export type SunStylePreset = 'paired-suns' | 'cinematic-shadows';
 export type BaseboardStyle = 'flat' | 'flush' | 'rounded' | 'stepped' | 'sculpted' | 'sculpted-tall' | 'floating' | 'flash-coving';
 export type BaseboardMaterial = 'paint' | 'materials';
 

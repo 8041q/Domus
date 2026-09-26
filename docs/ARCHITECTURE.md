@@ -1,17 +1,19 @@
 # Domus Architecture
 
-This document describes the application as it exists today. Planned AI work is
-kept separately in [AI.md](AI.md).
+This document describes the application as it exists today. The experimental AI
+path and its stricter deployment boundary are detailed in [AI.md](AI.md).
 
 ## Runtime and dependencies
 
-Domus is a client-only TypeScript application built with React 19 and Vite 7.
-Zustand owns application state; Three.js renders the 3D workspace. The shared UI
-components and semantic CSS tokens are implemented in the repository without a
-component-framework dependency.
+Domus is a local-first TypeScript application built with React 19 and Vite 7.
+Zustand owns application state; Three.js renders the 3D workspace. A small Node
+middleware plugin adds experimental AI routes to Vite's development and preview
+servers. The shared UI and semantic CSS tokens have no component-framework
+dependency.
 
-There is currently no server, database, authentication layer, physics engine,
-runtime validation library, or AI SDK.
+There is no standalone production server, database, authentication layer,
+physics engine, runtime-validation library, or provider SDK. The AI gateway uses
+native `fetch` and fixed provider endpoints.
 
 ```text
 React workspaces
@@ -21,6 +23,8 @@ Zustand store ── snapshot history / browser save
       │ PlannerSnapshot
       ├──────────────► 2D canvas
       └──────────────► PlannerScene / Three.js ──► WebGL
+
+Plan Room AI panel ──► /api/ai middleware ──► Gemini / OpenAI / Ollama
 ```
 
 The renderer is a consumer of project state, not the project database. Core
@@ -48,10 +52,16 @@ interface PlannerSnapshot {
 Viewport mode, selections, camera preset, active snap feedback, and annotation
 toggles are UI state and are not part of a saved snapshot.
 
+AI provider/model preferences are also separate from the snapshot. Cloud
+credentials are AES-GCM encrypted in IndexedDB with a browser-local,
+non-exportable Web Crypto key; they never travel with room saves or GLB files.
+
 The store normalizes loaded data, supplies defaults for fields added after an
 older save, remaps known legacy product IDs, and projects furniture back into a
 valid room position when possible. The active key is
 `room-planner-project-v3`; two older keys remain readable.
+Legacy sun-style values are also mapped to the corrected style names while
+preserving the lighting each saved room displayed.
 
 Undo and redo use cloned semantic snapshots. Continuous drags update live but
 commit the state captured at pointer-down once, producing one history entry per
@@ -96,6 +106,26 @@ their frames, glazing, thresholds, and baseboard interruptions are derived from
 the opening definition. Floor textures use metre-based UVs so room resizing
 does not stretch them.
 
+## Experimental AI path
+
+The lazily loaded Plan Room AI panel sends app-owned messages, the current
+snapshot, product metadata, and a snapshot revision to `/api/ai/turn`. Provider
+adapters translate Gemini `generateContent`, OpenAI Responses, and Ollama chat
+results into one JSON contract. `/api/ai/models` discovers available models and
+`/api/ai/config` exposes only approved Ollama endpoints.
+
+Executable proposals are deliberately narrow: at most eight furniture add,
+move, rotate, or remove operations. The browser rejects stale revisions,
+unknown IDs, invalid numbers, and placements that fail the same exact geometry
+and clearance checks used by direct interaction. Validation occurs against a
+clone; either the complete proposal becomes one undoable history entry or the
+project remains unchanged. AI cannot change architecture, openings, finishes,
+lighting, saved projects, or exports.
+
+Ollama defaults to the application server's `127.0.0.1:11434`. Deployments may
+add exact endpoints through `OLLAMA_ALLOWED_ENDPOINTS`; arbitrary URLs are
+rejected. Cloud destinations are hard-coded in the gateway.
+
 ## 3D renderer and lifecycle
 
 `Viewport3D` bridges store actions to one imperative `PlannerScene`. Plan Room
@@ -123,9 +153,9 @@ shading.
 
 Plan Room can additionally project sunlight through glazed openings:
 
-- **Paired Shadows** uses equal-energy crisp and soft directional suns whose
+- **Cinematic Shadows** uses equal-energy crisp and soft directional suns whose
   azimuths remain 2° apart while the controls orbit the pair.
-- **Cinematic Grade** keeps the same direct suns and adds a subtle procedural
+- **Paired Suns** keeps the same direct suns and adds a subtle procedural
   warm/cool PMREM environment and complementary fill colours. It does not replace
   the visible scene background.
 
@@ -148,8 +178,9 @@ not. The GLTF exporter is imported only when an export is requested.
 
 ## Current engineering constraints
 
-- The app is frontend-only and trusts the local browser as its persistence
-  boundary.
+- Room data and AI credentials use the local browser as their persistence
+  boundary. AI routes exist only in Vite development and preview; a static
+  production host must provide an equivalent secured gateway.
 - Snapshot normalization is handwritten rather than schema-driven.
 - The procedural catalogue is intentionally small and has no external asset or
   pricing service.

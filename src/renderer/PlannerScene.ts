@@ -126,7 +126,7 @@ export class PlannerScene {
   private daylightGroup = new THREE.Group();
   private sunsetGroup = new THREE.Group();
   private sunsetLights: [THREE.DirectionalLight, THREE.DirectionalLight] | null = null;
-  private cinematicEnvironmentTarget: THREE.WebGLRenderTarget | null = null;
+  private pairedSunsEnvironmentTarget: THREE.WebGLRenderTarget | null = null;
   private lastSunAnglesKey = '';
   private contactShadowGroup = new THREE.Group();
   private objectGroup = new THREE.Group();
@@ -318,8 +318,8 @@ export class PlannerScene {
     this.outlinePass.dispose();
     this.composer.dispose();
     this.scene.environment = null;
-    this.cinematicEnvironmentTarget?.dispose();
-    this.cinematicEnvironmentTarget = null;
+    this.pairedSunsEnvironmentTarget?.dispose();
+    this.pairedSunsEnvironmentTarget = null;
     this.floorMaterial = null;
     this.renderer.dispose();
     this.renderer.forceContextLoss();
@@ -1752,8 +1752,8 @@ export class PlannerScene {
     this.sunsetGroup.add(ceilingMask);
   }
 
-  private cinematicEnvironment() {
-    if (this.cinematicEnvironmentTarget) return this.cinematicEnvironmentTarget.texture;
+  private pairedSunsEnvironment() {
+    if (this.pairedSunsEnvironmentTarget) return this.pairedSunsEnvironmentTarget.texture;
 
     // A vertical gradient alone is rotationally symmetric, so changing its Y
     // rotation cannot create the requested warm/cool separation. Build a tiny
@@ -1790,23 +1790,23 @@ export class PlannerScene {
     source.needsUpdate = true;
     const generator = new THREE.PMREMGenerator(this.renderer);
     generator.compileEquirectangularShader();
-    this.cinematicEnvironmentTarget = generator.fromEquirectangular(source);
+    this.pairedSunsEnvironmentTarget = generator.fromEquirectangular(source);
     source.dispose();
     generator.dispose();
-    return this.cinematicEnvironmentTarget.texture;
+    return this.pairedSunsEnvironmentTarget.texture;
   }
 
   private applyRoomLighting(snapshot: PlannerSnapshot) {
     const enabled = snapshot.room.lighting.enabled;
     const hasDaylight = this.daylightGroup.children.length > 0;
     const hasSunset = this.sunsetLights !== null;
-    const cinematic = hasSunset && snapshot.room.lighting.sunStylePreset === 'cinematic-grade';
-    this.hemiLight.color.setHex(cinematic ? 0xdce8ff : 0xf7f8fa);
-    this.hemiLight.groundColor.setHex(cinematic ? 0x9b735e : 0xb8b4ae);
-    this.ambientLight.color.setHex(cinematic ? 0xffead8 : 0xffffff);
-    this.fillLight.color.setHex(cinematic ? 0xbacfff : 0xe9edf0);
-    this.scene.environment = cinematic ? this.cinematicEnvironment() : null;
-    this.scene.environmentIntensity = cinematic ? 0.28 : 1;
+    const pairedSuns = hasSunset && snapshot.room.lighting.sunStylePreset === 'paired-suns';
+    this.hemiLight.color.setHex(pairedSuns ? 0xdce8ff : 0xf7f8fa);
+    this.hemiLight.groundColor.setHex(pairedSuns ? 0x9b735e : 0xb8b4ae);
+    this.ambientLight.color.setHex(pairedSuns ? 0xffead8 : 0xffffff);
+    this.fillLight.color.setHex(pairedSuns ? 0xbacfff : 0xe9edf0);
+    this.scene.environment = pairedSuns ? this.pairedSunsEnvironment() : null;
+    this.scene.environmentIntensity = pairedSuns ? 0.28 : 1;
     const glazedOpeningCount = snapshot.openings.filter(isSunGlazedOpening).length;
     const environmentAzimuth = effectiveSunAzimuth(snapshot.room.lighting.sunAzimuth, glazedOpeningCount);
     this.scene.environmentRotation.set(0, THREE.MathUtils.degToRad(environmentAzimuth), 0);

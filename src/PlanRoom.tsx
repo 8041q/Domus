@@ -12,6 +12,7 @@ import { getSnapshot, usePlannerStore } from './store';
 import { Icon } from './ui';
 
 const Viewport3D = lazy(() => import('./Viewport3D').then((module) => ({ default: module.Viewport3D })));
+const AIExperimentPanel = lazy(() => import('./ai/AIExperimentPanel').then((module) => ({ default: module.AIExperimentPanel })));
 
 const CATEGORIES: Array<'All' | ProductCategory> = ['All', 'Seating', 'Tables', 'Storage', 'Decor'];
 const VIEW_PRESETS: Array<{ id: PlanCameraView; label: string }> = [
@@ -265,10 +266,10 @@ function ViewOptionsPopover() {
         <strong>Window and door sun</strong>
         <label><input type="checkbox" checked={lighting.sunRaysEnabled} onChange={(e) => setRoomLighting({ sunRaysEnabled: e.target.checked })} /><span>Enable sun rays<small>Project direct sunlight through glazed openings</small></span></label>
         <label>
-          <span>Sun style<small>Choose neutral paired shadows or a warm/cool cinematic environment</small></span>
+          <span>Sun style<small>Choose cinematic shadows or paired suns with warm and cool ambience</small></span>
           <select value={lighting.sunStylePreset} disabled={!lighting.sunRaysEnabled} onChange={(e) => setRoomLighting({ sunStylePreset: e.target.value as SunStylePreset })}>
-            <option value="paired-shadows">Paired shadows</option>
-            <option value="cinematic-grade">Cinematic grade</option>
+            <option value="cinematic-shadows">Cinematic shadows</option>
+            <option value="paired-suns">Paired suns</option>
           </select>
         </label>
         <div className="sun-angle-control">
@@ -351,6 +352,7 @@ const ProductCatalog = memo(function ProductCatalog() {
 export function PlanRoom() {
   const [showFinishes, setShowFinishes] = useState(false);
   const [showViewOptions, setShowViewOptions] = useState(false);
+  const [showAi, setShowAi] = useState(false);
   const viewOptionsRef = useRef<HTMLDivElement>(null);
   const finishesButtonRef = useRef<HTMLButtonElement>(null);
   const objectCount = usePlannerStore((s) => s.objects.length);
@@ -405,6 +407,13 @@ export function PlanRoom() {
             </div>
             <div className="designer-meta">
               <div className="room-count">{objectCount} item{objectCount === 1 ? '' : 's'} · {formatArea(Math.abs(polygonArea(roomVertices)), measurementSystem)} · {roomVertices.length} walls</div>
+              <button
+                type="button"
+                className={`ai-experiment-toggle ${showAi ? 'active' : ''}`}
+                onClick={() => { setShowFinishes(false); setShowViewOptions(false); setShowAi((value) => !value); }}
+                aria-label="Experimental AI room assistant"
+                aria-expanded={showAi}
+              ><span>AI</span><small>Experimental</small></button>
               <div className="view-options-wrap" ref={viewOptionsRef}>
                 <button
                   type="button"
@@ -431,8 +440,9 @@ export function PlanRoom() {
           <Suspense fallback={<div className="viewport-loading">Loading 3D room…</div>}>
             <Viewport3D furniture interactive sunRays={sunRaysEnabled} view={planView} exportable />
           </Suspense>
+          {showAi && <Suspense fallback={<div className="ai-panel-loading">Loading AI assistant…</div>}><AIExperimentPanel onClose={() => setShowAi(false)} /></Suspense>}
           {showFinishes && <FinishesPanel onClose={() => setShowFinishes(false)} />}
-          {selectedId && <SelectionPanel />}
+          {selectedId && !showAi && <SelectionPanel />}
         </div>
 
         <InteractionStatus />

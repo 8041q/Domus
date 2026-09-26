@@ -189,6 +189,11 @@ function placementValid(candidate: PlacedObject, room: RoomState, others: Placed
   return !others.some((other) => objectsOverlap(candidate, other, gap));
 }
 
+/** Public exact-placement check used by trusted automation and import paths. */
+export function isPlacementValid(candidate: PlacedObject, room: RoomState, others: PlacedObject[], gap = 0.0005) {
+  return placementValid(candidate, room, others, gap, false);
+}
+
 interface SweepResult {
   x: number;
   z: number;

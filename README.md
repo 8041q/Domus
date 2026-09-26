@@ -4,8 +4,9 @@ Domus is a browser-based room builder and layout planner. It keeps the room,
 openings, finishes, and furniture as semantic data and uses Three.js only to
 render and interact with that data.
 
-The application is currently a local frontend prototype. It has no backend,
-accounts, cloud sync, or AI runtime yet.
+The application is local-first. It has no accounts, database, or cloud sync.
+An opt-in experimental AI assistant is available through a small gateway that
+runs with Vite during local development and preview.
 
 ## What it does
 
@@ -28,8 +29,10 @@ accounts, cloud sync, or AI runtime yet.
 - Toggle room, product, spacing, and clearance annotations.
 - Change PBR floor finishes, wall and ceiling colours, baseboard styles, and
   ceiling-light settings.
-- Enable paired sun shadows or the warm/cool Cinematic Grade in rooms with
+- Enable paired suns or just cinematic sun shadows in rooms with
   glazed openings.
+- Ask the experimental AI assistant for layout advice or validated furniture
+  proposals using Gemini, OpenAI, or a server-reachable Ollama model.
 - Export the complete physical room as a semantic GLB.
 
 Both workspaces edit the same project. A change made in Build Room is available
@@ -37,7 +40,7 @@ immediately in Plan Room and vice versa.
 
 ## Run locally
 
-You need Node.js and npm.
+You need Node.js 20 or newer and npm.
 
 ```bash
 npm install
@@ -45,6 +48,17 @@ npm run dev
 ```
 
 Vite serves the app at `http://localhost:5173` by default.
+
+The experimental AI gateway is available with both `npm run dev` and
+`npm run preview`. Open Plan Room and choose **AI Experimental**. Cloud keys are
+encrypted in this browser and are never added to room project files.
+
+Ollama defaults to `http://127.0.0.1:11434` on the machine running Domus. Exact
+additional endpoints can be approved when starting the server:
+
+```bash
+OLLAMA_ALLOWED_ENDPOINTS=http://192.168.1.50:11434 npm run dev
+```
 
 Create and preview a production build with:
 
@@ -88,12 +102,15 @@ measurements, and other editing helpers are excluded.
 - The furniture catalogue uses procedural placeholder models and sample prices.
 - Projects are local to one browser and there is one manual save slot.
 - The renderer requires a browser with WebGL support.
-- AI assistance is designed but not implemented.
+- AI assistance is experimental, furniture-only, non-streaming, and intended
+  for trusted local use. A static `dist` deployment does not provide its API
+  routes; a production host must supply the gateway and add authentication,
+  quotas, and abuse protection before public use.
 - Multi-user projects, authentication, and cloud services are not implemented.
 
 ## Developer guides
 
 - [Architecture](docs/ARCHITECTURE.md) — current state, data flow, renderer, and
   lifecycle.
-- [AI design](docs/AI.md) — planned provider-neutral assistance using OpenAI,
-  Gemini, or server-hosted Ollama.
+- [Experimental AI](docs/AI.md) — setup, providers, safety boundaries, and
+  current limitations.

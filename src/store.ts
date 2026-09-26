@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import type { AiApplyResult, AiProposal } from './ai/types';
+import { applyAiProposal as executeAiProposal, snapshotRevision } from './core/aiProposal';
 import { PRODUCTS, rotatedFootprint } from './core/products';
 import { objectsOverlap, resolvePlacement, resolveRotationPlacement } from './core/placement';
 import { SnapshotHistory } from './core/history';
@@ -67,6 +69,7 @@ interface PlannerStore extends PlannerSnapshot {
   select: (id: string | null) => void;
   updateObject: (id: string, patch: Partial<PlacedObject>) => void;
   commitSnapshot: (before: PlannerSnapshot) => void;
+  applyAiProposal: (proposal: AiProposal) => AiApplyResult;
   setRoom: (room: RoomState) => void;
   setRoomVertices: (vertices: RoomVertex[], shapeKind?: RoomShapeKind) => void;
   setRoomTemplate: (shape: Exclude<RoomShapeKind, 'custom'>) => void;
@@ -108,7 +111,7 @@ const defaultRoom: RoomState = {
     fixtureType: 'recessed',
     showWithoutCeiling: false,
     sunRaysEnabled: true,
-    sunStylePreset: 'paired-shadows',
+    sunStylePreset: 'paired-suns',
     sunAzimuth: SUN_DEFAULT_AZIMUTH,
     sunElevation: SUN_DEFAULT_ELEVATION
   },
@@ -146,6 +149,13 @@ function cardinalWallId(room: RoomState, wall: RoomWall) {
 }
 
 function ensureRoom(raw: Partial<RoomState>): RoomState {
+  // Preserve the rendered appearance of projects saved before the style names
+  // were corrected. The old "cinematic-grade" value enabled the paired-suns
+  // environment; "paired-shadows" selected the shadows-only style.
+  const savedSunStyle = raw.lighting?.sunStylePreset as string | undefined;
+  const sunStylePreset: SunStylePreset = savedSunStyle === 'cinematic-grade' || savedSunStyle === 'paired-suns'
+    ? 'paired-suns'
+    : 'cinematic-shadows';
   const width = Math.max(2.2, Math.min(Number(raw.width) || defaultRoom.width, 20));
   const depth = Math.max(2.2, Math.min(Number(raw.depth) || defaultRoom.depth, 20));
   const vertices = Array.isArray(raw.vertices) && raw.vertices.length >= 4
@@ -173,9 +183,7 @@ function ensureRoom(raw: Partial<RoomState>): RoomState {
       sunRaysEnabled: typeof raw.lighting?.sunRaysEnabled === 'boolean'
         ? raw.lighting.sunRaysEnabled
         : defaultRoom.lighting.sunRaysEnabled,
-      sunStylePreset: (['paired-shadows', 'cinematic-grade'] as SunStylePreset[]).includes(raw.lighting?.sunStylePreset as SunStylePreset)
-        ? raw.lighting?.sunStylePreset as SunStylePreset
-        : defaultRoom.lighting.sunStylePreset,
+      sunStylePreset,
       sunAzimuth: normalizeSunAzimuth(raw.lighting?.sunAzimuth),
       sunElevation: clampSunAngle(raw.lighting?.sunElevation, SUN_DEFAULT_ELEVATION, SUN_ELEVATION_MIN, SUN_ELEVATION_MAX)
     },
@@ -342,6 +350,25 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
   commitSnapshot: (before) => {
     const current = snapshotOf(get());
     if (JSON.stringify(before) !== JSON.stringify(current)) history.push(before);
+  },
+  applyAiProposal: (proposal) => {
+    const before = snapshotOf(get());
+    if (snapshotRevision(before) !== proposal.baseRevision) {
+      return { ok: false, error: 'The room changed after this proposal was created. Ask the AI to try again.' };
+    }
+    const result = executeAiProposal(before, proposal);
+    if (result.error) return { ok: false, error: result.error };
+    set({
+      ...result.snapshot,
+      selectedId: null,
+      selectedOpeningId: null,
+      selectedWallId: null,
+      activeSnap: { kind: 'none' },
+      collisionId: null,
+      collisionPush: false
+    });
+    history.push(before);
+    return { ok: true };
   },
 
   setRoom: (room) => set((state) => normalizeSnapshot({ room, openings: state.openings, objects: state.objects })),
