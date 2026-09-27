@@ -14,7 +14,7 @@ import {
   vertexInteriorAngle
 } from './core/roomGeometry';
 import { dimensionStepMetres, displayLengthValue, displayValueToMetres, formatLength, lengthInputSuffix } from './core/units';
-import type { PlannerSnapshot, RoomOpening, SnapFeedback } from './core/types';
+import type { PlannerSnapshot, RoomOpening, RoomVertex, SnapFeedback, Vec2 } from './core/types';
 import { getSnapshot, usePlannerStore } from './store';
 import { themeColor, themeMetric, themeRgba } from './theme';
 
@@ -295,13 +295,40 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
       x: Math.round(((px - ox) / scale) / gridStep) * gridStep,
       z: Math.round(((py - oz) / scale) / gridStep) * gridStep
     };
-    const vertices = activeDrag.type === 'corner'
-      ? moveCorner(activeDrag.before.room, activeDrag.id, snappedWorld.x, snappedWorld.z)
-      : moveWall(activeDrag.before.room, activeDrag.id, snappedWorld);
-    if (!vertices) return;
-    const bounds = roomBounds(vertices);
-    if (bounds.width > MAX_ROOM_SPAN || bounds.depth > MAX_ROOM_SPAN
-      || getRoomWalls({ ...activeDrag.before.room, vertices }).some((wall) => wall.length > MAX_ROOM_SPAN)) return;
+    const moveTo = (point: Vec2) => activeDrag.type === 'corner'
+      ? moveCorner(activeDrag.before.room, activeDrag.id, point.x, point.z)
+      : moveWall(activeDrag.before.room, activeDrag.id, point);
+    const withinLimit = (candidate: RoomVertex[]) => {
+      const bounds = roomBounds(candidate);
+      return bounds.width <= MAX_ROOM_SPAN && bounds.depth <= MAX_ROOM_SPAN
+        && getRoomWalls({ ...activeDrag.before.room, vertices: candidate }).every((wall) => wall.length <= MAX_ROOM_SPAN);
+    };
+    let vertices = moveTo(snappedWorld);
+    if (!vertices || !withinLimit(vertices)) {
+      const start = activeDrag.type === 'corner'
+        ? activeDrag.before.room.vertices.find((vertex) => vertex.id === activeDrag.id)
+        : getWall(activeDrag.before.room, activeDrag.id)?.start;
+      if (!start) return;
+      let low = 0;
+      let high = 1;
+      let closest: RoomVertex[] | null = null;
+      // Keep the wall at the hard limit even when one pointer event jumps past it.
+      for (let i = 0; i < 24; i += 1) {
+        const fraction = (low + high) / 2;
+        const candidate = moveTo({
+          x: start.x + (snappedWorld.x - start.x) * fraction,
+          z: start.z + (snappedWorld.z - start.z) * fraction
+        });
+        if (candidate && withinLimit(candidate)) {
+          closest = candidate;
+          low = fraction;
+        } else {
+          high = fraction;
+        }
+      }
+      if (!closest) return;
+      vertices = closest;
+    }
     setRoomVertices(vertices, 'custom');
   };
 
@@ -1111,6 +1138,9 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
 
   const onPointerUp = (e?: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!drag) return;
+    if (e && (drag.type === 'wall' || drag.type === 'corner')) {
+      moveDraggedRoom(drag, e.clientX - drag.view.rect.left, e.clientY - drag.view.rect.top, e.shiftKey);
+    }
     if (drag.type !== 'pan') commitSnapshot(drag.before);
     setDrag(null);
     setFeedback({ kind: 'none' }, null, false);
@@ -1131,7 +1161,7 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
+        onPointerCancel={() => onPointerUp()}
         onPointerLeave={onPointerLeave}
       />
       {purpose === 'build' && (
