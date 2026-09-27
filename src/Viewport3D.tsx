@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { PlannerScene } from './renderer/PlannerScene';
 import type { PlanCameraView } from './core/types';
 import { usePlannerStore } from './store';
@@ -9,32 +9,39 @@ export function Viewport3D({
   architectureInteractive = false,
   sunRays = true,
   view,
-  exportable = false
+  resetViewRequest = 0,
+  onExportReady
 }: {
   furniture?: boolean;
   interactive?: boolean;
   architectureInteractive?: boolean;
   sunRays?: boolean;
   view?: PlanCameraView;
-  exportable?: boolean;
+  resetViewRequest?: number;
+  onExportReady?: (handler: (() => Promise<void>) | null) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<PlannerScene | null>(null);
   const internallyChangedViewRef = useRef<PlanCameraView | null>(null);
-  const [exporting, setExporting] = useState(false);
+  const exportingRef = useRef(false);
 
   const exportGLB = async () => {
-    if (!sceneRef.current || exporting) return;
-    setExporting(true);
+    if (!sceneRef.current || exportingRef.current) return;
+    exportingRef.current = true;
     try {
       await sceneRef.current.exportGLB();
     } catch (error) {
       console.error('Failed to export GLB', error);
       window.alert('Could not export the room. See the browser console for details.');
     } finally {
-      setExporting(false);
+      exportingRef.current = false;
     }
   };
+
+  useEffect(() => {
+    onExportReady?.(exportGLB);
+    return () => onExportReady?.(null);
+  }, [onExportReady]);
 
   useEffect(() => {
     if (!ref.current) return;
@@ -48,6 +55,7 @@ export function Viewport3D({
           room: state.room,
           openings: state.openings,
           objects: state.objects,
+          unplacedObjects: state.unplacedObjects,
           selectedId: state.selectedId,
           selectedOpeningId: state.selectedOpeningId,
           activeSnap: state.activeSnap,
@@ -118,19 +126,16 @@ export function Viewport3D({
     sceneRef.current?.setCameraView(view);
   }, [view]);
 
+  useEffect(() => {
+    if (resetViewRequest > 0) {
+      if (view) sceneRef.current?.setCameraView(view);
+      else sceneRef.current?.resetCamera();
+    }
+  }, [resetViewRequest]);
+
   return (
     <div className="viewport-stage">
       <div className="viewport" ref={ref} />
-      <div className="floating-view-actions">
-        {exportable && (
-          <button className="floating-view-button" type="button" onClick={exportGLB} disabled={exporting}>
-            {exporting ? 'Exporting…' : 'Export GLB'}
-          </button>
-        )}
-        <button className="floating-view-button" type="button" onClick={() => view ? sceneRef.current?.setCameraView(view) : sceneRef.current?.resetCamera()} aria-label="Reset 3D view">
-          Reset view
-        </button>
-      </div>
     </div>
   );
 }

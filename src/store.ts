@@ -24,6 +24,7 @@ import type {
   OpeningVariant,
   PlannerSnapshot,
   PlacedObject,
+  UnplacedObject,
   ProductKind,
   RoomOpening,
   RoomShapeKind,
@@ -65,6 +66,8 @@ interface PlannerStore extends PlannerSnapshot {
   setRoomLighting: (patch: Partial<RoomLighting>, recordHistory?: boolean) => void;
 
   addObject: (productId: ProductKind) => void;
+  placeUnplacedObject: (id: string) => void;
+  removeFurniture: (id: string) => void;
   duplicateSelected: () => void;
   select: (id: string | null) => void;
   updateObject: (id: string, patch: Partial<PlacedObject>) => void;
@@ -90,7 +93,7 @@ interface PlannerStore extends PlannerSnapshot {
   undo: () => void;
   redo: () => void;
   saveLocal: () => void;
-  loadLocal: () => void;
+  loadLocal: () => boolean;
   resetProject: () => void;
 }
 
@@ -101,15 +104,13 @@ const defaultRoom: RoomState = {
   depth: 3.8,
   height: 2.6,
   wallColor: '#f2f2f3',
-  ceilingColor: '#d0cbc4',
-  baseboardColor: '#dedbd8',
+  ceilingColor: '#f2f2f3',
+  baseboardColor: '#f2f2f3',
   baseboardStyle: 'flat',
   baseboardMaterial: 'paint',
   floorFinish: 'carpet-011',
   lighting: {
     enabled: true,
-    fixtureType: 'recessed',
-    showWithoutCeiling: false,
     sunRaysEnabled: true,
     sunStylePreset: 'paired-suns',
     sunAzimuth: SUN_DEFAULT_AZIMUTH,
@@ -135,7 +136,8 @@ const defaultObjects: PlacedObject[] = [];
 const snapshotOf = (state: PlannerSnapshot): PlannerSnapshot => ({
   room: structuredClone(state.room),
   openings: structuredClone(state.openings),
-  objects: structuredClone(state.objects)
+  objects: structuredClone(state.objects),
+  unplacedObjects: structuredClone(state.unplacedObjects)
 });
 
 function cardinalWallId(room: RoomState, wall: RoomWall) {
@@ -167,6 +169,7 @@ function ensureRoom(raw: Partial<RoomState>): RoomState {
     width,
     depth,
     height: Math.max(1, Math.min(Number(raw.height) || defaultRoom.height, 3.3)),
+    wallColor: typeof raw.wallColor === 'string' && /^#[0-9a-f]{6}$/i.test(raw.wallColor) ? raw.wallColor : defaultRoom.wallColor,
     ceilingColor: typeof raw.ceilingColor === 'string' && /^#[0-9a-f]{6}$/i.test(raw.ceilingColor) ? raw.ceilingColor : defaultRoom.ceilingColor,
     baseboardColor: typeof raw.baseboardColor === 'string' && /^#[0-9a-f]{6}$/i.test(raw.baseboardColor) ? raw.baseboardColor : defaultRoom.baseboardColor,
     baseboardStyle: BASEBOARD_STYLES.some((style) => style.id === raw.baseboardStyle) ? raw.baseboardStyle : defaultRoom.baseboardStyle,
@@ -178,8 +181,7 @@ function ensureRoom(raw: Partial<RoomState>): RoomState {
       : 'paint',
     floorFinish: normalizeFloorFinish(raw.floorFinish),
     lighting: {
-      ...defaultRoom.lighting,
-      ...raw.lighting,
+      enabled: typeof raw.lighting?.enabled === 'boolean' ? raw.lighting.enabled : defaultRoom.lighting.enabled,
       sunRaysEnabled: typeof raw.lighting?.sunRaysEnabled === 'boolean'
         ? raw.lighting.sunRaysEnabled
         : defaultRoom.lighting.sunRaysEnabled,
@@ -247,7 +249,7 @@ function normalizeSnapshot(snapshot: PlannerSnapshot): PlannerSnapshot {
     const nearest = findNearestValidPosition(room, size.width, size.depth, { x: o.x, z: o.z });
     return nearest ? { ...o, ...nearest } : o;
   });
-  return { room, openings, objects };
+  return { room, openings, objects, unplacedObjects: snapshot.unplacedObjects };
 }
 
 function findSpawnPosition(productId: ProductKind, snapshot: PlannerSnapshot) {
@@ -285,6 +287,7 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
   room: defaultRoom,
   openings: defaultOpenings,
   objects: defaultObjects,
+  unplacedObjects: [],
   mode: 'build',
   buildView: 'plan',
   planView: 'perspective',
@@ -331,6 +334,32 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
     history.push(before);
   },
 
+  placeUnplacedObject: (id) => {
+    const item = get().unplacedObjects.find((object) => object.id === id);
+    if (!item) return;
+    const before = snapshotOf(get());
+    const pos = findSpawnPosition(item.productId, before);
+    const object: PlacedObject = { ...item, x: pos.x, z: pos.z, rotationY: 0 };
+    set((state) => ({
+      objects: [...state.objects, object],
+      unplacedObjects: state.unplacedObjects.filter((candidate) => candidate.id !== id),
+      selectedId: id,
+      planView: 'perspective'
+    }));
+    history.push(before);
+  },
+
+  removeFurniture: (id) => {
+    if (!get().objects.some((object) => object.id === id) && !get().unplacedObjects.some((object) => object.id === id)) return;
+    const before = snapshotOf(get());
+    set((state) => ({
+      objects: state.objects.filter((object) => object.id !== id),
+      unplacedObjects: state.unplacedObjects.filter((object) => object.id !== id),
+      selectedId: state.selectedId === id ? null : state.selectedId
+    }));
+    history.push(before);
+  },
+
   duplicateSelected: () => {
     const id = get().selectedId;
     const source = get().objects.find((o) => o.id === id);
@@ -371,18 +400,28 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
     return { ok: true };
   },
 
-  setRoom: (room) => set((state) => normalizeSnapshot({ room, openings: state.openings, objects: state.objects })),
+  setRoom: (room) => set((state) => normalizeSnapshot({ room, openings: state.openings, objects: state.objects, unplacedObjects: state.unplacedObjects })),
   setRoomVertices: (vertices, shapeKind = 'custom') => set((state) => normalizeSnapshot({
     room: syncRoomBounds({ ...state.room, shapeKind }, vertices),
     openings: state.openings,
-    objects: state.objects
+    objects: state.objects,
+    unplacedObjects: state.unplacedObjects
   })),
   setRoomTemplate: (shape) => {
     const before = snapshotOf(get());
     const current = get().room;
     const room = ensureRoom({ ...current, shapeKind: shape, vertices: roomTemplate(shape, current.width, current.depth) });
-    const normalized = normalizeSnapshot({ room, openings: [], objects: get().objects });
-    set({ ...normalized, selectedOpeningId: null, selectedWallId: null });
+    const currentObjects = get().objects;
+    const normalized = normalizeSnapshot({
+      room,
+      openings: [],
+      objects: [],
+      unplacedObjects: [
+        ...get().unplacedObjects,
+        ...currentObjects.map(({ id, productId }): UnplacedObject => ({ id, productId }))
+      ]
+    });
+    set({ ...normalized, selectedId: null, selectedOpeningId: null, selectedWallId: null, activeSnap: { kind: 'none' }, collisionId: null, collisionPush: false });
     history.push(before);
   },
   updateRoom: (patch) => {
@@ -392,7 +431,7 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
     const nextDepth = patch.depth == null ? room.depth : Math.max(2.2, Math.min(patch.depth, 20));
     if (patch.width != null || patch.depth != null) room = scaleRoom(room, nextWidth, nextDepth);
     room = ensureRoom({ ...room, ...patch, width: room.width, depth: room.depth, vertices: room.vertices });
-    const normalized = normalizeSnapshot({ room, openings: get().openings, objects: get().objects });
+    const normalized = normalizeSnapshot({ room, openings: get().openings, objects: get().objects, unplacedObjects: get().unplacedObjects });
     set(normalized);
     history.push(before);
   },
@@ -400,7 +439,7 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
     const before = recordHistory ? snapshotOf(get()) : null;
     const vertices = resizeWallCentered(get().room, id, length);
     if (!vertices) return false;
-    const normalized = normalizeSnapshot({ room: syncRoomBounds({ ...get().room, shapeKind: 'custom' }, vertices), openings: get().openings, objects: get().objects });
+    const normalized = normalizeSnapshot({ room: syncRoomBounds({ ...get().room, shapeKind: 'custom' }, vertices), openings: get().openings, objects: get().objects, unplacedObjects: get().unplacedObjects });
     set(normalized);
     if (before) history.push(before);
     return true;
@@ -423,7 +462,7 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
       if (opening.offset <= half) return { ...opening, wallId: firstId };
       return { ...opening, wallId: secondId, offset: opening.offset - half };
     });
-    const normalized = normalizeSnapshot({ room: nextRoom, openings: remapped, objects: get().objects });
+    const normalized = normalizeSnapshot({ room: nextRoom, openings: remapped, objects: get().objects, unplacedObjects: get().unplacedObjects });
     const newWalls = new Set(walls.map((candidate) => candidate.id));
     set({ ...normalized, selectedWallId: newWalls.has(firstId) ? firstId : null, selectedOpeningId: null });
     history.push(before);
@@ -470,9 +509,7 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
   removeSelected: () => {
     const id = get().selectedId;
     if (!id) return;
-    const before = snapshotOf(get());
-    set((state) => ({ objects: state.objects.filter((o) => o.id !== id), selectedId: null }));
-    history.push(before);
+    get().removeFurniture(id);
   },
 
   addOpening: (type) => {
@@ -538,10 +575,10 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
   saveLocal: () => localStorage.setItem('room-planner-project-v3', JSON.stringify(snapshotOf(get()))),
   loadLocal: () => {
     const raw = localStorage.getItem('room-planner-project-v3') ?? localStorage.getItem('room-planner-project-v2') ?? localStorage.getItem('room-planner-project');
-    if (!raw) return;
+    if (!raw) return false;
     try {
       const parsed = JSON.parse(raw) as Partial<PlannerSnapshot> & { room?: Partial<RoomState>; openings?: Array<RoomOpening & { wall?: RoomWall }> };
-      if (!parsed.room || !Array.isArray(parsed.objects)) return;
+      if (!parsed.room || !Array.isArray(parsed.objects)) return false;
       const migratedObjects = parsed.objects
         .map((object) => {
           const legacyId = String(object.productId);
@@ -549,15 +586,22 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
           return { ...object, productId };
         })
         .filter((object) => object.productId in PRODUCTS);
+      const unplacedObjects = Array.isArray(parsed.unplacedObjects)
+        ? parsed.unplacedObjects.filter((object): object is UnplacedObject =>
+          typeof object?.id === 'string' && typeof object?.productId === 'string' && object.productId in PRODUCTS
+            && !migratedObjects.some((placed) => placed.id === object.id))
+        : [];
       const room = ensureRoom(parsed.room);
       const upgraded: PlannerSnapshot = {
         room,
         openings: Array.isArray(parsed.openings) ? parsed.openings.map((o) => normalizeOpening(o, room)) : [],
-        objects: migratedObjects
+        objects: migratedObjects,
+        unplacedObjects
       };
       set({ ...normalizeSnapshot(upgraded), selectedId: null, selectedOpeningId: null, selectedWallId: null, activeSnap: { kind: 'none' }, collisionId: null });
+      return true;
     } catch {
-      // Ignore malformed local data in the prototype.
+      return false;
     }
   },
 
@@ -567,6 +611,7 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
       room: structuredClone(defaultRoom),
       openings: structuredClone(defaultOpenings),
       objects: [],
+      unplacedObjects: [],
       selectedId: null,
       selectedOpeningId: null,
       selectedWallId: null,

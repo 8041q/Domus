@@ -225,14 +225,13 @@ export const FLOOR_FINISHES: FloorFinishDefinition[] = [
   }
 ];
 
-export const WALL_FINISHES = [
+export const ROOM_COLOR_PRESETS = [
   { name: 'Neutral white', value: '#f2f2f3' },
-  { name: 'Warm white', value: '#eeeae1' },
-  { name: 'Soft ivory', value: '#f4f1e9' },
-  { name: 'Light greige', value: '#d9d2c8' },
-  { name: 'Warm beige', value: '#d6c4ad' },
-  { name: 'Soft grey', value: '#d4d5d0' },
-  { name: 'Muted sage', value: '#c2c8ba' }
+  { name: 'Warm ivory', value: '#f3e9d8' },
+  { name: 'Sand beige', value: '#d8bea2' },
+  { name: 'Soft sage', value: '#a8b9a8' },
+  { name: 'Dusty blue', value: '#9eb5c2' },
+  { name: 'Deep charcoal', value: '#464b4d' }
 ] as const;
 
 export function floorFinishDefinition(id: FloorFinish) {

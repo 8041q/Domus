@@ -1386,7 +1386,7 @@ export class PlannerScene {
 
   private updateLightFixtureVisibility(snapshot: PlannerSnapshot) {
     const lighting = snapshot.room.lighting;
-    this.lightFixtureGroup.visible = lighting.enabled && (lighting.showWithoutCeiling || this.ceilingVisible);
+    this.lightFixtureGroup.visible = lighting.enabled && this.ceilingVisible;
   }
 
   private ceilingLightPositions(snapshot: PlannerSnapshot) {
@@ -1426,26 +1426,6 @@ export class PlannerScene {
     }
     if (!positions.length) positions.push(new THREE.Vector3((bounds.minX + bounds.maxX) / 2, snapshot.room.height - CEILING_THICKNESS - 0.006, (bounds.minZ + bounds.maxZ) / 2));
     return positions;
-  }
-
-  private createSurfaceFixture() {
-    const group = new THREE.Group();
-    const body = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.14, 0.14, 0.025, 26),
-      new THREE.MeshStandardMaterial({ color: 0xf9f8f4, roughness: 0.78, metalness: 0.02 })
-    );
-    body.castShadow = false;
-    body.receiveShadow = true;
-    body.position.y = -0.012;
-    group.add(body);
-
-    const diffuser = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.11, 0.11, 0.008, 26),
-      new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false })
-    );
-    diffuser.position.y = -0.028;
-    group.add(diffuser);
-    return group;
   }
 
   private createRecessedFixture() {
@@ -1506,9 +1486,9 @@ export class PlannerScene {
       glow.renderOrder = 1;
       this.lightFixtureGroup.add(glow);
 
-      const fixture = lighting.fixtureType === 'recessed' ? this.createRecessedFixture() : this.createSurfaceFixture();
+      const fixture = this.createRecessedFixture();
       fixture.position.copy(position);
-      fixture.name = lighting.fixtureType === 'recessed' ? 'Recessed Downlight' : 'Surface Mounted Light';
+      fixture.name = 'Recessed Downlight';
       fixture.traverse((node) => { node.userData.roomLightFixture = true; });
       this.lightFixtureGroup.add(fixture);
     }

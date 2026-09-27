@@ -4,9 +4,9 @@ import { clearanceIssues } from './core/placement';
 import { polygonArea } from './core/roomGeometry';
 import { effectiveSunAzimuth, normalizeSunAzimuth, SUN_AZIMUTH_MAX, SUN_AZIMUTH_MIN, SUN_ELEVATION_MAX, SUN_ELEVATION_MIN, SUN_SINGLE_WINDOW_LIMIT } from './core/sun';
 import { formatArea, formatLength } from './core/units';
-import type { CeilingLightFixtureType, PlanCameraView, ProductCategory, SunStylePreset } from './core/types';
-import { FLOOR_FINISHES, WALL_FINISHES } from './core/roomFinishes';
-import { BASEBOARD_STYLES, TRIM_COLORS, isSunGlazedOpening } from './core/architecturalStyles';
+import type { PlanCameraView, ProductCategory, SunStylePreset } from './core/types';
+import { FLOOR_FINISHES, ROOM_COLOR_PRESETS } from './core/roomFinishes';
+import { BASEBOARD_STYLES, isSunGlazedOpening } from './core/architecturalStyles';
 import type { BaseboardMaterial, BaseboardStyle } from './core/types';
 import { getSnapshot, usePlannerStore } from './store';
 import { Icon } from './ui';
@@ -141,6 +141,26 @@ function SelectionPanel() {
   );
 }
 
+function FinishColorPicker({ label, value, onChange }: { label: string; value: string; onChange: (color: string) => void }) {
+  const isCustom = !ROOM_COLOR_PRESETS.some((preset) => preset.value.toLowerCase() === value.toLowerCase());
+  return (
+    <div className="swatch-row" role="group" aria-label={`${label} colour`}>
+      {ROOM_COLOR_PRESETS.map((swatch) => (
+        <button key={swatch.value} type="button" className={`swatch ${value.toLowerCase() === swatch.value ? 'selected' : ''}`}
+          style={{ '--swatch': swatch.value } as CSSProperties} title={swatch.name}
+          aria-label={`${label}: ${swatch.name}`} aria-pressed={value.toLowerCase() === swatch.value}
+          onClick={() => onChange(swatch.value)} />
+      ))}
+      <label className={`finish-custom-color ${isCustom ? 'selected' : ''}`}
+        style={isCustom ? { '--custom-color': value } as CSSProperties : undefined} title={`Custom ${label.toLowerCase()} colour`}>
+        <Icon name="palette" />
+        <input type="color" aria-label={`Custom ${label.toLowerCase()} colour`} value={value}
+          onChange={(event) => onChange(event.target.value)} />
+      </label>
+    </div>
+  );
+}
+
 function FinishesPanel({ onClose }: { onClose: () => void }) {
   const room = usePlannerStore((s) => s.room);
   const updateRoom = usePlannerStore((s) => s.updateRoom);
@@ -148,30 +168,9 @@ function FinishesPanel({ onClose }: { onClose: () => void }) {
     <aside className="finish-panel">
       <div className="finish-panel-heading"><div><span className="eyebrow">Room</span><h2>Finishes</h2></div><button type="button" onClick={onClose} aria-label="Close finishes"><Icon name="x" /></button></div>
       <span className="sub-label">Wall colour</span>
-      <div className="swatch-row">
-        {WALL_FINISHES.map((swatch) => (
-          <button
-            key={swatch.value}
-            type="button"
-            className={`swatch ${room.wallColor === swatch.value ? 'selected' : ''}`}
-            style={{ '--swatch': swatch.value } as CSSProperties}
-            title={swatch.name}
-            aria-label={swatch.name}
-            onClick={() => updateRoom({ wallColor: swatch.value })}
-          />
-        ))}
-      </div>
+      <FinishColorPicker label="Wall" value={room.wallColor} onChange={(wallColor) => updateRoom({ wallColor })} />
       <span className="sub-label finish-section-label">Ceiling colour</span>
-      <div className="swatch-row">
-        {WALL_FINISHES.map((swatch) => (
-          <button key={swatch.value} type="button" className={`swatch ${room.ceilingColor === swatch.value ? 'selected' : ''}`}
-            style={{ '--swatch': swatch.value } as CSSProperties} title={swatch.name} aria-label={`Ceiling ${swatch.name}`}
-            onClick={() => updateRoom({ ceilingColor: swatch.value })} />
-        ))}
-        <label className="finish-custom-color" title="Custom ceiling colour">
-          <input type="color" aria-label="Custom ceiling colour" value={room.ceilingColor} onChange={(event) => updateRoom({ ceilingColor: event.target.value })} />
-        </label>
-      </div>
+      <FinishColorPicker label="Ceiling" value={room.ceilingColor} onChange={(ceilingColor) => updateRoom({ ceilingColor })} />
       <span className="sub-label finish-section-label">Baseboard style</span>
       <select className="finish-style-select" aria-label="Baseboard style" value={room.baseboardStyle}
         onChange={(event) => updateRoom({ baseboardStyle: event.target.value as BaseboardStyle })}>
@@ -185,16 +184,7 @@ function FinishesPanel({ onClose }: { onClose: () => void }) {
       </select>
       {room.baseboardMaterial === 'paint' && (<>
         <span className="sub-label finish-section-label">Baseboard colour</span>
-        <div className="swatch-row">
-          {TRIM_COLORS.map((swatch) => (
-            <button key={swatch.value} type="button" className={`swatch ${room.baseboardColor === swatch.value ? 'selected' : ''}`}
-              style={{ '--swatch': swatch.value } as CSSProperties} title={swatch.name} aria-label={`Baseboard ${swatch.name}`}
-              onClick={() => updateRoom({ baseboardColor: swatch.value })} />
-          ))}
-          <label className="finish-custom-color" title="Custom baseboard colour">
-            <input type="color" aria-label="Custom baseboard colour" value={room.baseboardColor} onChange={(event) => updateRoom({ baseboardColor: event.target.value })} />
-          </label>
-        </div>
+        <FinishColorPicker label="Baseboard" value={room.baseboardColor} onChange={(baseboardColor) => updateRoom({ baseboardColor })} />
       </>)}
       <span className="sub-label floor-label">Floor</span>
       <div className="floor-options">
@@ -253,14 +243,6 @@ function ViewOptionsPopover() {
       <div className="view-options-section">
         <strong>Ceiling lighting</strong>
         <label><input type="checkbox" checked={lighting.enabled} onChange={(e) => setRoomLighting({ enabled: e.target.checked })} /><span>Enable room lights<small>Add ceiling fixtures and balanced interior lighting</small></span></label>
-        <label>
-          <span>Fixture type<small>Choose the ceiling light family</small></span>
-          <select value={lighting.fixtureType} onChange={(e) => setRoomLighting({ fixtureType: e.target.value as CeilingLightFixtureType })}>
-            <option value="surface-mounted">Surface-mounted / Slim wafers</option>
-            <option value="recessed">Recessed downlights / Cans</option>
-          </select>
-        </label>
-        <label><input type="checkbox" checked={lighting.showWithoutCeiling} onChange={(e) => setRoomLighting({ showWithoutCeiling: e.target.checked })} /><span>Show fixtures without ceiling<small>Keep fixtures visible when the ceiling is hidden</small></span></label>
       </div>
       {hasWindow && <div className="view-options-section sun-angle-section">
         <strong>Window and door sun</strong>
@@ -312,8 +294,17 @@ function InteractionStatus() {
 const ProductCatalog = memo(function ProductCatalog() {
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState<'All' | ProductCategory>('All');
+  const objects = usePlannerStore((s) => s.objects);
+  const unplacedObjects = usePlannerStore((s) => s.unplacedObjects);
   const addObject = usePlannerStore((s) => s.addObject);
+  const placeUnplacedObject = usePlannerStore((s) => s.placeUnplacedObject);
+  const removeFurniture = usePlannerStore((s) => s.removeFurniture);
+  const select = usePlannerStore((s) => s.select);
   const setMode = usePlannerStore((s) => s.setMode);
+  const usedFurniture = [
+    ...objects.map((object) => ({ ...object, placed: true })),
+    ...unplacedObjects.map((object) => ({ ...object, placed: false }))
+  ];
 
   const filtered = useMemo(() => PRODUCT_LIST.filter((p) => {
     const matchesCategory = category === 'All' || p.category === category;
@@ -327,6 +318,28 @@ const ProductCatalog = memo(function ProductCatalog() {
         <div><span className="eyebrow">Step 2</span><h1>Plan your room</h1></div>
         <button type="button" className="edit-room-link" onClick={() => setMode('build')}><Icon name="arrowLeft" />Edit room</button>
       </div>
+      <section className="used-furniture" aria-labelledby="used-furniture-heading">
+        <div className="used-furniture-heading">
+          <h2 id="used-furniture-heading">Used furniture</h2>
+          <span>{usedFurniture.length}</span>
+        </div>
+        {usedFurniture.length ? (
+          <ul className="used-furniture-list">
+            {usedFurniture.map((item) => (
+              <li key={item.id} className="used-furniture-item">
+                <div className="used-furniture-details">
+                  <strong>{PRODUCTS[item.productId].name}</strong>
+                </div>
+                <button type="button" className="used-furniture-action" onClick={() => item.placed ? select(item.id) : placeUnplacedObject(item.id)}>
+                  {item.placed ? 'Select' : 'Place'}
+                </button>
+                <button type="button" className="used-furniture-remove" aria-label={`Remove ${PRODUCTS[item.productId].name} from used furniture`} title="Remove furniture" onClick={() => removeFurniture(item.id)}><Icon name="x" /></button>
+              </li>
+            ))}
+          </ul>
+        ) : <p className="used-furniture-empty">Furniture you add will appear here.</p>}
+      </section>
+      <div className="catalog-section-heading"><h2>Furniture catalogue</h2></div>
       <label className="search-box">
         <span><Icon name="search" /></span>
         <input value={search} onChange={(e: ChangeEvent<HTMLInputElement>) => setSearch(e.target.value)} placeholder="Search furniture" />
@@ -349,7 +362,8 @@ const ProductCatalog = memo(function ProductCatalog() {
   );
 });
 
-export function PlanRoom() {
+export function PlanRoom({ onExportReady }: { onExportReady?: (handler: (() => Promise<void>) | null) => void }) {
+  const [resetViewRequest, setResetViewRequest] = useState(0);
   const [showFinishes, setShowFinishes] = useState(false);
   const [showViewOptions, setShowViewOptions] = useState(false);
   const [showAi, setShowAi] = useState(false);
@@ -436,9 +450,10 @@ export function PlanRoom() {
               ><Icon name="palette" /></button>
             </div>
           </div>
+          <button className="floating-reset-view" type="button" onClick={() => setResetViewRequest((value) => value + 1)}><Icon name="rotateLeft" />Reset view</button>
 
           <Suspense fallback={<div className="viewport-loading">Loading 3D room…</div>}>
-            <Viewport3D furniture interactive sunRays={sunRaysEnabled} view={planView} exportable />
+            <Viewport3D furniture interactive sunRays={sunRaysEnabled} view={planView} resetViewRequest={resetViewRequest} onExportReady={onExportReady} />
           </Suspense>
           {showAi && <Suspense fallback={<div className="ai-panel-loading">Loading AI assistant…</div>}><AIExperimentPanel onClose={() => setShowAi(false)} /></Suspense>}
           {showFinishes && <FinishesPanel onClose={() => setShowFinishes(false)} />}

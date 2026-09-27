@@ -19,15 +19,6 @@ export const BASEBOARD_STYLES: Array<{
   { id: 'flash-coving', name: 'Flash coving', description: 'Curved transition to the floor', profile: [[0, 0], [0.066, 0], [0.066, 0.018], [0.056, 0.026], [0.044, 0.038], [0.032, 0.056], [0.02, 0.075], [0, 0.087]] }
 ];
 
-export const TRIM_COLORS = [
-  { name: 'Warm white', value: '#f5f3f0' },
-  { name: 'Pure white', value: '#ffffff' },
-  { name: 'Ivory', value: '#eee6d5' },
-  { name: 'Greige', value: '#c9c1b6' },
-  { name: 'Charcoal', value: '#48494b' },
-  { name: 'Oak', value: '#ae8260' }
-] as const;
-
 export function isSunGlazedOpening(opening: RoomOpening) {
   return opening.type === 'window' || (opening.type === 'door' &&
     (opening.variant === 'glass-door' || opening.variant === 'glass-double-door' || opening.variant === 'semi-glass-door'));

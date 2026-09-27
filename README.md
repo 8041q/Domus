@@ -87,12 +87,12 @@ item opens its numeric controls for precise edits.
 
 ## Saving and export
 
-`Save` stores one project snapshot in this browser under
-`room-planner-project-v3`; `Load` restores it. Older local snapshot keys are
+In the header, **Project → Save room** stores one project snapshot in this browser under
+`room-planner-project-v3`; **Project → Load saved room** restores it. Older local snapshot keys are
 accepted and normalized when possible. Clearing site data removes the save.
 There is no automatic save or cloud backup.
 
-`Export GLB` is available in Plan Room. It exports the complete room rather
+**Project → Export GLB** is available in Plan Room. It exports the complete room rather
 than the current cutaway: walls, floor, baseboards, frames, ceiling, and
 furniture are grouped by semantic category. Cameras, selection outlines,
 measurements, and other editing helpers are excluded.

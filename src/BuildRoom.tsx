@@ -345,8 +345,10 @@ function WallEditor({ wallId }: { wallId: string }) {
 }
 
 export function BuildRoom() {
+  const [resetViewRequest, setResetViewRequest] = useState(0);
   const room = usePlannerStore((s) => s.room);
   const openings = usePlannerStore((s) => s.openings);
+  const placedFurnitureCount = usePlannerStore((s) => s.objects.length);
   const system = usePlannerStore((s) => s.measurementSystem);
   const selectedOpeningId = usePlannerStore((s) => s.selectedOpeningId);
   const selectedWallId = usePlannerStore((s) => s.selectedWallId);
@@ -363,7 +365,13 @@ export function BuildRoom() {
 
   const changeShape = (shape: Exclude<RoomShapeKind, 'custom'>) => {
     if (shape === room.shapeKind) return;
-    if (openings.length && !window.confirm('Changing the room shape will clear the current doors and windows. Continue?')) return;
+    if (openings.length || placedFurnitureCount) {
+      const effects = [
+        openings.length ? 'clear the current doors and windows' : '',
+        placedFurnitureCount ? 'remove placed furniture from the room (it will remain in Used furniture)' : ''
+      ].filter(Boolean).join(' and ');
+      if (!window.confirm(`Changing the room shape will ${effects}. Continue?`)) return;
+    }
     setRoomTemplate(shape);
   };
 
@@ -469,21 +477,20 @@ export function BuildRoom() {
               </div>
             </div>
           </div>
+          {buildView === '3d' && <button className="floating-reset-view" type="button" onClick={() => setResetViewRequest((value) => value + 1)}><Icon name="rotateLeft" />Reset view</button>}
 
           {buildView === 'plan' ? <Plan2D purpose="build" /> : (
             <div
               className="builder-3d-selection-surface"
               onPointerDownCapture={(event) => {
                 if (!selectedOpeningId && !selectedWallId) return;
-                const target = event.target;
-                if (target instanceof Element && target.closest('.floating-view-actions')) return;
                 // Clear the current architectural focus before the renderer handles the hit.
                 // Clicking a door/window immediately re-selects it; clicking empty 3D space leaves it cleared.
                 selectOpening(null);
               }}
             >
               <Suspense fallback={<div className="viewport-loading">Loading 3D preview…</div>}>
-                <Viewport3D furniture={false} interactive={false} architectureInteractive sunRays={false} />
+                <Viewport3D furniture={false} interactive={false} architectureInteractive sunRays={false} resetViewRequest={resetViewRequest} />
               </Suspense>
             </div>
           )}

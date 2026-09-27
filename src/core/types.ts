@@ -29,15 +29,12 @@ export type FloorFinish =
   | 'terrazzo-007'
   | 'wood-floor-020';
 export type RoomShapeKind = 'rectangle' | 'angled-corner' | 'l-shape' | 'recess' | 'custom';
-export type CeilingLightFixtureType = 'surface-mounted' | 'recessed';
 export type SunStylePreset = 'paired-suns' | 'cinematic-shadows';
 export type BaseboardStyle = 'flat' | 'flush' | 'rounded' | 'stepped' | 'sculpted' | 'sculpted-tall' | 'floating' | 'flash-coving';
 export type BaseboardMaterial = 'paint' | 'materials';
 
 export interface RoomLighting {
   enabled: boolean;
-  fixtureType: CeilingLightFixtureType;
-  showWithoutCeiling: boolean;
   sunRaysEnabled: boolean;
   sunStylePreset: SunStylePreset;
   /** Horizontal rotation in degrees from the first window's outward normal. */
@@ -173,10 +170,13 @@ export interface PlacedObject {
   rotationY: number;
 }
 
+export type UnplacedObject = Pick<PlacedObject, 'id' | 'productId'>;
+
 export interface PlannerSnapshot {
   room: RoomState;
   openings: RoomOpening[];
   objects: PlacedObject[];
+  unplacedObjects: UnplacedObject[];
 }
 
 export interface SnapAxisFeedback {
