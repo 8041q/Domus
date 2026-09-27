@@ -236,7 +236,12 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .floating-reset-view { position: absolute; z-index: 6; top: 12px; right: 12px; min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 4px 12px; border: 1px solid rgba(0,0,0,.11); border-radius: 10px; background: rgba(255,255,255,.90); backdrop-filter: blur(14px); box-shadow: 0 5px 18px rgba(0,0,0,.10), 0 1px 2px rgba(0,0,0,.04); font-size: 9.5px; font-weight: 650; white-space: nowrap; cursor: pointer; }
 .floating-reset-view:hover { background: #fff; }
 .floating-reset-view svg { width: 14px; height: 14px; }
-.plan-help { position: absolute; left: 12px; bottom: 12px; display: flex; gap: 12px; align-items: center; border: 1px solid rgba(0,0,0,.09); border-radius: 8px; background: rgba(255,255,255,.92); backdrop-filter: blur(9px); padding: 7px 9px; color: #71717a; font-size: 9px; pointer-events: none; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+.plan-view-controls { position: absolute; z-index: 5; top: 12px; right: 12px; display: flex; align-items: center; gap: 3px; padding: 4px; border: 1px solid rgba(0,0,0,.11); border-radius: 10px; background: rgba(255,255,255,.92); backdrop-filter: blur(14px); box-shadow: 0 5px 18px rgba(0,0,0,.10); }
+.plan-view-controls button { min-width: 31px; min-height: 31px; border: 0; border-radius: 6px; background: transparent; color: var(--foreground); font-size: 17px; font-weight: 600; cursor: pointer; }
+.plan-view-controls button:hover:not(:disabled) { background: var(--muted); }
+.plan-view-controls button:disabled { opacity: .45; cursor: default; }
+.plan-view-controls .plan-fit-button { padding: 0 8px; font-size: 10px; white-space: nowrap; }
+.plan-help { position: absolute; left: 12px; bottom: 12px; display: flex; flex-wrap: wrap; max-width: calc(100% - 24px); gap: 6px 12px; align-items: center; border: 1px solid rgba(0,0,0,.09); border-radius: 8px; background: rgba(255,255,255,.92); backdrop-filter: blur(9px); padding: 7px 9px; color: #71717a; font-size: 9px; pointer-events: none; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
 .plan-help span { display: flex; align-items: center; gap: 6px; }
 .help-dot.corner { width: 9px; height: 9px; border-radius: 50%; background: #18181b; box-shadow: 0 0 0 2px #fff, 0 0 0 3px #a1a1aa; }
 .help-line { width: 18px; height: 4px; border-radius: 999px; background: #27272a; display: inline-block; }
@@ -503,6 +508,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .designer-topbar .view-preset-bar { flex: 1 1 auto; width: auto; }
   .designer-meta { flex: 0 0 auto; }
   .floating-reset-view { top: 58px; }
+  .plan-view-controls { top: 58px; }
 }
 
 @media (max-width: 520px) {

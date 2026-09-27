@@ -699,13 +699,46 @@ export class PlannerScene {
         this.camera.position.set(bounds.maxX + distance, targetY, cz);
         break;
       default:
-        this.camera.position.set(bounds.maxX + size * 2.6, Math.max(3.8, size * 2.8), bounds.maxZ + size * 2.6);
+        // Fit the whole room volume in the cutaway camera. A fixed multiplier of
+        // the longest wall pushed 20 m rooms so far away that they looked tiny.
+        // Account for the canvas aspect ratio and the camera's diagonal view.
+        const direction = new THREE.Vector3(1, 1.08, 1).normalize();
+        const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), direction).normalize();
+        const up = new THREE.Vector3().crossVectors(direction, right).normalize();
+        const halfFovTangent = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
+        const centre = new THREE.Vector3(cx, targetY, cz);
+        let fitDistance = 0;
+        for (const x of [bounds.minX, bounds.maxX]) {
+          for (const y of [0, room.height]) {
+            for (const z of [bounds.minZ, bounds.maxZ]) {
+              const relative = new THREE.Vector3(x, y, z).sub(centre);
+              fitDistance = Math.max(fitDistance,
+                relative.dot(direction) + Math.abs(relative.dot(right)) / (halfFovTangent * this.camera.aspect * 0.72),
+                relative.dot(direction) + Math.abs(relative.dot(up)) / (halfFovTangent * 0.66));
+            }
+          }
+        }
+        const fittedDistance = Math.max(fitDistance, 15 + size * 0.6);
+        this.controls.maxDistance = Math.max(this.controls.maxDistance, fittedDistance * 1.75);
+        this.camera.position.copy(centre).addScaledVector(direction, fittedDistance);
         break;
     }
+    this.updateCameraClipping(room);
     this.controls.update();
     this.updateCeilingVisibility();
     this.updateCutawayWalls(true);
     this.requestRender();
+  }
+
+  private updateCameraClipping(room = this.bridge.getSnapshot().room) {
+    const bounds = roomBounds(room.vertices);
+    const centre = new THREE.Vector3((bounds.minX + bounds.maxX) / 2, room.height / 2, (bounds.minZ + bounds.maxZ) / 2);
+    const radius = Math.hypot(bounds.width, bounds.depth, room.height) / 2;
+    const far = Math.max(100, this.camera.position.distanceTo(centre) + radius + 16);
+    if (Math.abs(this.camera.far - far) > 0.5) {
+      this.camera.far = far;
+      this.camera.updateProjectionMatrix();
+    }
   }
 
   renderFromState() {
@@ -4535,6 +4568,7 @@ export class PlannerScene {
     this.animationFrame = 0;
     if (this.disposed) return;
     const controlsChanged = this.controls.update();
+    this.updateCameraClipping();
     this.updateCeilingVisibility();
     this.updateCutawayWalls();
     this.updateMeasurementLabelOrientation();

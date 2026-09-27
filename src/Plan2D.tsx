@@ -19,6 +19,9 @@ import { getSnapshot, usePlannerStore } from './store';
 import { themeColor, themeMetric, themeRgba } from './theme';
 
 const PAD = 64;
+const MIN_VIEW_SCALE = 6;
+const MAX_VIEW_SCALE = 180;
+const MAX_ROOM_SPAN = 20;
 
 type Purpose = 'build' | 'plan';
 
@@ -28,6 +31,7 @@ type DragView = ViewTransform & { rect: { left: number; top: number; width: numb
 type DragState =
   | { type: 'wall'; id: string; before: PlannerSnapshot; view: DragView }
   | { type: 'corner'; id: string; before: PlannerSnapshot; view: DragView }
+  | { type: 'pan'; view: DragView; lastX: number; lastY: number }
   | { type: 'object'; id: string; before: PlannerSnapshot; snap: SnapFeedback }
   | { type: 'opening'; id: string; before: PlannerSnapshot; view: DragView };
 
@@ -222,7 +226,7 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
       const bounds = roomBounds(room.vertices);
       const frameW = Math.max(bounds.width, 6.4);
       const frameD = Math.max(bounds.depth, 5.0);
-      const scale = Math.max(24, Math.min((rect.width - PAD * 2) / frameW, (rect.height - PAD * 2) / frameD));
+      const scale = Math.max(MIN_VIEW_SCALE, Math.min(MAX_VIEW_SCALE, (rect.width - PAD * 2) / frameW, (rect.height - PAD * 2) / frameD));
       const drawingW = bounds.width * scale;
       const drawingD = bounds.depth * scale;
       const left = Math.max(PAD, (rect.width - drawingW) / 2);
@@ -239,6 +243,34 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
     return { rect, scale: view.scale, ox: view.ox, oz: view.oz };
   };
 
+  const changeView = (scale: number, ox: number, oz: number, rect: DragView['rect']) => {
+    viewRef.current = { scale, ox, oz, width: rect.width, height: rect.height };
+    setResizeTick((value) => value + 1);
+  };
+
+  const zoomView = (factor: number) => {
+    if (drag) return;
+    const { rect, scale, ox, oz } = metrics();
+    const nextScale = Math.max(MIN_VIEW_SCALE, Math.min(MAX_VIEW_SCALE, scale * factor));
+    const cx = rect.width / 2;
+    const cy = rect.height / 2;
+    changeView(nextScale, cx - (cx - ox) * nextScale / scale, cy - (cy - oz) * nextScale / scale, rect);
+  };
+
+  const fitView = () => {
+    if (drag) return;
+    const { rect } = metrics();
+    const bounds = roomBounds(room.vertices);
+    const scale = Math.max(MIN_VIEW_SCALE, Math.min(MAX_VIEW_SCALE,
+      (rect.width - PAD * 2) / Math.max(bounds.width, 0.1),
+      (rect.height - PAD * 2) / Math.max(bounds.depth, 0.1)
+    ));
+    changeView(scale,
+      rect.width / 2 - (bounds.minX + bounds.maxX) * scale / 2,
+      rect.height / 2 - (bounds.minZ + bounds.maxZ) * scale / 2,
+      rect);
+  };
+
   useEffect(() => {
     if (room.shapeKind !== 'custom') {
       viewRef.current = null;
@@ -253,6 +285,25 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
   }, [wallLabelEdit?.wallId]);
 
   const selected = useMemo(() => objects.find((o) => o.id === selectedId) ?? null, [objects, selectedId]);
+
+  const moveDraggedRoom = (activeDrag: Extract<DragState, { type: 'wall' | 'corner' }>, px: number, py: number, shiftKey: boolean) => {
+    const { scale, ox, oz } = activeDrag.view;
+    const gridStep = measurementSystem === 'metric'
+      ? (shiftKey ? 0.01 : 0.05)
+      : (shiftKey ? 0.0127 : 0.0508);
+    const snappedWorld = {
+      x: Math.round(((px - ox) / scale) / gridStep) * gridStep,
+      z: Math.round(((py - oz) / scale) / gridStep) * gridStep
+    };
+    const vertices = activeDrag.type === 'corner'
+      ? moveCorner(activeDrag.before.room, activeDrag.id, snappedWorld.x, snappedWorld.z)
+      : moveWall(activeDrag.before.room, activeDrag.id, snappedWorld);
+    if (!vertices) return;
+    const bounds = roomBounds(vertices);
+    if (bounds.width > MAX_ROOM_SPAN || bounds.depth > MAX_ROOM_SPAN
+      || getRoomWalls({ ...activeDrag.before.room, vertices }).some((wall) => wall.length > MAX_ROOM_SPAN)) return;
+    setRoomVertices(vertices, 'custom');
+  };
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -981,6 +1032,9 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
       }
       selectOpening(null);
       selectWall(null);
+      setDrag({ type: 'pan', view, lastX: px, lastY: py });
+      e.currentTarget.style.cursor = 'grab';
+      e.currentTarget.setPointerCapture(e.pointerId);
       return;
     }
 
@@ -1009,28 +1063,24 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
       return;
     }
 
-    e.currentTarget.style.cursor = purpose === 'build' ? 'grabbing' : e.currentTarget.style.cursor;
-    const world = { x: (px - ox) / scale, z: (py - oz) / scale };
-    const gridStep = measurementSystem === 'metric'
-      ? (e.shiftKey ? 0.01 : 0.05)
-      : (e.shiftKey ? 0.0127 : 0.0508); // 1/2 inch or 2 inches
-    const snappedWorld = {
-      x: Math.round(world.x / gridStep) * gridStep,
-      z: Math.round(world.z / gridStep) * gridStep
-    };
+    if (drag.type === 'pan') {
+      drag.view.ox += px - drag.lastX;
+      drag.view.oz += py - drag.lastY;
+      drag.lastX = px;
+      drag.lastY = py;
+      viewRef.current = { scale: drag.view.scale, ox: drag.view.ox, oz: drag.view.oz,
+        width: drag.view.rect.width, height: drag.view.rect.height };
+      setResizeTick((value) => value + 1);
+      e.currentTarget.style.cursor = 'grabbing';
+      return;
+    }
 
-    if (drag.type === 'corner') {
-      const vertices = moveCorner(drag.before.room, drag.id, snappedWorld.x, snappedWorld.z);
-      if (vertices) setRoomVertices(vertices, 'custom');
+    e.currentTarget.style.cursor = purpose === 'build' ? 'grabbing' : e.currentTarget.style.cursor;
+    if (drag.type === 'corner' || drag.type === 'wall') {
+      moveDraggedRoom(drag, px, py, e.shiftKey);
       return;
     }
-    if (drag.type === 'wall') {
-      const wall = getWall(drag.before.room, drag.id);
-      if (!wall) return;
-      const vertices = moveWall(drag.before.room, drag.id, snappedWorld);
-      if (vertices) setRoomVertices(vertices, 'custom');
-      return;
-    }
+    const world = { x: (px - ox) / scale, z: (py - oz) / scale };
     if (drag.type === 'opening') {
       const opening = openings.find((o) => o.id === drag.id);
       if (!opening) return;
@@ -1061,10 +1111,10 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
 
   const onPointerUp = (e?: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!drag) return;
-    commitSnapshot(drag.before);
+    if (drag.type !== 'pan') commitSnapshot(drag.before);
     setDrag(null);
     setFeedback({ kind: 'none' }, null, false);
-    if (e && purpose === 'build') e.currentTarget.style.cursor = hover ? 'pointer' : 'default';
+    if (e && purpose === 'build') e.currentTarget.style.cursor = 'default';
   };
 
   const onPointerLeave = (e: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -1084,6 +1134,13 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
         onPointerCancel={onPointerUp}
         onPointerLeave={onPointerLeave}
       />
+      {purpose === 'build' && (
+        <div className="plan-view-controls" role="group" aria-label="2D view controls">
+          <button type="button" aria-label="Zoom out" title="Zoom out" disabled={!!drag} onClick={() => zoomView(0.8)}>−</button>
+          <button type="button" aria-label="Zoom in" title="Zoom in" disabled={!!drag} onClick={() => zoomView(1.25)}>+</button>
+          <button type="button" className="plan-fit-button" disabled={!!drag} onClick={fitView}>Fit room</button>
+        </div>
+      )}
       {purpose === 'build' && wallLabelEdit && (
         <div
           style={{
@@ -1140,6 +1197,7 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
           <span><i className="help-dot corner" /> Drag a corner</span>
           <span><i className="help-line" /> Drag a wall · corners can angle</span>
           <span><i className="help-plus">+</i> Split a wall</span>
+          <span>Drag empty space to pan · Use zoom to see more space</span>
           <span>{measurementSystem === 'metric' ? '50 cm guide cells · 5 cm snap · Shift for 1 cm' : '1 ft guide cells · 2 in snap · Shift for ½ in'}</span>
         </div>
       )}

@@ -97,6 +97,9 @@ than the current cutaway: walls, floor, baseboards, frames, ceiling, and
 furniture are grouped by semantic category. Cameras, selection outlines,
 measurements, and other editing helpers are excluded.
 
+To prepare your own furniture models, use the [Blender product metadata add-on](docs/BLENDER_METADATA.md).
+It saves catalogue and placement fields on a model root for Blender's built-in GLB export.
+
 ## Current limitations
 
 - The furniture catalogue uses procedural placeholder models and sample prices.
