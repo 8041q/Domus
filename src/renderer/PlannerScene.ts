@@ -70,6 +70,8 @@ const SUN_PAIR_INTENSITY = 1.55;
 const SUN_SHADOW_MAP_SIZE = 1024;
 const SOFT_SUN_SHADOW_RADIUS = 5;
 const SHARP_SUN_SHADOW_RADIUS = 1;
+const CUTAWAY_FOV = 15;
+const PRESET_FOV = 32;
 
 // Cutaway thresholds. `facing` is the horizontal dot product between a
 // wall's outward normal and the direction from that wall to the camera. Smaller
@@ -672,7 +674,7 @@ export class PlannerScene {
     // visually centered in both perspective and orthographic-like preset views.
     const targetY = room.height * 0.5;
     const isCutaway = view === 'perspective';
-    this.camera.fov = isCutaway ? 15 : 32;
+    this.camera.fov = isCutaway ? CUTAWAY_FOV : PRESET_FOV;
     this.camera.updateProjectionMatrix();
     const distance = Math.max(3.8, size * (isCutaway ? 4.0 : 1.3));
     this.controls.maxDistance = Math.max(20, size * 5.5);
@@ -2476,12 +2478,13 @@ export class PlannerScene {
 
   private updateCutawayWalls(force = false) {
     const snapshot = this.bridge.getSnapshot();
-    const offset = this.camera.position.clone().sub(this.controls.target);
-    const nearTopDown = this.currentCameraView === 'top' || Math.abs(offset.y) > Math.hypot(offset.x, offset.z) * 2.55;
+    // Only the explicit Top preset shows the complete wall outline. In Cutaway,
+    // foreground walls must stay hidden even as the camera approaches top-down.
+    const showAllWalls = this.currentCameraView === 'top';
     const nextState = new Map<string, boolean>();
 
     for (const wall of getRoomWalls(snapshot.room)) {
-      if (nearTopDown) {
+      if (showAllWalls) {
         nextState.set(wall.id, false);
         continue;
       }
@@ -4481,6 +4484,15 @@ export class PlannerScene {
     // Camera presets are transient presentation views. An actual orbit returns
     // to free Cutaway view behavior without moving the camera to the default position.
     // Zoom/pan preserve the preset; pointer interaction with furniture cannot exit it.
+    // Keep the same framing as the FOV narrows by moving along the existing view ray.
+    const oldHalfFov = THREE.MathUtils.degToRad(this.camera.fov * 0.5);
+    const newHalfFov = THREE.MathUtils.degToRad(CUTAWAY_FOV * 0.5);
+    const offset = this.camera.position.clone().sub(this.controls.target);
+    offset.multiplyScalar(Math.tan(oldHalfFov) / Math.tan(newHalfFov));
+    this.camera.position.copy(this.controls.target).add(offset);
+    this.controls.maxDistance = Math.max(this.controls.maxDistance, offset.length());
+    this.camera.fov = CUTAWAY_FOV;
+    this.camera.updateProjectionMatrix();
     this.currentCameraView = 'perspective';
     this.bridge.cameraViewChanged?.('perspective');
     this.updateCeilingVisibility(true);
