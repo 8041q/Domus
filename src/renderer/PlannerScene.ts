@@ -735,7 +735,17 @@ export class PlannerScene {
     const centre = new THREE.Vector3((bounds.minX + bounds.maxX) / 2, room.height / 2, (bounds.minZ + bounds.maxZ) / 2);
     const radius = Math.hypot(bounds.width, bounds.depth, room.height) / 2;
     const far = Math.max(100, this.camera.position.distanceTo(centre) + radius + 16);
-    if (Math.abs(this.camera.far - far) > 0.5) {
+    // A fixed 8 cm near plane wastes most depth-buffer precision when the camera
+    // is tens of metres away. Thin wall, floor and trim layers then fight for the
+    // same pixels and shimmer as the user orbits a zoomed-out room. The distance
+    // to the room's bounding box is conservative: the new near plane stays well
+    // in front of every architectural surface, including at oblique angles.
+    const dx = this.camera.position.x - THREE.MathUtils.clamp(this.camera.position.x, bounds.minX, bounds.maxX);
+    const dy = this.camera.position.y - THREE.MathUtils.clamp(this.camera.position.y, 0, room.height);
+    const dz = this.camera.position.z - THREE.MathUtils.clamp(this.camera.position.z, bounds.minZ, bounds.maxZ);
+    const near = Math.max(0.08, Math.min(12, Math.hypot(dx, dy, dz) * 0.2));
+    if (Math.abs(this.camera.far - far) > 0.5 || Math.abs(this.camera.near - near) > 0.025) {
+      this.camera.near = near;
       this.camera.far = far;
       this.camera.updateProjectionMatrix();
     }
