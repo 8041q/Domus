@@ -2,8 +2,9 @@ import { create } from 'zustand';
 import type { AiApplyResult, AiProposal } from './ai/types';
 import { applyAiProposal as executeAiProposal, snapshotRevision } from './core/aiProposal';
 import { PRODUCTS, rotatedFootprint } from './core/products';
-import { objectsOverlap, resolvePlacement, resolveRotationPlacement } from './core/placement';
+import { isPlacementValid, objectsOverlap, resolvePlacement, resolveRotationPlacement } from './core/placement';
 import { SnapshotHistory } from './core/history';
+import { architectureRoom, deriveSpaces, resolveDividers, spaceAtPoint, validateDividers, validateInteriorOpenings } from './core/spaces';
 import { normalizeFloorFinish } from './core/roomFinishes';
 import { BASEBOARD_STYLES } from './core/architecturalStyles';
 import { clampSunAngle, normalizeSunAzimuth, SUN_DEFAULT_AZIMUTH, SUN_DEFAULT_ELEVATION, SUN_ELEVATION_MAX, SUN_ELEVATION_MIN } from './core/sun';
@@ -14,6 +15,7 @@ import {
   resizeWallCentered,
   splitWall,
   roomBounds,
+  pointInRoom,
   roomTemplate,
   scaleRoom,
   syncRoomBounds
@@ -36,7 +38,10 @@ import type {
   PlanCameraView,
   MeasurementSystem,
   RoomLighting,
-  SunStylePreset
+  SunStylePreset,
+  InteriorDivider,
+  NamedSpace,
+  DividerAnchor
 } from './core/types';
 
 interface PlannerStore extends PlannerSnapshot {
@@ -47,6 +52,8 @@ interface PlannerStore extends PlannerSnapshot {
   selectedId: string | null;
   selectedOpeningId: string | null;
   selectedWallId: string | null;
+  selectedDividerId: string | null;
+  selectedSpaceId: string | null;
   activeSnap: SnapFeedback;
   collisionId: string | null;
   collisionPush: boolean;
@@ -80,6 +87,13 @@ interface PlannerStore extends PlannerSnapshot {
   resizeWallById: (wallId: string, length: number, recordHistory?: boolean) => boolean;
   splitWallById: (wallId: string) => boolean;
   selectWall: (id: string | null) => void;
+  selectDivider: (id: string | null) => void;
+  selectSpace: (id: string | null) => void;
+  addDivider: (kind: InteriorDivider['kind'], start: DividerAnchor, end: DividerAnchor) => boolean;
+  updateDivider: (id: string, patch: Partial<InteriorDivider>, recordHistory?: boolean) => boolean;
+  removeDivider: (id: string) => void;
+  updateSpace: (id: string, patch: Partial<NamedSpace>) => void;
+  syncSpaces: (before: PlannerSnapshot) => void;
   rotateSelected: (direction?: 1 | -1) => void;
   setSelectedRotation: (rotationY: number, recordHistory?: boolean) => void;
   removeSelected: () => void;
@@ -132,10 +146,13 @@ const defaultOpenings: RoomOpening[] = [
   { id: 'door-1', type: 'door', variant: 'single-door', wallId: defaultWallId(defaultRoom, 'vertical'), offset: 2.85, width: 0.9, height: 2.08, sillHeight: 0 }
 ];
 const defaultObjects: PlacedObject[] = [];
+const defaultSpaces: NamedSpace[] = [{ id: 'space-1', name: 'Room', seed: { x: 2.6, z: 1.9 }, floorFinish: defaultRoom.floorFinish, wallColor: defaultRoom.wallColor }];
 
 const snapshotOf = (state: PlannerSnapshot): PlannerSnapshot => ({
   room: structuredClone(state.room),
   openings: structuredClone(state.openings),
+  dividers: structuredClone(state.dividers),
+  spaces: structuredClone(state.spaces),
   objects: structuredClone(state.objects),
   unplacedObjects: structuredClone(state.unplacedObjects)
 });
@@ -218,10 +235,11 @@ function openingPreset(type: OpeningType, variant: OpeningVariant, room: RoomSta
   return { width: 1.2, height: 1.2, sillHeight: 0.85 };
 }
 
-function normalizeOpening(opening: RoomOpening & { wall?: RoomWall }, room: RoomState): RoomOpening {
+function normalizeOpening(opening: RoomOpening & { wall?: RoomWall }, room: RoomState, dividers: InteriorDivider[] = []): RoomOpening {
   let wallId = opening.wallId;
   if (!getWall(room, wallId) && opening.wall) wallId = cardinalWallId(room, opening.wall) ?? '';
-  let wall = getWall(room, wallId);
+  let wall: { id: string; length: number } | null = getWall(room, wallId);
+  if (!wall && opening.type !== 'window') wall = resolveDividers(room, dividers).find((divider) => divider.id === wallId && divider.kind === 'wall') ?? null;
   if (!wall) {
     wall = [...getRoomWalls(room)].sort((a, b) => b.length - a.length)[0] ?? null;
     wallId = wall?.id ?? '';
@@ -232,16 +250,24 @@ function normalizeOpening(opening: RoomOpening & { wall?: RoomWall }, room: Room
   const width = Math.max(minWidth, Math.min(opening.width, Math.max(minWidth, maxLen - 0.2)));
   const offset = Math.max(width / 2 + 0.05, Math.min(opening.offset, maxLen - width / 2 - 0.05));
   const variant = opening.variant ?? defaultOpeningVariant(opening.type);
-  const forcedFloor = opening.type === 'door' || variant === 'full-height-window' || variant === 'sliding-window';
+  const forcedFloor = opening.type === 'door' || (opening.type === 'opening' && wallId.startsWith('divider-'))
+    || variant === 'full-height-window' || variant === 'sliding-window';
   const sillHeight = forcedFloor ? 0 : Math.max(0, opening.sillHeight);
   const maxHeight = Math.max(minHeight, room.height - sillHeight);
   const height = Math.max(minHeight, Math.min(opening.height, maxHeight));
   return { id: opening.id, type: opening.type, variant, wallId, width, offset, height, sillHeight };
 }
 
-function normalizeSnapshot(snapshot: PlannerSnapshot): PlannerSnapshot {
+function normalizeSnapshot(snapshot: Omit<PlannerSnapshot, 'dividers' | 'spaces'> & Partial<Pick<PlannerSnapshot, 'dividers' | 'spaces'>>): PlannerSnapshot {
   const room = ensureRoom(snapshot.room);
-  const openings = snapshot.openings.map((o) => normalizeOpening(o as RoomOpening & { wall?: RoomWall }, room));
+  const dividers = (snapshot.dividers ?? usePlannerStore.getState()?.dividers ?? []).filter((divider) => divider && (divider.kind === 'wall' || divider.kind === 'open'));
+  const spaces = (snapshot.spaces ?? usePlannerStore.getState()?.spaces ?? defaultSpaces).map((space) => ({
+    id: space.id, name: space.name || 'Space', seed: space.seed, boundaryKey: space.boundaryKey,
+    floorFinish: normalizeFloorFinish(space.floorFinish), wallColor: /^#[0-9a-f]{6}$/i.test(space.wallColor) ? space.wallColor : room.wallColor
+  }));
+  const wallIds = new Set([...getRoomWalls(room).map((wall) => wall.id), ...dividers.filter((divider) => divider.kind === 'wall').map((divider) => divider.id)]);
+  const openings = snapshot.openings.filter((opening) => (wallIds.has(opening.wallId) || (!opening.wallId && (opening as RoomOpening & { wall?: RoomWall }).wall)) && (opening.type !== 'window' || !opening.wallId?.startsWith('divider-')))
+    .map((o) => normalizeOpening(o as RoomOpening & { wall?: RoomWall }, room, dividers));
   const objects = snapshot.objects.map((o) => {
     const product = PRODUCTS[o.productId];
     if (!product) return o;
@@ -249,12 +275,19 @@ function normalizeSnapshot(snapshot: PlannerSnapshot): PlannerSnapshot {
     const nearest = findNearestValidPosition(room, size.width, size.depth, { x: o.x, z: o.z });
     return nearest ? { ...o, ...nearest } : o;
   });
-  return { room, openings, objects, unplacedObjects: snapshot.unplacedObjects };
+  return { room, openings, dividers, spaces, objects, unplacedObjects: snapshot.unplacedObjects };
 }
 
-function findSpawnPosition(productId: ProductKind, snapshot: PlannerSnapshot) {
-  const product = PRODUCTS[productId];
-  const bounds = roomBounds(snapshot.room.vertices);
+function validInteriorArchitecture(snapshot: PlannerSnapshot) {
+  return validateInteriorOpenings(snapshot.room, snapshot.dividers, snapshot.openings)
+    && snapshot.objects.every((object) => isPlacementValid(object, architectureRoom(snapshot), []));
+}
+
+function findSpawnPosition(productId: ProductKind, snapshot: PlannerSnapshot, spaceId?: string | null) {
+  const space = spaceId ? deriveSpaces(snapshot).find((space) => space.id === spaceId) : null;
+  const vertices = space ? space.polygon.map((point, index) => ({ ...point, id: `spawn-${index}` })) : snapshot.room.vertices;
+  const bounds = roomBounds(vertices);
+  const room = architectureRoom(snapshot);
   const moving: PlacedObject = {
     id: 'spawn',
     productId,
@@ -262,30 +295,36 @@ function findSpawnPosition(productId: ProductKind, snapshot: PlannerSnapshot) {
     z: (bounds.minZ + bounds.maxZ) / 2,
     rotationY: 0
   };
-  const step = 0.28;
+  const step = 0.1;
   const centreX = moving.x;
   const centreZ = moving.z;
+  const fits = (x: number, z: number) => (!space || pointInRoom({ x, z }, { ...snapshot.room, vertices }, false))
+    && isPlacementValid({ ...moving, x, z }, room, snapshot.objects);
+  if (space && fits(space.seed.x, space.seed.z)) return { x: space.seed.x, z: space.seed.z };
 
-  for (let radius = 0; radius < 18; radius += 1) {
+  const maxRadius = Math.ceil(Math.max(bounds.width, bounds.depth) / (2 * step));
+  for (let radius = 0; radius <= maxRadius; radius += 1) {
     for (let dz = -radius; dz <= radius; dz += 1) {
       for (let dx = -radius; dx <= radius; dx += 1) {
         if (Math.abs(dx) !== radius && Math.abs(dz) !== radius) continue;
         const rawX = centreX + dx * step;
         const rawZ = centreZ + dz * step;
-        const result = resolvePlacement(moving, rawX, rawZ, snapshot.room, snapshot.objects, { enterSnapDistance: 0 });
-        const candidate = { ...moving, x: result.x, z: result.z };
-        if (!result.colliding && !snapshot.objects.some((o) => objectsOverlap(candidate, o, 0.01))) return { x: result.x, z: result.z };
+        if (rawX < bounds.minX || rawX > bounds.maxX || rawZ < bounds.minZ || rawZ > bounds.maxZ) continue;
+        // A newly added item has no drag path. Test its destination directly so
+        // a divider through the room centre cannot trap every spawn candidate.
+        if (fits(rawX, rawZ)) return { x: rawX, z: rawZ };
       }
     }
   }
 
-  const nearest = findNearestValidPosition(snapshot.room, product.width, product.depth, { x: centreX, z: centreZ });
-  return nearest ?? { x: centreX, z: centreZ };
+  return null;
 }
 
 export const usePlannerStore = create<PlannerStore>((set, get) => ({
   room: defaultRoom,
   openings: defaultOpenings,
+  dividers: [],
+  spaces: defaultSpaces,
   objects: defaultObjects,
   unplacedObjects: [],
   mode: 'build',
@@ -295,6 +334,8 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
   selectedId: null,
   selectedOpeningId: null,
   selectedWallId: null,
+  selectedDividerId: null,
+  selectedSpaceId: null,
   activeSnap: { kind: 'none' },
   collisionId: null,
   collisionPush: false,
@@ -309,6 +350,8 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
     selectedId: null,
     selectedOpeningId: null,
     selectedWallId: null,
+    selectedDividerId: null,
+    selectedSpaceId: mode === 'plan' ? state.selectedSpaceId ?? state.spaces[0]?.id ?? null : null,
     activeSnap: { kind: 'none' },
     collisionId: null
   })),
@@ -328,9 +371,14 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
   addObject: (productId) => {
     const before = snapshotOf(get());
     const id = `${productId}-${crypto.randomUUID().slice(0, 8)}`;
-    const pos = findSpawnPosition(productId, before);
+    const pos = findSpawnPosition(productId, before, get().selectedSpaceId);
+    if (!pos) {
+      set((state) => ({ unplacedObjects: [...state.unplacedObjects, { id, productId }] }));
+      history.push(before);
+      return;
+    }
     const object: PlacedObject = { id, productId, x: pos.x, z: pos.z, rotationY: 0 };
-    set((state) => ({ objects: [...state.objects, object], selectedId: id, planView: 'perspective' }));
+    set((state) => ({ objects: [...state.objects, object], selectedId: id }));
     history.push(before);
   },
 
@@ -338,13 +386,13 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
     const item = get().unplacedObjects.find((object) => object.id === id);
     if (!item) return;
     const before = snapshotOf(get());
-    const pos = findSpawnPosition(item.productId, before);
+    const pos = findSpawnPosition(item.productId, before, get().selectedSpaceId);
+    if (!pos) return;
     const object: PlacedObject = { ...item, x: pos.x, z: pos.z, rotationY: 0 };
     set((state) => ({
       objects: [...state.objects, object],
       unplacedObjects: state.unplacedObjects.filter((candidate) => candidate.id !== id),
-      selectedId: id,
-      planView: 'perspective'
+      selectedId: id
     }));
     history.push(before);
   },
@@ -366,7 +414,7 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
     if (!source) return;
     const before = snapshotOf(get());
     const copy: PlacedObject = { ...source, id: `${source.productId}-${crypto.randomUUID().slice(0, 8)}` };
-    const resolved = resolvePlacement(copy, source.x + 0.28, source.z + 0.28, get().room, get().objects, { enterSnapDistance: 0.06 });
+    const resolved = resolvePlacement(copy, source.x + 0.28, source.z + 0.28, architectureRoom(get()), get().objects, { enterSnapDistance: 0.06 });
     copy.x = resolved.x;
     copy.z = resolved.z;
     if (resolved.rotationY != null) copy.rotationY = resolved.rotationY;
@@ -374,7 +422,11 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
     history.push(before);
   },
 
-  select: (id) => set({ selectedId: id, selectedOpeningId: null, selectedWallId: null }),
+  select: (id) => set((state) => {
+    const object = state.objects.find((object) => object.id === id);
+    return { selectedId: id, selectedOpeningId: null, selectedWallId: null, selectedDividerId: null,
+      selectedSpaceId: object ? spaceAtPoint(snapshotOf(state), object)?.id ?? state.selectedSpaceId : state.selectedSpaceId };
+  }),
   updateObject: (id, patch) => set((state) => ({ objects: state.objects.map((o) => o.id === id ? { ...o, ...patch } : o) })),
   commitSnapshot: (before) => {
     const current = snapshotOf(get());
@@ -401,12 +453,16 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
   },
 
   setRoom: (room) => set((state) => normalizeSnapshot({ room, openings: state.openings, objects: state.objects, unplacedObjects: state.unplacedObjects })),
-  setRoomVertices: (vertices, shapeKind = 'custom') => set((state) => normalizeSnapshot({
-    room: syncRoomBounds({ ...state.room, shapeKind }, vertices),
-    openings: state.openings,
-    objects: state.objects,
-    unplacedObjects: state.unplacedObjects
-  })),
+  setRoomVertices: (vertices, shapeKind = 'custom') => {
+    const state = get();
+    const room = syncRoomBounds({ ...state.room, shapeKind }, vertices);
+    if (!validateDividers(room, state.dividers)) return;
+    const candidate = normalizeSnapshot({ room, openings: state.openings, dividers: state.dividers, spaces: state.spaces,
+      objects: state.objects, unplacedObjects: state.unplacedObjects });
+    if (!validInteriorArchitecture(candidate)) return;
+    if (!candidate.objects.every((object) => isPlacementValid(object, architectureRoom(candidate), candidate.objects.filter((other) => other.id !== object.id)))) return;
+    set(candidate);
+  },
   setRoomTemplate: (shape) => {
     const before = snapshotOf(get());
     const current = get().room;
@@ -415,14 +471,16 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
     const normalized = normalizeSnapshot({
       room,
       openings: [],
+      dividers: [],
+      spaces: before.spaces,
       objects: [],
       unplacedObjects: [
         ...get().unplacedObjects,
         ...currentObjects.map(({ id, productId }): UnplacedObject => ({ id, productId }))
       ]
     });
-    set({ ...normalized, selectedId: null, selectedOpeningId: null, selectedWallId: null, activeSnap: { kind: 'none' }, collisionId: null, collisionPush: false });
-    history.push(before);
+    set({ ...normalized, selectedId: null, selectedOpeningId: null, selectedWallId: null, selectedDividerId: null, selectedSpaceId: null, activeSnap: { kind: 'none' }, collisionId: null, collisionPush: false });
+    get().syncSpaces(before);
   },
   updateRoom: (patch) => {
     const before = snapshotOf(get());
@@ -431,17 +489,25 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
     const nextDepth = patch.depth == null ? room.depth : Math.max(2.2, Math.min(patch.depth, 20));
     if (patch.width != null || patch.depth != null) room = scaleRoom(room, nextWidth, nextDepth);
     room = ensureRoom({ ...room, ...patch, width: room.width, depth: room.depth, vertices: room.vertices });
+    if (!validateDividers(room, get().dividers)) return;
     const normalized = normalizeSnapshot({ room, openings: get().openings, objects: get().objects, unplacedObjects: get().unplacedObjects });
+    if (!validInteriorArchitecture(normalized)) return;
+    if (!normalized.objects.every((object) => isPlacementValid(object, architectureRoom(normalized), normalized.objects.filter((other) => other.id !== object.id)))) return;
     set(normalized);
-    history.push(before);
+    if (patch.width != null || patch.depth != null) get().syncSpaces(before);
+    else history.push(before);
   },
   resizeWallById: (id, length, recordHistory = true) => {
     const before = recordHistory ? snapshotOf(get()) : null;
     const vertices = resizeWallCentered(get().room, id, length);
     if (!vertices) return false;
-    const normalized = normalizeSnapshot({ room: syncRoomBounds({ ...get().room, shapeKind: 'custom' }, vertices), openings: get().openings, objects: get().objects, unplacedObjects: get().unplacedObjects });
+    const room = syncRoomBounds({ ...get().room, shapeKind: 'custom' }, vertices);
+    if (!validateDividers(room, get().dividers)) return false;
+    const normalized = normalizeSnapshot({ room, openings: get().openings, objects: get().objects, unplacedObjects: get().unplacedObjects });
+    if (!validInteriorArchitecture(normalized)) return false;
+    if (!normalized.objects.every((object) => isPlacementValid(object, architectureRoom(normalized), normalized.objects.filter((other) => other.id !== object.id)))) return false;
     set(normalized);
-    if (before) history.push(before);
+    if (before) get().syncSpaces(before);
     return true;
   },
   splitWallById: (id) => {
@@ -462,14 +528,83 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
       if (opening.offset <= half) return { ...opening, wallId: firstId };
       return { ...opening, wallId: secondId, offset: opening.offset - half };
     });
-    const normalized = normalizeSnapshot({ room: nextRoom, openings: remapped, objects: get().objects, unplacedObjects: get().unplacedObjects });
+    const remappedDividers = get().dividers.map((divider) => {
+      const remap = (anchor: DividerAnchor): DividerAnchor => {
+        if (anchor.kind !== 'perimeter' || anchor.id !== id) return anchor;
+        return anchor.t <= 0.5
+          ? { ...anchor, id: firstId, t: anchor.t * 2 }
+          : { ...anchor, id: secondId, t: (anchor.t - 0.5) * 2 };
+      };
+      return { ...divider, start: remap(divider.start), end: remap(divider.end) };
+    });
+    if (!validateDividers(nextRoom, remappedDividers)) return false;
+    const normalized = normalizeSnapshot({ room: nextRoom, openings: remapped, dividers: remappedDividers, spaces: get().spaces, objects: get().objects, unplacedObjects: get().unplacedObjects });
     const newWalls = new Set(walls.map((candidate) => candidate.id));
     set({ ...normalized, selectedWallId: newWalls.has(firstId) ? firstId : null, selectedOpeningId: null });
     history.push(before);
     return true;
   },
 
-  selectWall: (selectedWallId) => set({ selectedWallId, selectedOpeningId: null, selectedId: null }),
+  selectWall: (selectedWallId) => set({ selectedWallId, selectedDividerId: null, selectedSpaceId: null, selectedOpeningId: null, selectedId: null }),
+  selectDivider: (selectedDividerId) => set({ selectedDividerId, selectedWallId: null, selectedSpaceId: null, selectedOpeningId: null, selectedId: null }),
+  selectSpace: (selectedSpaceId) => set({ selectedSpaceId, selectedDividerId: null, selectedWallId: null, selectedOpeningId: null, selectedId: null }),
+  addDivider: (kind, start, end) => {
+    const before = snapshotOf(get());
+    const divider: InteriorDivider = { id: `divider-${crypto.randomUUID().slice(0, 8)}`, kind, start, end };
+    const dividers = [...get().dividers, divider];
+    if (!validateDividers(get().room, dividers) || deriveSpaces({ ...before, dividers }).length <= deriveSpaces(before).length) return false;
+    if (!validInteriorArchitecture({ ...before, dividers })) return false;
+    if (!before.objects.every((object) => isPlacementValid(object, architectureRoom({ ...before, dividers }), before.objects.filter((other) => other.id !== object.id)))) return false;
+    set({ dividers, selectedDividerId: divider.id, selectedSpaceId: null, selectedWallId: null, selectedOpeningId: null });
+    get().syncSpaces(before);
+    return true;
+  },
+  updateDivider: (id, patch, recordHistory = true) => {
+    const before = recordHistory ? snapshotOf(get()) : null;
+    const dividers = get().dividers.map((divider) => divider.id === id ? { ...divider, ...patch, id } : divider);
+    if (!validateDividers(get().room, dividers)) return false;
+    if (patch.kind === 'open' && get().openings.some((opening) => opening.wallId === id)) return false;
+    const candidate = normalizeSnapshot({ ...snapshotOf(get()), dividers });
+    if (!validInteriorArchitecture(candidate)) return false;
+    if (!candidate.objects.every((object) => isPlacementValid(object, architectureRoom(candidate), candidate.objects.filter((other) => other.id !== object.id)))) return false;
+    set({ dividers, openings: candidate.openings });
+    if (before) get().syncSpaces(before);
+    return true;
+  },
+  removeDivider: (id) => {
+    const before = snapshotOf(get());
+    const removed = new Set([id]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const divider of get().dividers) if (!removed.has(divider.id) && (removed.has(divider.start.id) || removed.has(divider.end.id))) { removed.add(divider.id); changed = true; }
+    }
+    set({ dividers: get().dividers.filter((divider) => !removed.has(divider.id)), openings: get().openings.filter((opening) => !removed.has(opening.wallId)), selectedDividerId: null });
+    get().syncSpaces(before);
+  },
+  updateSpace: (id, patch) => {
+    const before = snapshotOf(get());
+    set({ spaces: get().spaces.map((space) => space.id === id ? { ...space, ...patch, id } : space) });
+    history.push(before);
+  },
+  syncSpaces: (before) => {
+    const current = snapshotOf(get());
+    const derived = deriveSpaces(current);
+    const usedNames = new Set(derived.filter((space) => !space.id.startsWith('unassigned-')).map((space) => space.name));
+    let nextName = 1;
+    const spaces = derived.map((space) => {
+      const isNew = space.id.startsWith('unassigned-');
+      const parent = isNew ? spaceAtPoint(before, space.seed) : null;
+      while (usedNames.has(`Space ${nextName}`)) nextName++;
+      const name = isNew ? `Space ${nextName++}` : space.name;
+      usedNames.add(name);
+      return { id: isNew ? `space-${crypto.randomUUID().slice(0, 8)}` : space.id,
+        name, seed: space.seed, boundaryKey: space.boundaryKey,
+        floorFinish: parent?.floorFinish ?? space.floorFinish, wallColor: parent?.wallColor ?? space.wallColor };
+    });
+    set({ spaces, selectedSpaceId: spaces.some((space) => space.id === get().selectedSpaceId) ? get().selectedSpaceId : null });
+    if (JSON.stringify(before) !== JSON.stringify(snapshotOf(get()))) history.push(before);
+  },
 
   rotateSelected: (direction = 1) => {
     const id = get().selectedId;
@@ -478,7 +613,7 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
     const before = snapshotOf(get());
     const nextRotation = object.rotationY + direction * Math.PI / 2;
     const others = get().objects.filter((o) => o.id !== id);
-    const resolved = resolveRotationPlacement(object, nextRotation, get().room, others);
+    const resolved = resolveRotationPlacement(object, nextRotation, architectureRoom(get()), others);
     set((state) => ({
       objects: state.objects.map((o) => o.id === id ? { ...o, rotationY: resolved.rotationY } : o),
       activeSnap: { kind: 'none' },
@@ -496,7 +631,7 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
     const twoPi = Math.PI * 2;
     const normalizedRotation = ((rotationY % twoPi) + twoPi) % twoPi;
     const others = get().objects.filter((o) => o.id !== id);
-    const resolved = resolveRotationPlacement(object, normalizedRotation, get().room, others);
+    const resolved = resolveRotationPlacement(object, normalizedRotation, architectureRoom(get()), others);
     set((state) => ({
       objects: state.objects.map((o) => o.id === id ? { ...o, rotationY: resolved.rotationY } : o),
       activeSnap: { kind: 'none' },
@@ -514,7 +649,9 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
 
   addOpening: (type) => {
     const before = snapshotOf(get());
-    let wall = get().selectedWallId ? getWall(get().room, get().selectedWallId!) : null;
+    let wall: { id: string; length: number } | null = type !== 'window' && get().selectedDividerId
+      ? resolveDividers(get().room, get().dividers).find((divider) => divider.id === get().selectedDividerId && divider.kind === 'wall') ?? null
+      : get().selectedWallId ? getWall(get().room, get().selectedWallId!) : null;
     if (!wall) {
       const preferred = getRoomWalls(get().room).filter((w) => type === 'door' ? !w.horizontal : w.horizontal);
       wall = [...(preferred.length ? preferred : getRoomWalls(get().room))].sort((a, b) => b.length - a.length)[0] ?? null;
@@ -522,6 +659,7 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
     if (!wall) return;
     const variant = defaultOpeningVariant(type);
     const preset = openingPreset(type, variant, get().room);
+    if (type === 'opening' && wall.id.startsWith('divider-')) { preset.height = Math.min(get().room.height, 2.1); preset.sillHeight = 0; }
     const opening: RoomOpening = normalizeOpening({
       id: `${type}-${crypto.randomUUID().slice(0, 8)}`,
       type,
@@ -529,33 +667,51 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
       wallId: wall.id,
       offset: wall.length / 2,
       ...preset
-    }, get().room);
+    }, get().room, get().dividers);
+    if (wall.id.startsWith('divider-')) {
+      const possible = Array.from({ length: Math.ceil(wall.length / 0.05) + 1 }, (_, index) => index * 0.05)
+        .sort((a, b) => Math.abs(a - wall!.length / 2) - Math.abs(b - wall!.length / 2));
+      const offset = possible.find((value) => validateInteriorOpenings(get().room, get().dividers, [...get().openings, { ...opening, offset: value }]));
+      if (offset == null) return;
+      opening.offset = offset;
+    }
     set((state) => ({ openings: [...state.openings, opening], selectedOpeningId: opening.id, selectedWallId: wall!.id, selectedId: null }));
     history.push(before);
   },
 
   selectOpening: (id) => {
     const opening = get().openings.find((o) => o.id === id);
-    set({ selectedOpeningId: id, selectedWallId: opening?.wallId ?? null, selectedId: null });
+    set({ selectedOpeningId: id, selectedWallId: opening?.wallId ?? null,
+      selectedDividerId: opening?.wallId.startsWith('divider-') ? opening.wallId : null, selectedSpaceId: null, selectedId: null });
   },
   updateOpening: (id, patch, recordHistory = true) => {
     // Live opening drags/sliders call this with recordHistory=false. Avoid cloning the
     // complete project on every pointer event; the interaction already captured one
     // snapshot at drag start and commits it once on pointer-up.
     const before = recordHistory ? snapshotOf(get()) : null;
-    set((state) => ({ openings: state.openings.map((o) => {
+    const state = get();
+    const openings = state.openings.map((o) => {
       if (o.id !== id) return o;
       const nextType = patch.type ?? o.type;
+      if (nextType === 'window' && (patch.wallId ?? o.wallId).startsWith('divider-')) return o;
       const nextVariant = patch.variant ?? (patch.type && patch.type !== o.type ? defaultOpeningVariant(nextType) : o.variant);
       const shouldPreset = patch.variant != null || (patch.type != null && patch.type !== o.type);
-      const preset = shouldPreset ? openingPreset(nextType, nextVariant, state.room) : {};
-      return normalizeOpening({ ...o, ...preset, ...patch, type: nextType, variant: nextVariant }, state.room);
-    }) }));
+      const preset: Partial<Pick<RoomOpening, 'width' | 'height' | 'sillHeight'>> = shouldPreset ? openingPreset(nextType, nextVariant, state.room) : {};
+      if (nextType === 'opening' && o.wallId.startsWith('divider-') && shouldPreset) {
+        preset.height = Math.min(state.room.height, 2.1);
+        preset.sillHeight = 0;
+      }
+      return normalizeOpening({ ...o, ...preset, ...patch, type: nextType, variant: nextVariant }, state.room, state.dividers);
+    });
+    if (!validInteriorArchitecture({ ...state, openings })) return;
+    set({ openings });
     if (before) history.push(before);
   },
   removeOpening: (id) => {
     const before = snapshotOf(get());
-    set((state) => ({ openings: state.openings.filter((o) => o.id !== id), selectedOpeningId: state.selectedOpeningId === id ? null : state.selectedOpeningId }));
+    const openings = get().openings.filter((o) => o.id !== id);
+    if (!validInteriorArchitecture({ ...before, openings })) return;
+    set((state) => ({ openings, selectedOpeningId: state.selectedOpeningId === id ? null : state.selectedOpeningId }));
     history.push(before);
   },
 
@@ -564,21 +720,29 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
   undo: () => {
     const current = snapshotOf(get());
     const next = history.undo(current);
-    if (next) set({ ...normalizeSnapshot(next), selectedId: null, selectedOpeningId: null, selectedWallId: null, activeSnap: { kind: 'none' }, collisionId: null, collisionPush: false });
+    if (next) set({ ...normalizeSnapshot(next), selectedId: null, selectedOpeningId: null, selectedWallId: null, selectedDividerId: null, selectedSpaceId: null, activeSnap: { kind: 'none' }, collisionId: null, collisionPush: false });
   },
   redo: () => {
     const current = snapshotOf(get());
     const next = history.redo(current);
-    if (next) set({ ...normalizeSnapshot(next), selectedId: null, selectedOpeningId: null, selectedWallId: null, activeSnap: { kind: 'none' }, collisionId: null, collisionPush: false });
+    if (next) set({ ...normalizeSnapshot(next), selectedId: null, selectedOpeningId: null, selectedWallId: null, selectedDividerId: null, selectedSpaceId: null, activeSnap: { kind: 'none' }, collisionId: null, collisionPush: false });
   },
 
-  saveLocal: () => localStorage.setItem('room-planner-project-v3', JSON.stringify(snapshotOf(get()))),
+  saveLocal: () => localStorage.setItem('room-planner-project-v4', JSON.stringify(snapshotOf(get()))),
   loadLocal: () => {
-    const raw = localStorage.getItem('room-planner-project-v3') ?? localStorage.getItem('room-planner-project-v2') ?? localStorage.getItem('room-planner-project');
+    const raw = localStorage.getItem('room-planner-project-v4') ?? localStorage.getItem('room-planner-project-v3') ?? localStorage.getItem('room-planner-project-v2') ?? localStorage.getItem('room-planner-project');
     if (!raw) return false;
     try {
       const parsed = JSON.parse(raw) as Partial<PlannerSnapshot> & { room?: Partial<RoomState>; openings?: Array<RoomOpening & { wall?: RoomWall }> };
       if (!parsed.room || !Array.isArray(parsed.objects)) return false;
+      if (parsed.spaces != null && (!Array.isArray(parsed.spaces) || !parsed.spaces.every((space) => space
+        && typeof space.id === 'string' && typeof space.name === 'string' && space.seed
+        && Number.isFinite(space.seed.x) && Number.isFinite(space.seed.z))
+        || new Set(parsed.spaces.map((space) => space.id)).size !== parsed.spaces.length)) return false;
+      if (parsed.openings != null && (!Array.isArray(parsed.openings) || !parsed.openings.every((opening) => opening
+        && typeof opening.id === 'string' && ['door', 'window', 'opening'].includes(opening.type)
+        && Number.isFinite(opening.width) && opening.width > 0 && Number.isFinite(opening.height) && opening.height > 0
+        && Number.isFinite(opening.offset) && Number.isFinite(opening.sillHeight) && opening.sillHeight >= 0))) return false;
       const migratedObjects = parsed.objects
         .map((object) => {
           const legacyId = String(object.productId);
@@ -594,11 +758,16 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
       const room = ensureRoom(parsed.room);
       const upgraded: PlannerSnapshot = {
         room,
-        openings: Array.isArray(parsed.openings) ? parsed.openings.map((o) => normalizeOpening(o, room)) : [],
+        openings: Array.isArray(parsed.openings) ? parsed.openings : [],
+        dividers: Array.isArray(parsed.dividers) ? parsed.dividers : [],
+        spaces: Array.isArray(parsed.spaces) && parsed.spaces.length ? parsed.spaces : [{ ...defaultSpaces[0], seed: { x: (roomBounds(room.vertices).minX + roomBounds(room.vertices).maxX) / 2, z: (roomBounds(room.vertices).minZ + roomBounds(room.vertices).maxZ) / 2 }, floorFinish: room.floorFinish, wallColor: room.wallColor }],
         objects: migratedObjects,
         unplacedObjects
       };
-      set({ ...normalizeSnapshot(upgraded), selectedId: null, selectedOpeningId: null, selectedWallId: null, activeSnap: { kind: 'none' }, collisionId: null });
+      if (!validateDividers(room, upgraded.dividers)) return false;
+      if (!validateInteriorOpenings(room, upgraded.dividers, upgraded.openings)) return false;
+      if (!validInteriorArchitecture(normalizeSnapshot(upgraded))) return false;
+      set({ ...normalizeSnapshot(upgraded), selectedId: null, selectedOpeningId: null, selectedWallId: null, selectedDividerId: null, selectedSpaceId: null, activeSnap: { kind: 'none' }, collisionId: null });
       return true;
     } catch {
       return false;
@@ -610,11 +779,15 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
     set({
       room: structuredClone(defaultRoom),
       openings: structuredClone(defaultOpenings),
+      dividers: [],
+      spaces: structuredClone(defaultSpaces),
       objects: [],
       unplacedObjects: [],
       selectedId: null,
       selectedOpeningId: null,
       selectedWallId: null,
+      selectedDividerId: null,
+      selectedSpaceId: null,
       activeSnap: { kind: 'none' },
       collisionId: null,
       collisionPush: false,

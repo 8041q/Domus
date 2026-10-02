@@ -15,6 +15,8 @@ runs with Vite during local development and preview.
 - Start from rectangle, angled-corner, L-shaped, or recessed room templates.
 - Drag walls and corners in a dimensioned 2D workspace; split a wall by adding a
   corner.
+- Draw connected interior walls or open boundaries to create named spaces.
+- New spaces inherit their containing space’s finishes automatically; place doors in interior walls.
 - Work in metric or imperial units.
 - Add, position, resize, and restyle windows, doors, and custom openings.
 - Inspect the architecture in a neutral 3D preview. Direct sun rays are
@@ -29,6 +31,8 @@ runs with Vite during local development and preview.
 - Toggle room, product, spacing, and clearance annotations.
 - Change PBR floor finishes, wall and ceiling colours, baseboard styles, and
   ceiling-light settings.
+- Select a space to edit its name, floor finish and wall colour. Move the Design
+  and Room finishes popout panels by their headers; each remembers its location.
 - Enable paired suns or just cinematic sun shadows in rooms with
   glazed openings.
 - Ask the experimental AI assistant for layout advice or validated furniture
@@ -88,7 +92,7 @@ item opens its numeric controls for precise edits.
 ## Saving and export
 
 In the header, **Project → Save room** stores one project snapshot in this browser under
-`room-planner-project-v3`; **Project → Load saved room** restores it. Older local snapshot keys are
+`room-planner-project-v4`; **Project → Load saved room** restores it. Older local snapshot keys are
 accepted and normalized when possible. Clearing site data removes the save.
 There is no automatic save or cloud backup.
 

@@ -38,6 +38,8 @@ geometry and placement code therefore works without reading Three.js meshes.
 interface PlannerSnapshot {
   room: RoomState;
   openings: RoomOpening[];
+  dividers: InteriorDivider[];
+  spaces: NamedSpace[];
   objects: PlacedObject[];
 }
 ```
@@ -46,6 +48,9 @@ interface PlannerSnapshot {
   settings, and lighting settings.
 - Each opening belongs to a stable wall-segment ID and stores its wall offset,
   size, sill height, type, and architectural variant.
+- Interior dividers attach to perimeter walls or existing dividers. Physical walls
+  and invisible boundaries form a planar graph; its bounded faces are named spaces
+  with independent floor finishes and wall colours.
 - Each placed object references a catalogue product and stores position and Y
   rotation.
 
@@ -59,7 +64,7 @@ non-exportable Web Crypto key; they never travel with room saves or GLB files.
 The store normalizes loaded data, supplies defaults for fields added after an
 older save, remaps known legacy product IDs, and projects furniture back into a
 valid room position when possible. The active key is
-`room-planner-project-v3`; two older keys remain readable.
+`room-planner-project-v4`; older keys remain readable and load as one space.
 Legacy sun-style values are also mapped to the corrected style names while
 preserving the lighting each saved room displayed.
 
@@ -72,9 +77,14 @@ gesture.
 ### Build Room
 
 Build Room owns room topology and architectural openings. Its 2D canvas handles
-wall, corner, opening, and split-wall interactions against a world-anchored
+wall, corner, opening, divider, and split-wall interactions against a world-anchored
 drafting grid. Wall edits preserve world coordinates; angled walls and negative
 coordinates are valid.
+
+Divider edits commit immediately, assigning stable space IDs and automatically
+inheriting the containing space’s finishes for new faces. Names and finishes are
+edited in Plan Room. Interior wall endpoints remain attached to their supporting
+boundaries when the perimeter moves.
 
 The optional 3D preview uses the same `PlannerScene`, with furniture interaction
 off and architectural picking on. It always passes `sunRays={false}`, so editing
@@ -87,6 +97,22 @@ Plan Room owns finishes, presentation, and furniture layout. The catalogue is
 defined as semantic product data with dimensions, collision footprints,
 interaction tags, wall affinity, and clearances. Models are currently generated
 procedurally by the renderer.
+
+The top-left editing-space selector controls finish edits and new furniture
+placement. Selecting a floor or an existing item also selects its space; the
+finishes panel opens from its toolbar button. Space and divider
+changes schedule a scene refresh, including floor materials and per-side wall
+colours. Design and Room finishes use the same draggable panel component; each
+stores its position in local storage and clamps it to the available workspace
+when reopened or resized. These UI preferences are separate from project history.
+
+New furniture searches valid destinations inside the selected space without
+changing the camera preset. Items that cannot fit remain unplaced and can be
+retried after switching spaces. Invisible boundaries do not block furniture.
+
+Interior walls have invisible shadow geometry independent of camera cutaways.
+It blocks window sunlight and fill lights, with apertures for open passages and
+glazed door panes. Window fill lights use shadow maps when physical dividers exist.
 
 Placement resolves in core code before rendering. It keeps oriented footprints
 inside arbitrary room polygons, applies magnetic wall/object/centre snaps, and
@@ -101,10 +127,12 @@ wall/corner movement, centred wall resizing, splitting, and room scaling.
 clearance regions, and spacing measurements. These deterministic functions are
 shared by the 2D and 3D interfaces and are the authority for future automation.
 
-Walls are rebuilt from the semantic polygon. Openings create real voids and
+Perimeter walls are rebuilt from the semantic polygon; interior walls are built
+from divider edges. Openings create real voids and
 their frames, glazing, thresholds, and baseboard interruptions are derived from
-the opening definition. Floor textures use metre-based UVs so room resizing
-does not stretch them.
+the opening definition. Spaces receive separate floor surfaces with metre-based
+UVs; differently finished spaces meet cleanly at open boundaries and use the
+existing door material for an interior doorway threshold.
 
 ## Experimental AI path
 

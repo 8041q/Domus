@@ -1,5 +1,8 @@
 import type { BaseboardStyle, RoomOpening } from './types';
 
+/** Existing door leaf finish, also used by thresholds between floor finishes. */
+export const DOOR_LEAF_COLOR = 0xcbbca7;
+
 export type GlazingArea = { left: number; right: number; bottom: number; top: number };
 
 export const BASEBOARD_STYLES: Array<{

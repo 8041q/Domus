@@ -1,4 +1,5 @@
 import { PRODUCTS } from './products';
+import { getPhysicalWalls, resolveDividers } from './spaces';
 import {
   getRoomWalls,
   getWall,
@@ -17,6 +18,44 @@ import type {
   SnapFeedback,
   Vec2
 } from './types';
+import type { InteriorDivider, RoomOpening } from './types';
+
+export type ArchitectureRoom = RoomState & { dividers?: InteriorDivider[]; openings?: RoomOpening[] };
+const physicalWalls = (room: ArchitectureRoom) => getPhysicalWalls(room, room.dividers ?? []);
+
+function solidDividerRuns(room: ArchitectureRoom, objectHeight = 0) {
+  const walls = resolveDividers(room, room.dividers ?? []).filter((divider) => divider.kind === 'wall');
+  return walls.flatMap((wall) => {
+    const openings = (room.openings ?? []).filter((opening) => opening.wallId === wall.id && opening.sillHeight < 0.03 && opening.height >= objectHeight - 0.0005)
+      .map((opening) => ({ start: Math.max(0, opening.offset - opening.width / 2), end: Math.min(wall.length, opening.offset + opening.width / 2) }))
+      .sort((a, b) => a.start - b.start);
+    const runs: Array<{ a: Vec2; b: Vec2 }> = [];
+    let cursor = 0;
+    const point = (distance: number) => ({ x: wall.a.x + (wall.b.x - wall.a.x) * distance / wall.length,
+      z: wall.a.z + (wall.b.z - wall.a.z) * distance / wall.length });
+    for (const opening of openings) {
+      if (opening.start > cursor) runs.push({ a: point(cursor), b: point(opening.start) });
+      cursor = Math.max(cursor, opening.end);
+    }
+    if (cursor < wall.length) runs.push({ a: point(cursor), b: point(wall.length) });
+    return runs;
+  });
+}
+
+function runPolygon(run: { a: Vec2; b: Vec2 }, halfThickness = 0.025) {
+  const dx = run.b.x - run.a.x, dz = run.b.z - run.a.z;
+  const length = Math.hypot(dx, dz) || 1;
+  const nx = -dz / length * halfThickness, nz = dx / length * halfThickness;
+  return [
+    { x: run.a.x + nx, z: run.a.z + nz }, { x: run.b.x + nx, z: run.b.z + nz },
+    { x: run.b.x - nx, z: run.b.z - nz }, { x: run.a.x - nx, z: run.a.z - nz }
+  ];
+}
+
+function wallHasSolidAt(room: ArchitectureRoom, wallId: string, along: number, objectHeight = 0) {
+  return !(room.openings ?? []).some((opening) => opening.wallId === wallId && opening.sillHeight < 0.03 && opening.height >= objectHeight - 0.0005
+    && along > opening.offset - opening.width / 2 && along < opening.offset + opening.width / 2);
+}
 
 export interface PlacementOptions {
   enterSnapDistance?: number;
@@ -164,7 +203,7 @@ function makeFeedback(x?: Candidate, z?: Candidate): SnapFeedback {
   return { kind: one.kind, x, z, label: one.label };
 }
 
-function objectFitsVisibleRoom(candidate: PlacedObject, room: RoomState) {
+function objectFitsVisibleRoom(candidate: PlacedObject, room: ArchitectureRoom) {
   const footprint = objectFootprintCorners(candidate);
   if (!pointInRoom({ x: candidate.x, z: candidate.z }, room) || !footprint.every((point) => pointInRoom(point, room))) return false;
 
@@ -179,6 +218,9 @@ function objectFitsVisibleRoom(candidate: PlacedObject, room: RoomState) {
     const inwardProjection = footprintProjectionFromOrigin(candidate, wall.inward);
     const required = -inwardProjection.min + WALL_FACE_INSET;
     if (signedOrigin < required - 0.00075) return false;
+  }
+  for (const run of solidDividerRuns(room, PRODUCTS[candidate.productId].height)) {
+    if (polygonsOverlap(footprint, runPolygon(run))) return false;
   }
   return true;
 }
@@ -309,10 +351,14 @@ function supportAlong(object: PlacedObject, normal: Vec2) {
   return -footprintProjectionFromOrigin(object, normal).min;
 }
 
-function nearestContactWall(object: PlacedObject, room: RoomState, extra = 0.04) {
+function nearestContactWall(object: PlacedObject, room: ArchitectureRoom, extra = 0.04) {
   let best: { wall: ReturnType<typeof getRoomWalls>[number]; gap: number } | null = null;
-  for (const wall of getRoomWalls(room)) {
+  for (const baseWall of physicalWalls(room)) {
+    const signed = (object.x - baseWall.start.x) * baseWall.inward.x + (object.z - baseWall.start.z) * baseWall.inward.z;
+    const wall = baseWall.id.startsWith('divider-') && signed < 0
+      ? { ...baseWall, inward: { x: -baseWall.inward.x, z: -baseWall.inward.z } } : baseWall;
     const along = (object.x - wall.start.x) * wall.tangent.x + (object.z - wall.start.z) * wall.tangent.z;
+    if (wall.id.startsWith('divider-') && !wallHasSolidAt(room, wall.id, along, PRODUCTS[object.productId].height)) continue;
     const tangentProjection = footprintProjectionFromOrigin(object, wall.tangent);
     if (along + tangentProjection.max < -0.08 || along + tangentProjection.min > wall.length + 0.08) continue;
     const signedCentre = (object.x - wall.start.x) * wall.inward.x + (object.z - wall.start.z) * wall.inward.z;
@@ -469,7 +515,7 @@ function moveWithCollisionSlide(
 }
 
 function addWallSnapCandidates(
-  room: RoomState,
+  room: ArchitectureRoom,
   object: PlacedObject,
   x: number,
   z: number,
@@ -477,11 +523,15 @@ function addWallSnapCandidates(
   zCandidates: Candidate[]
 ) {
   const probe = { ...object, x, z };
-  for (const wall of getRoomWalls(room)) {
+  for (const baseWall of physicalWalls(room)) {
+    const signed = (x - baseWall.start.x) * baseWall.inward.x + (z - baseWall.start.z) * baseWall.inward.z;
+    const wall = baseWall.id.startsWith('divider-') && signed < 0
+      ? { ...baseWall, inward: { x: -baseWall.inward.x, z: -baseWall.inward.z } } : baseWall;
     // Axis snaps are deliberately only used when the wall itself is essentially axis aligned.
     // Angled walls are handled by spatial wall alignment so we never fake an X/Z snap to a diagonal.
     const tangentProjection = footprintProjectionFromOrigin(probe, wall.tangent);
     const along = (x - wall.start.x) * wall.tangent.x + (z - wall.start.z) * wall.tangent.z;
+    if (wall.id.startsWith('divider-') && !wallHasSolidAt(room, wall.id, along, PRODUCTS[object.productId].height)) continue;
     if (along + tangentProjection.max < -0.04 || along + tangentProjection.min > wall.length + 0.04) continue;
 
     const inwardProjection = footprintProjectionFromOrigin(probe, wall.inward);
@@ -770,7 +820,7 @@ function polygonsOverlap(a: Vec2[], b: Vec2[]) {
   });
 }
 
-export function clearanceIssues(object: PlacedObject, room: RoomState, others: PlacedObject[]): ClearanceIssue[] {
+export function clearanceIssues(object: PlacedObject, room: ArchitectureRoom, others: PlacedObject[]): ClearanceIssue[] {
   const regions = clearanceRegions(object);
   if (!regions.length) return [];
   const issues: ClearanceIssue[] = [];
@@ -790,6 +840,10 @@ export function clearanceIssues(object: PlacedObject, room: RoomState, others: P
         seen.add(key);
         issues.push({ type: 'room', message: `${region.side[0].toUpperCase()}${region.side.slice(1)} recommended clearance extends beyond the room.` });
       }
+    }
+    if (solidDividerRuns(room, PRODUCTS[object.productId].height).some((run) => polygonsOverlap(region.corners, runPolygon(run)))) {
+      const key = `wall-${region.side}`;
+      if (!seen.has(key)) { seen.add(key); issues.push({ type: 'room', message: `${region.side[0].toUpperCase()}${region.side.slice(1)} recommended clearance crosses an interior wall.` }); }
     }
     for (const other of others) {
       if (!objectsBlockEachOther(object, other)) continue;
@@ -845,8 +899,11 @@ function sideOriginAndDirection(object: PlacedObject, side: SpacingMeasurement['
   };
 }
 
-export function spacingMeasurements(object: PlacedObject, room: RoomState, others: PlacedObject[]): SpacingMeasurement[] {
-  const roomWalls = getRoomWalls(room);
+export function spacingMeasurements(object: PlacedObject, room: ArchitectureRoom, others: PlacedObject[]): SpacingMeasurement[] {
+  const roomWalls = [
+    ...getRoomWalls(room).map((wall) => ({ start: wall.start as Vec2, end: wall.end as Vec2 })),
+    ...solidDividerRuns(room, PRODUCTS[object.productId].height).map((run) => ({ start: run.a, end: run.b }))
+  ];
   const objectPolygons = others
     .filter((other) => objectsBlockEachOther(object, other))
     .map((other) => objectFootprintCorners(other));

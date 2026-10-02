@@ -54,6 +54,8 @@ export function Viewport3D({
         return {
           room: state.room,
           openings: state.openings,
+          dividers: state.dividers,
+          spaces: state.spaces,
           objects: state.objects,
           unplacedObjects: state.unplacedObjects,
           selectedId: state.selectedId,
@@ -67,6 +69,7 @@ export function Viewport3D({
         };
       },
       select: (id) => usePlannerStore.getState().select(id),
+      selectSpace: (id) => usePlannerStore.getState().selectSpace(id),
       selectOpening: (id) => usePlannerStore.getState().selectOpening(id),
       updateObject: (id, patch) => usePlannerStore.getState().updateObject(id, patch),
       updateOpening: (id, patch, recordHistory = true) => usePlannerStore.getState().updateOpening(id, patch, recordHistory),
@@ -90,6 +93,8 @@ export function Viewport3D({
     let syncFrame = 0;
     const unsubscribe = usePlannerStore.subscribe((state, previous) => {
       const sceneStateChanged = state.room !== previous.room
+        || state.spaces !== previous.spaces
+        || state.dividers !== previous.dividers
         || state.openings !== previous.openings
         || (furniture && state.objects !== previous.objects)
         || (furniture && state.selectedId !== previous.selectedId)

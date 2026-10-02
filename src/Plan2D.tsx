@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { PRODUCTS, rotatedFootprint } from './core/products';
+import { floorFinishDefinition } from './core/roomFinishes';
+import { DOOR_LEAF_COLOR } from './core/architecturalStyles';
+import { architectureRoom, closestBoundaryAnchor, deriveSpaces, getPhysicalWalls, interiorDoorHasThreshold, resolveDividers, spaceAtPoint } from './core/spaces';
 import { clearanceAabb, resolvePlacement } from './core/placement';
 import {
   distanceToWall,
@@ -14,7 +17,7 @@ import {
   vertexInteriorAngle
 } from './core/roomGeometry';
 import { dimensionStepMetres, displayLengthValue, displayValueToMetres, formatLength, lengthInputSuffix } from './core/units';
-import type { PlannerSnapshot, RoomOpening, RoomVertex, SnapFeedback, Vec2 } from './core/types';
+import type { DividerAnchor, PlannerSnapshot, RoomOpening, RoomVertex, SnapFeedback, Vec2 } from './core/types';
 import { getSnapshot, usePlannerStore } from './store';
 import { themeColor, themeMetric, themeRgba } from './theme';
 
@@ -33,7 +36,8 @@ type DragState =
   | { type: 'corner'; id: string; before: PlannerSnapshot; view: DragView }
   | { type: 'pan'; view: DragView; lastX: number; lastY: number }
   | { type: 'object'; id: string; before: PlannerSnapshot; snap: SnapFeedback }
-  | { type: 'opening'; id: string; before: PlannerSnapshot; view: DragView };
+  | { type: 'opening'; id: string; before: PlannerSnapshot; view: DragView }
+  | { type: 'divider-end'; id: string; end: 'start' | 'end'; before: PlannerSnapshot; view: DragView };
 
 type HoverTarget = { type: 'wall' | 'corner' | 'opening' | 'split'; id: string } | null;
 
@@ -149,8 +153,8 @@ function splitPointPx(wall: RoomWall, scale: number, ox: number, oz: number) {
   };
 }
 
-function openingPoints(opening: RoomOpening, room: PlannerSnapshot['room']) {
-  const wall = getWall(room, opening.wallId);
+function openingPoints(opening: RoomOpening, room: PlannerSnapshot['room'], dividers: PlannerSnapshot['dividers'] = []) {
+  const wall = getPhysicalWalls(room, dividers).find((candidate) => candidate.id === opening.wallId);
   if (!wall) return null;
   const half = opening.width / 2;
   return {
@@ -170,11 +174,15 @@ function pointSegmentDistance(px: number, py: number, x1: number, y1: number, x2
   return Math.hypot(px - (x1 + dx * t), py - (y1 + dy * t));
 }
 
-export function Plan2D({ purpose }: { purpose: Purpose }) {
+export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpose: Purpose; dividerTool?: 'wall' | 'open' | null; onDividerAdded?: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const room = usePlannerStore((s) => s.room);
   const measurementSystem = usePlannerStore((s) => s.measurementSystem);
   const openings = usePlannerStore((s) => s.openings);
+  const dividers = usePlannerStore((s) => s.dividers);
+  const spaces = usePlannerStore((s) => s.spaces);
+  const selectedDividerId = usePlannerStore((s) => s.selectedDividerId);
+  const selectedSpaceId = usePlannerStore((s) => s.selectedSpaceId);
   const objects = usePlannerStore((s) => s.objects);
   const selectedId = usePlannerStore((s) => s.selectedId);
   const selectedOpeningId = usePlannerStore((s) => s.selectedOpeningId);
@@ -184,6 +192,11 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
   const select = usePlannerStore((s) => s.select);
   const selectOpening = usePlannerStore((s) => s.selectOpening);
   const selectWall = usePlannerStore((s) => s.selectWall);
+  const selectDivider = usePlannerStore((s) => s.selectDivider);
+  const selectSpace = usePlannerStore((s) => s.selectSpace);
+  const addDivider = usePlannerStore((s) => s.addDivider);
+  const updateDivider = usePlannerStore((s) => s.updateDivider);
+  const syncSpaces = usePlannerStore((s) => s.syncSpaces);
   const updateObject = usePlannerStore((s) => s.updateObject);
   const updateOpening = usePlannerStore((s) => s.updateOpening);
   const setRoomVertices = usePlannerStore((s) => s.setRoomVertices);
@@ -193,6 +206,11 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
   const setFeedback = usePlannerStore((s) => s.setFeedback);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [hover, setHover] = useState<HoverTarget>(null);
+  const [drawStart, setDrawStart] = useState<{ anchor: DividerAnchor; point: Vec2 } | null>(null);
+  const [drawHover, setDrawHover] = useState<Vec2 | null>(null);
+  const [dividerError, setDividerError] = useState('');
+
+  useEffect(() => { setDrawStart(null); setDrawHover(null); setDividerError(''); }, [dividerTool]);
   const [resizeTick, setResizeTick] = useState(0);
   const viewRef = useRef<(ViewTransform & { width: number; height: number }) | null>(null);
   const splitPositionsRef = useRef(new Map<string, { x: number; y: number }>());
@@ -407,6 +425,25 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
     ctx.fillStyle = '#ffffff';
     ctx.fill(roomPath);
 
+    const derivedSpaces = deriveSpaces({ room, openings, dividers, spaces, objects, unplacedObjects: [] });
+    for (const space of derivedSpaces) {
+      const path = new Path2D();
+      space.polygon.forEach((vertex, index) => {
+        const point = toPx(vertex.x, vertex.z);
+        if (index === 0) path.moveTo(point.x, point.y); else path.lineTo(point.x, point.y);
+      });
+      path.closePath();
+      ctx.globalAlpha = purpose === 'build' && selectedSpaceId === space.id ? 0.24 : 0.12;
+      ctx.fillStyle = floorFinishDefinition(space.floorFinish).fallbackColor;
+      ctx.fill(path);
+      ctx.globalAlpha = 1;
+      const label = toPx(space.seed.x, space.seed.z);
+      ctx.fillStyle = '#52525b';
+      ctx.font = '600 11px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(space.name, label.x, label.y);
+    }
+
     if (purpose === 'plan' && selected && showClearance) {
       const zone = clearanceAabb(selected);
       ctx.save();
@@ -457,9 +494,28 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
     }
 
+    for (const divider of resolveDividers(room, dividers)) {
+      const a = toPx(divider.a.x, divider.a.z), b = toPx(divider.b.x, divider.b.z);
+      ctx.save();
+      if (divider.kind === 'open') ctx.setLineDash([7, 5]);
+      ctx.lineWidth = divider.id === selectedDividerId ? 6 : divider.kind === 'wall' ? 5 : 2;
+      ctx.strokeStyle = divider.id === selectedDividerId ? interactionStrong : divider.kind === 'wall' ? '#27272a' : '#8b8b95';
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      if (purpose === 'build' && divider.id === selectedDividerId) {
+        ctx.setLineDash([]);
+        for (const point of [a, b]) { ctx.beginPath(); ctx.arc(point.x, point.y, 6, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill(); ctx.stroke(); }
+      }
+      ctx.restore();
+    }
+    if (purpose === 'build' && drawStart && drawHover) {
+      const a = toPx(drawStart.point.x, drawStart.point.z), b = toPx(drawHover.x, drawHover.z);
+      ctx.save(); ctx.setLineDash(dividerTool === 'open' ? [7, 5] : []); ctx.lineWidth = 4; ctx.strokeStyle = interaction;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); ctx.restore();
+    }
+
     // Openings erase a clean gap in the wall and then draw their own symbol.
     for (const opening of openings) {
-      const points = openingPoints(opening, room);
+      const points = openingPoints(opening, room, dividers);
       if (!points) continue;
       const a = toPx(points.start.x, points.start.z);
       const b = toPx(points.end.x, points.end.z);
@@ -468,6 +524,11 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
       ctx.strokeStyle = '#fff';
       ctx.lineWidth = 9;
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      if (interiorDoorHasThreshold({ room, openings, dividers, spaces, objects, unplacedObjects: [] }, opening)) {
+        ctx.strokeStyle = `#${DOOR_LEAF_COLOR.toString(16)}`;
+        ctx.lineWidth = Math.max(6, scale * 0.09);
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      }
       const hoveredOpening = purpose === 'build' && hover?.type === 'opening' && hover.id === opening.id;
       const draggingOpening = purpose === 'build' && drag?.type === 'opening' && drag.id === opening.id;
       const baseOpeningColor = opening.type === 'window' ? '#71717a' : opening.type === 'door' ? '#52525b' : '#71717a';
@@ -899,7 +960,7 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
         ctx.restore();
       }
     }
-  }, [activeSnap, drag, hover, measurementSystem, objects, openings, purpose, resizeTick, room, selected, selectedId, selectedOpeningId, selectedWallId, showClearance]);
+  }, [activeSnap, drag, hover, measurementSystem, objects, openings, dividers, spaces, purpose, resizeTick, room, selected, selectedId, selectedOpeningId, selectedWallId, selectedDividerId, selectedSpaceId, showClearance, drawStart, drawHover, dividerTool]);
 
   const hitWallLabel = (px: number, py: number) => {
     for (const [wallId, rect] of wallLabelRectsRef.current) {
@@ -940,12 +1001,28 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
 
   const hitOpening = (px: number, py: number, scale: number, ox: number, oz: number) => {
     return [...openings].reverse().find((opening) => {
-      const points = openingPoints(opening, room);
+      const points = openingPoints(opening, room, dividers);
       if (!points) return false;
       const a = { x: ox + points.start.x * scale, y: oz + points.start.z * scale };
       const b = { x: ox + points.end.x * scale, y: oz + points.end.z * scale };
       return pointSegmentDistance(px, py, a.x, a.y, b.x, b.y) <= 13;
     });
+  };
+
+  const hitDividerEnd = (px: number, py: number, scale: number, ox: number, oz: number) => {
+    for (const divider of [...resolveDividers(room, dividers)].reverse()) {
+      for (const end of ['start', 'end'] as const) {
+        const point = end === 'start' ? divider.a : divider.b;
+        if (Math.hypot(px - (ox + point.x * scale), py - (oz + point.z * scale)) <= 12) return { id: divider.id, end };
+      }
+    }
+    return null;
+  };
+
+  const hitDivider = (px: number, py: number, scale: number, ox: number, oz: number) => {
+    return [...resolveDividers(room, dividers)].reverse().find((divider) =>
+      pointSegmentDistance(px, py, ox + divider.a.x * scale, oz + divider.a.z * scale,
+        ox + divider.b.x * scale, oz + divider.b.z * scale) <= 11) ?? null;
   };
 
   const hitCorner = (px: number, py: number, scale: number, ox: number, oz: number) => {
@@ -1017,6 +1094,27 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
     };
 
     if (purpose === 'build') {
+      if (dividerTool) {
+        const target = closestBoundaryAnchor(room, dividers, { x: (px - ox) / scale, z: (py - oz) / scale }, 16 / scale);
+        if (!target) { setDividerError('Start and end each divider on an existing boundary.'); return; }
+        if (!drawStart) { setDrawStart({ anchor: target.anchor, point: target.point }); setDividerError(''); }
+        else {
+          if (!addDivider(dividerTool, drawStart.anchor, target.anchor)) setDividerError('This divider does not create a valid separate space.');
+          else { setDividerError(''); setDrawStart(null); setDrawHover(null); onDividerAdded?.(); }
+        }
+        return;
+      }
+      const dividerEnd = hitDividerEnd(px, py, scale, ox, oz);
+      if (dividerEnd) {
+        selectDivider(dividerEnd.id);
+        setDrag({ type: 'divider-end', ...dividerEnd, before, view });
+        e.currentTarget.setPointerCapture(e.pointerId);
+        return;
+      }
+      const divider = hitDivider(px, py, scale, ox, oz);
+      // Door gaps sit on their divider's centreline. Let the opening hit test
+      // select and drag them before selecting the surrounding wall.
+      if (divider && !hitOpening(px, py, scale, ox, oz)) { selectDivider(divider.id); return; }
       const wallLabel = hitWallLabel(px, py);
       if (wallLabel) {
         // Prevent the canvas pointer-down default action from stealing focus back
@@ -1059,6 +1157,8 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
       }
       selectOpening(null);
       selectWall(null);
+      const space = spaceAtPoint(before, { x: (px - ox) / scale, z: (py - oz) / scale });
+      if (space) selectSpace(space.id);
       setDrag({ type: 'pan', view, lastX: px, lastY: py });
       e.currentTarget.style.cursor = 'grab';
       e.currentTarget.setPointerCapture(e.pointerId);
@@ -1086,6 +1186,12 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
     const py = e.clientY - rect.top;
 
     if (!drag) {
+      if (purpose === 'build' && dividerTool && drawStart) {
+        const target = closestBoundaryAnchor(room, dividers, { x: (px - ox) / scale, z: (py - oz) / scale }, 16 / scale);
+        setDrawHover(target?.point ?? { x: (px - ox) / scale, z: (py - oz) / scale });
+        e.currentTarget.style.cursor = 'crosshair';
+        return;
+      }
       if (purpose === 'build') updateBuildHover(e.currentTarget, px, py, scale, ox, oz);
       return;
     }
@@ -1108,10 +1214,15 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
       return;
     }
     const world = { x: (px - ox) / scale, z: (py - oz) / scale };
+    if (drag.type === 'divider-end') {
+      const target = closestBoundaryAnchor(room, drag.before.dividers, world, 18 / scale, drag.id);
+      if (target) updateDivider(drag.id, { [drag.end]: target.anchor }, false);
+      return;
+    }
     if (drag.type === 'opening') {
       const opening = openings.find((o) => o.id === drag.id);
       if (!opening) return;
-      const wall = getWall(room, opening.wallId);
+      const wall = getPhysicalWalls(room, dividers).find((candidate) => candidate.id === opening.wallId);
       if (!wall) return;
       const raw = wallProjectionDistance(wall, world);
       const next = Math.max(opening.width / 2 + 0.05, Math.min(raw, wall.length - opening.width / 2 - 0.05));
@@ -1123,7 +1234,7 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
       if (!obj) return;
       const others = objects.filter((o) => o.id !== obj.id);
       const freeMove = e.shiftKey;
-      const resolved = resolvePlacement(obj, world.x, world.z, room, others, {
+      const resolved = resolvePlacement(obj, world.x, world.z, architectureRoom(getSnapshot()), others, {
         previousSnap: freeMove ? undefined : drag.snap,
         enterSnapDistance: freeMove ? 0 : undefined,
         exitSnapDistance: freeMove ? 0 : undefined,
@@ -1141,7 +1252,8 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
     if (e && (drag.type === 'wall' || drag.type === 'corner')) {
       moveDraggedRoom(drag, e.clientX - drag.view.rect.left, e.clientY - drag.view.rect.top, e.shiftKey);
     }
-    if (drag.type !== 'pan') commitSnapshot(drag.before);
+    if (drag.type === 'divider-end' || drag.type === 'wall' || drag.type === 'corner') syncSpaces(drag.before);
+    else if (drag.type !== 'pan') commitSnapshot(drag.before);
     setDrag(null);
     setFeedback({ kind: 'none' }, null, false);
     if (e && purpose === 'build') e.currentTarget.style.cursor = 'default';
@@ -1171,6 +1283,7 @@ export function Plan2D({ purpose }: { purpose: Purpose }) {
           <button type="button" className="plan-fit-button" disabled={!!drag} onClick={fitView}>Fit room</button>
         </div>
       )}
+      {purpose === 'build' && dividerError && <div className="divider-error" role="status">{dividerError}</div>}
       {purpose === 'build' && wallLabelEdit && (
         <div
           style={{

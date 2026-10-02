@@ -50,7 +50,7 @@ export function roomTemplate(kind: Exclude<RoomShapeKind, 'custom'>, width: numb
   ];
 }
 
-export function polygonArea(vertices: RoomVertex[]) {
+export function polygonArea(vertices: Vec2[]) {
   let sum = 0;
   for (let i = 0; i < vertices.length; i += 1) {
     const a = vertices[i];
@@ -153,10 +153,8 @@ export function pointOnSegment(point: Vec2, a: Vec2, b: Vec2, epsilon = 1e-5) {
 
 export function pointInRoom(point: Vec2, room: RoomState, includeBoundary = true) {
   const vertices = room.vertices;
-  if (includeBoundary) {
-    for (let i = 0; i < vertices.length; i += 1) {
-      if (pointOnSegment(point, vertices[i], vertices[(i + 1) % vertices.length])) return true;
-    }
+  for (let i = 0; i < vertices.length; i += 1) {
+    if (pointOnSegment(point, vertices[i], vertices[(i + 1) % vertices.length])) return includeBoundary;
   }
   let inside = false;
   for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i, i += 1) {

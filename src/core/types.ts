@@ -92,6 +92,32 @@ export interface RoomWallSegment {
   inward: Vec2;
 }
 
+/** A divider endpoint stays attached when its supporting boundary moves. */
+export interface DividerAnchor {
+  kind: 'perimeter' | 'divider';
+  id: string;
+  /** Fraction of the supporting segment measured from its start. */
+  t: number;
+}
+
+export interface InteriorDivider {
+  id: string;
+  kind: 'wall' | 'open';
+  start: DividerAnchor;
+  end: DividerAnchor;
+}
+
+export interface NamedSpace {
+  /** Directed divider sides identify a space while its outline changes. */
+  boundaryKey?: string;
+  id: string;
+  name: string;
+  /** A point inside the space, used to retain its identity across geometry edits. */
+  seed: Vec2;
+  floorFinish: FloorFinish;
+  wallColor: string;
+}
+
 export type ProductKind =
   | 'sofa'
   | 'armchair'
@@ -175,6 +201,8 @@ export type UnplacedObject = Pick<PlacedObject, 'id' | 'productId'>;
 export interface PlannerSnapshot {
   room: RoomState;
   openings: RoomOpening[];
+  dividers: InteriorDivider[];
+  spaces: NamedSpace[];
   objects: PlacedObject[];
   unplacedObjects: UnplacedObject[];
 }

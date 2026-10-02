@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
 import { Plan2D } from './Plan2D';
 import { getRoomWalls, getWall, MIN_WALL_LENGTH, polygonArea } from './core/roomGeometry';
+import { deriveSpaces, getPhysicalWalls, resolveDividers } from './core/spaces';
 import { dimensionStepMetres, displayLengthValue, displayValueToMetres, formatArea, formatLength, lengthInputSuffix } from './core/units';
 import type { MeasurementSystem, OpeningVariant, RoomOpening, RoomShapeKind } from './core/types';
 import { getSnapshot, usePlannerStore } from './store';
@@ -156,6 +157,7 @@ function openingDisplayName(opening: RoomOpening, openings: RoomOpening[]) {
 
 function OpeningEditor({ opening }: { opening: RoomOpening }) {
   const room = usePlannerStore((s) => s.room);
+  const dividers = usePlannerStore((s) => s.dividers);
   const openings = usePlannerStore((s) => s.openings);
   const system = usePlannerStore((s) => s.measurementSystem);
   const updateOpening = usePlannerStore((s) => s.updateOpening);
@@ -165,8 +167,8 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
   const sizeBefore = useRef<ReturnType<typeof getSnapshot> | null>(null);
   const sliderRaf = useRef<number | null>(null);
   const pendingOffset = useRef(opening.offset);
-  const walls = useMemo(() => getRoomWalls(room), [room]);
-  const wall = getWall(room, opening.wallId);
+  const walls = useMemo(() => getPhysicalWalls(room, dividers).filter((segment) => opening.type !== 'window' || !!getWall(room, segment.id)), [room, dividers, opening.type]);
+  const wall = walls.find((candidate) => candidate.id === opening.wallId);
   const maxOffset = wall?.length ?? 1;
   const minOpeningWidth = opening.type === 'opening' ? 0.10 : 0.45;
   const minOpeningHeight = opening.type === 'opening' ? 0.10 : 0.40;
@@ -203,7 +205,7 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
       <div className="opening-editor-title">
         <div>
           <strong>{openingDisplayName(opening, openings)}</strong>
-          <span>{wall ? `Wall ${wall.index + 1} · ${formatLength(wall.length, system)}` : 'Selected opening'}</span>
+          <span>{wall ? `${wall.id.startsWith('divider-') ? 'Interior wall' : `Wall ${wall.index + 1}`} · ${formatLength(wall.length, system)}` : 'Selected opening'}</span>
         </div>
         <button className="text-danger" type="button" onClick={() => removeOpening(opening.id)}>Remove</button>
       </div>
@@ -213,7 +215,7 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
             value={opening.type}
             onChange={(e: ChangeEvent<HTMLSelectElement>) => updateOpening(opening.id, { type: e.target.value as RoomOpening['type'] })}
           >
-            <option value="window">Window</option>
+            <option value="window" disabled={opening.wallId.startsWith('divider-')}>Window</option>
             <option value="door">Door</option>
             <option value="opening">Wall opening</option>
           </select>
@@ -231,12 +233,12 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
         <select
           value={opening.wallId}
           onChange={(e: ChangeEvent<HTMLSelectElement>) => {
-            const nextWall = getWall(room, e.target.value);
+            const nextWall = walls.find((candidate) => candidate.id === e.target.value);
             if (nextWall) updateOpening(opening.id, { wallId: nextWall.id, offset: nextWall.length / 2 });
           }}
         >
           {walls.map((segment) => (
-            <option key={segment.id} value={segment.id}>Wall {segment.index + 1} · {formatLength(segment.length, system)}</option>
+            <option key={segment.id} value={segment.id}>{segment.id.startsWith('divider-') ? 'Interior wall' : `Wall ${segment.index + 1}`} · {formatLength(segment.length, system)}</option>
           ))}
         </select>
       </label>
@@ -305,13 +307,13 @@ function WallEditor({ wallId }: { wallId: string }) {
   const room = usePlannerStore((s) => s.room);
   const system = usePlannerStore((s) => s.measurementSystem);
   const resizeWallById = usePlannerStore((s) => s.resizeWallById);
-  const commitSnapshot = usePlannerStore((s) => s.commitSnapshot);
+  const syncSpaces = usePlannerStore((s) => s.syncSpaces);
   const sliderBefore = useRef<ReturnType<typeof getSnapshot> | null>(null);
   const wall = getWall(room, wallId);
   if (!wall) return null;
 
   const finishSlider = () => {
-    if (sliderBefore.current) commitSnapshot(sliderBefore.current);
+    if (sliderBefore.current) syncSpaces(sliderBefore.current);
     sliderBefore.current = null;
   };
 
@@ -346,8 +348,12 @@ function WallEditor({ wallId }: { wallId: string }) {
 
 export function BuildRoom() {
   const [resetViewRequest, setResetViewRequest] = useState(0);
+  const [dividerTool, setDividerTool] = useState<'wall' | 'open' | null>(null);
   const room = usePlannerStore((s) => s.room);
   const openings = usePlannerStore((s) => s.openings);
+  const dividers = usePlannerStore((s) => s.dividers);
+  const selectedDividerId = usePlannerStore((s) => s.selectedDividerId);
+  const selectedSpaceId = usePlannerStore((s) => s.selectedSpaceId);
   const placedFurnitureCount = usePlannerStore((s) => s.objects.length);
   const system = usePlannerStore((s) => s.measurementSystem);
   const selectedOpeningId = usePlannerStore((s) => s.selectedOpeningId);
@@ -359,16 +365,23 @@ export function BuildRoom() {
   const setRoomTemplate = usePlannerStore((s) => s.setRoomTemplate);
   const addOpening = usePlannerStore((s) => s.addOpening);
   const selectOpening = usePlannerStore((s) => s.selectOpening);
+  const selectSpace = usePlannerStore((s) => s.selectSpace);
+  const updateDivider = usePlannerStore((s) => s.updateDivider);
+  const removeDivider = usePlannerStore((s) => s.removeDivider);
   const setMode = usePlannerStore((s) => s.setMode);
   const selectedOpening = openings.find((o) => o.id === selectedOpeningId) ?? null;
   const roomArea = Math.abs(polygonArea(room.vertices));
+  const derivedSpaces = deriveSpaces(getSnapshot());
+  const selectedSpace = derivedSpaces.find((space) => space.id === selectedSpaceId) ?? null;
+  const selectedDivider = resolveDividers(room, dividers).find((divider) => divider.id === selectedDividerId) ?? null;
 
   const changeShape = (shape: Exclude<RoomShapeKind, 'custom'>) => {
     if (shape === room.shapeKind) return;
-    if (openings.length || placedFurnitureCount) {
+    if (openings.length || placedFurnitureCount || dividers.length) {
       const effects = [
         openings.length ? 'clear the current doors and windows' : '',
-        placedFurnitureCount ? 'remove placed furniture from the room (it will remain in Used furniture)' : ''
+        placedFurnitureCount ? 'remove placed furniture from the room (it will remain in Used furniture)' : '',
+        dividers.length ? 'remove interior divisions and their named spaces' : ''
       ].filter(Boolean).join(' and ');
       if (!window.confirm(`Changing the room shape will ${effects}. Continue?`)) return;
     }
@@ -402,8 +415,20 @@ export function BuildRoom() {
         </section>
 
         <section className="tool-section">
+          <div className="section-title-row"><div><span className="section-step">2</span><h2>Interior divisions</h2></div></div>
+          <div className="opening-quick-add" aria-label="Draw a division">
+            <button type="button" className={dividerTool === 'wall' ? 'selected' : ''} onClick={() => setDividerTool(dividerTool === 'wall' ? null : 'wall')}>Wall</button>
+            <button type="button" className={dividerTool === 'open' ? 'selected' : ''} onClick={() => setDividerTool(dividerTool === 'open' ? null : 'open')}>Open boundary</button>
+          </div>
+          <p className="hint compact-hint">{dividerTool ? 'Click two existing boundaries in the 2D plan to connect them.' : 'Draw a wall or an invisible boundary to create a named space.'}</p>
+          <div className="space-list">
+            {derivedSpaces.map((space) => <button key={space.id} type="button" className={selectedSpaceId === space.id ? 'selected' : ''} onClick={() => selectSpace(space.id)}>{space.name} · {formatArea(space.area, system)}</button>)}
+          </div>
+        </section>
+
+        <section className="tool-section">
           <div className="section-title-row">
-            <div><span className="section-step">2</span><h2>Dimensions</h2></div>
+            <div><span className="section-step">3</span><h2>Dimensions</h2></div>
             <div className="dimension-tools">
               <div className="unit-toggle" role="group" aria-label="Measurement units">
                 <button type="button" className={system === 'metric' ? 'active' : ''} onClick={() => setMeasurementSystem('metric')}>Metric</button>
@@ -418,7 +443,7 @@ export function BuildRoom() {
         </section>
 
         <section className="tool-section opening-section">
-          <div className="section-title-row"><div><span className="section-step">3</span><h2>Doors, windows & openings</h2></div></div>
+          <div className="section-title-row"><div><span className="section-step">4</span><h2>Doors, windows & openings</h2></div></div>
           <div className="opening-quick-add" aria-label="Add an opening">
             <button type="button" onClick={() => addOpening('door')}><span className="opening-add-mark" aria-hidden="true">+</span><span>Door</span></button>
             <button type="button" onClick={() => addOpening('window')}><span className="opening-add-mark" aria-hidden="true">+</span><span>Window</span></button>
@@ -451,6 +476,23 @@ export function BuildRoom() {
         <div className="builder-inspector-dock" aria-live="polite">
           {selectedOpening ? (
             <OpeningEditor opening={selectedOpening} />
+          ) : selectedDivider ? (
+            <div className="wall-editor">
+              <div className="opening-editor-title"><strong>{selectedDivider.kind === 'wall' ? 'Interior wall' : 'Open boundary'}</strong><button className="text-danger" type="button" onClick={() => removeDivider(selectedDivider.id)}>Remove</button></div>
+              <span>{formatLength(selectedDivider.length, system)}</span>
+              <label className="field-label">Division type
+                <select value={selectedDivider.kind} onChange={(event) => updateDivider(selectedDivider.id, { kind: event.target.value as 'wall' | 'open' })}>
+                  <option value="wall">Physical wall</option><option value="open" disabled={openings.some((opening) => opening.wallId === selectedDivider.id)}>Open boundary</option>
+                </select>
+              </label>
+              {openings.some((opening) => opening.wallId === selectedDivider.id) && <p className="hint">Remove this wall’s doors and openings before changing it to an open boundary.</p>}
+              <p className="hint">Drag an endpoint in the plan to move its connection.</p>
+            </div>
+          ) : selectedSpace ? (
+            <div className="wall-editor">
+              <div className="opening-editor-title"><strong>{selectedSpace.name}</strong><span>{formatArea(selectedSpace.area, system)}</span></div>
+              <p className="hint">Edit this space’s name and finishes in Plan Room.</p>
+            </div>
           ) : selectedWallId ? (
             <WallEditor wallId={selectedWallId} />
           ) : (
@@ -479,7 +521,7 @@ export function BuildRoom() {
           </div>
           {buildView === '3d' && <button className="floating-reset-view" type="button" onClick={() => setResetViewRequest((value) => value + 1)}><Icon name="rotateLeft" />Reset view</button>}
 
-          {buildView === 'plan' ? <Plan2D purpose="build" /> : (
+          {buildView === 'plan' ? <Plan2D purpose="build" dividerTool={dividerTool} onDividerAdded={() => setDividerTool(null)} /> : (
             <div
               className="builder-3d-selection-surface"
               onPointerDownCapture={(event) => {
@@ -496,6 +538,7 @@ export function BuildRoom() {
           )}
         </div>
       </section>
+
     </div>
   );
 }

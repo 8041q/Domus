@@ -12,8 +12,9 @@ import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeome
 import { PRODUCTS } from '../core/products';
 import { floorFinishDefinition, type FloorFinishDefinition } from '../core/roomFinishes';
 import { clearanceRegions, resolvePlacement, spacingMeasurements, type SpacingMeasurement } from '../core/placement';
-import { BASEBOARD_STYLES, glazingAreas, isSunGlazedOpening } from '../core/architecturalStyles';
+import { BASEBOARD_STYLES, DOOR_LEAF_COLOR, glazingAreas, isSunGlazedOpening } from '../core/architecturalStyles';
 import { getRoomWalls, pointInRoom, roomBounds, wallPoint, wallProjectionDistance } from '../core/roomGeometry';
+import { architectureRoom, deriveSpaces, dividerJunctionDistances, getPhysicalWalls, interiorDoorHasThreshold, resolveDividers, wallAdjacentSpaces } from '../core/spaces';
 import { effectiveSunAzimuth } from '../core/sun';
 import { formatLength } from '../core/units';
 import type { FloorFinish, PlanCameraView, MeasurementSystem, PlannerSnapshot, PlacedObject, RoomOpening, SnapFeedback, Vec2 } from '../core/types';
@@ -33,6 +34,7 @@ export interface SceneSnapshot extends PlannerSnapshot {
 export interface SceneBridge {
   getSnapshot: () => SceneSnapshot;
   select: (id: string | null) => void;
+  selectSpace?: (id: string) => void;
   selectOpening: (id: string | null) => void;
   updateObject: (id: string, patch: Partial<PlacedObject>) => void;
   updateOpening: (id: string, patch: Partial<RoomOpening>, recordHistory?: boolean) => void;
@@ -149,6 +151,7 @@ export class PlannerScene {
     worldPerPixelY: number;
   } | null = null;
   private openingDragging: { id: string; before: PlannerSnapshot } | null = null;
+  private spaceClick: { id: string; x: number; y: number } | null = null;
   private hoverOpeningId: string | null = null;
   private resizeObserver: ResizeObserver;
   private animationFrame = 0;
@@ -169,6 +172,8 @@ export class PlannerScene {
   private fillLight: THREE.DirectionalLight;
   private wallHiddenState = new Map<string, boolean>();
   private floorTextureReady: Promise<void> = Promise.resolve();
+  private spaceFloorReady: Promise<void>[] = [];
+  private spaceFloorMaterials = new Set<THREE.MeshStandardMaterial>();
   private floorMaterial: THREE.MeshStandardMaterial | null = null;
   private floorFinishRequest = 0;
   private lastFloorFinish: FloorFinish | null = null;
@@ -308,7 +313,7 @@ export class PlannerScene {
     this.disposeGroup(this.architecturalShadeGroup);
     this.disposeGroup(this.lightFixtureGroup);
     this.disposeGroup(this.interiorLightGroup);
-    this.disposeGroup(this.daylightGroup);
+    this.disposeDaylightRig();
     this.disposeSunsetRig();
     this.disposeGroup(this.contactShadowGroup);
     this.disposeGroup(this.objectGroup);
@@ -609,13 +614,13 @@ export class PlannerScene {
   async exportGLB(filename = 'domus-room.glb') {
     // Give the active finish maps a chance to arrive before GLTFExporter serialises
     // the floor material. Failed requests resolve too, so export never hangs offline.
-    await this.floorTextureReady;
+    await Promise.all([this.floorTextureReady, ...this.spaceFloorReady]);
     // Export semantic data, not the current Cutaway view. Camera cutaways,
     // dimensions, selection outlines and other helper/UI state are never part of
     // this export tree.
     const exportRoot = new THREE.Group();
     exportRoot.name = 'DomusRoom';
-    exportRoot.userData.domusFormatVersion = 2;
+    exportRoot.userData.domusFormatVersion = 3;
     exportRoot.userData.units = 'meters';
 
     const categories = new Map<DomusExportCategory, THREE.Group>();
@@ -660,7 +665,8 @@ export class PlannerScene {
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
-    URL.revokeObjectURL(url);
+    // Keep the blob alive until the browser has started consuming the download.
+    window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
   }
 
   setCameraView(view: PlanCameraView) {
@@ -756,7 +762,7 @@ export class PlannerScene {
     const snapshot = this.bridge.getSnapshot();
     const { floorFinish, ...roomWithoutFloorFinish } = snapshot.room;
     const { sunAzimuth, sunElevation, ...lightingWithoutSunAngles } = roomWithoutFloorFinish.lighting;
-    const roomKey = JSON.stringify({ ...roomWithoutFloorFinish, lighting: lightingWithoutSunAngles });
+    const roomKey = JSON.stringify({ ...roomWithoutFloorFinish, lighting: lightingWithoutSunAngles, dividers: snapshot.dividers, spaces: snapshot.spaces });
     const openingsKey = JSON.stringify(snapshot.openings);
     let architectureChanged = false;
     if (roomKey !== this.lastRoomKey) {
@@ -1031,6 +1037,17 @@ export class PlannerScene {
     return geometry;
   }
 
+  /** Copy a contiguous triangle range from our non-indexed architectural geometry. */
+  private geometryRange(source: THREE.BufferGeometry, start: number, count: number) {
+    const geometry = new THREE.BufferGeometry();
+    for (const name of Object.keys(source.attributes)) {
+      const attribute = source.getAttribute(name) as THREE.BufferAttribute;
+      geometry.setAttribute(name, new THREE.BufferAttribute(attribute.array.slice(start * attribute.itemSize, (start + count) * attribute.itemSize), attribute.itemSize));
+    }
+    source.dispose();
+    return geometry;
+  }
+
   /** Configure one loaded map at the material's documented physical tile size. */
   private configureFloorMap(
     texture: THREE.Texture,
@@ -1289,6 +1306,9 @@ export class PlannerScene {
   }
 
   private rebuildRoom(snapshot: PlannerSnapshot) {
+    for (const material of this.spaceFloorMaterials) material.userData.active = false;
+    this.spaceFloorMaterials.clear();
+    this.spaceFloorReady = [];
     this.disposeGroup(this.floorGroup);
     this.disposeGroup(this.wallsGroup);
     this.disposeGroup(this.ceilingGroup);
@@ -1299,9 +1319,8 @@ export class PlannerScene {
     const floorDefinition = floorFinishDefinition(floorFinish);
     const floorMaterial = this.createFloorMaterial(floorDefinition);
 
-    // The floor is one physical mitered panel. The finish is now the top material
-    // of that same geometry rather than a second coplanar mesh; this removes the
-    // thin doubled/split line that could appear around the perimeter.
+    // The slab supplies only the bottom and mitered edge. Named spaces own the
+    // top triangles, so there is no second finish underneath their floor surfaces.
     const floorTopVertices = this.insetRoomVertices(snapshot, halfWall);
     const floorBottomVertices = this.insetRoomVertices(snapshot, halfWall - FLOOR_THICKNESS);
     const slab = new THREE.Mesh(
@@ -1323,11 +1342,42 @@ export class PlannerScene {
         new THREE.MeshBasicMaterial({ color: JUNCTION_COLOR, side: THREE.DoubleSide, toneMapped: false })
       ]
     );
+    const topCount = slab.geometry.groups[0].count;
+    const remainingGroups = slab.geometry.groups.slice(1);
+    slab.geometry = this.geometryRange(slab.geometry, topCount, slab.geometry.getAttribute('position').count - topCount);
+    for (const group of remainingGroups) slab.geometry.addGroup(group.start - topCount, group.count, group.materialIndex);
     slab.receiveShadow = true;
     slab.castShadow = false;
     slab.name = 'Floor';
     this.tagExportRoot(slab, 'Floors', 'floor', 'Floor');
     this.floorGroup.add(slab);
+    for (const space of deriveSpaces(snapshot)) {
+      const definition = floorFinishDefinition(space.floorFinish);
+      const material = new THREE.MeshStandardMaterial({ color: definition.fallbackColor, roughness: definition.fallbackRoughness,
+        metalness: 0, envMapIntensity: definition.envMapIntensity, side: THREE.DoubleSide });
+      material.normalScale.set(definition.normalScale, definition.normalScale);
+      this.configureFloorMaterialShader(material, definition);
+      const cached = this.floorMapResults.get(definition.id);
+      if (cached) this.applyFloorMaps(material, definition, cached);
+      else void this.loadFloorFinishMaps(definition).then((maps) => {
+        if (this.disposed || !material.userData.active) return;
+        this.applyFloorMaps(material, definition, maps);
+        this.requestRender();
+      });
+      material.userData.active = true;
+      this.spaceFloorMaterials.add(material);
+      if (!cached) this.spaceFloorReady.push(this.loadFloorFinishMaps(definition).then(() => {}));
+      const source = this.createMiteredSlabGeometry(space.polygon, space.polygon, 0, 0, 0, 1, 2, 0.08);
+      const mesh = new THREE.Mesh(this.geometryRange(source, 0, source.groups[0].count), material);
+      mesh.receiveShadow = true;
+      mesh.name = `Floor - ${space.name}`;
+      mesh.userData.domusSpaceName = space.name;
+      mesh.userData.domusSpaceId = space.id;
+      mesh.userData.domusFloorFinish = space.floorFinish;
+      mesh.userData.domusWallColor = space.wallColor;
+      this.tagExportRoot(mesh, 'Floors', space.id, mesh.name);
+      this.floorGroup.add(mesh);
+    }
     this.addFloorPerimeterShade(snapshot);
 
     this.rebuildWalls(snapshot);
@@ -1554,9 +1604,44 @@ export class PlannerScene {
   }
 
   private rebuildWindowDaylighting(snapshot: PlannerSnapshot) {
-    this.disposeGroup(this.daylightGroup);
+    this.disposeDaylightRig();
 
-    const windows = snapshot.openings.filter((opening) => isSunGlazedOpening(opening) || opening.type === 'opening');
+    const dividers = getPhysicalWalls(snapshot.room, snapshot.dividers).filter((wall) => wall.id.startsWith('divider-'));
+    // Cutaway walls can disappear from the camera view. Their shadow geometry
+    // stays in the scene so daylight still respects the actual room layout.
+    for (const wall of dividers) {
+      const shape = new THREE.Shape();
+      shape.moveTo(0, -0.025);
+      shape.lineTo(wall.length, -0.025);
+      shape.lineTo(wall.length, snapshot.room.height + 0.025);
+      shape.lineTo(0, snapshot.room.height + 0.025);
+      shape.closePath();
+      const apertures = snapshot.openings.filter((opening) => opening.wallId === wall.id).flatMap((opening) =>
+        opening.type === 'opening' || opening.variant === 'door-frame'
+          ? [{ left: opening.offset - opening.width / 2, right: opening.offset + opening.width / 2,
+            bottom: opening.sillHeight, top: opening.sillHeight + opening.height }]
+          : glazingAreas(opening));
+      for (const pane of apertures) {
+        const hole = new THREE.Path();
+        hole.moveTo(pane.left, pane.bottom);
+        hole.lineTo(pane.left, pane.top);
+        hole.lineTo(pane.right, pane.top);
+        hole.lineTo(pane.right, pane.bottom);
+        hole.closePath();
+        shape.holes.push(hole);
+      }
+      const geometry = new THREE.ExtrudeGeometry(shape, { depth: WALL_THICKNESS, bevelEnabled: false });
+      geometry.translate(0, 0, -WALL_THICKNESS / 2);
+      const blocker = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, side: THREE.DoubleSide }));
+      blocker.name = `Interior light blocker ${wall.id}`;
+      blocker.userData.dividerId = wall.id;
+      blocker.position.set(wall.start.x, 0, wall.start.z);
+      blocker.rotation.y = this.wallYaw(wall);
+      blocker.castShadow = true;
+      this.daylightGroup.add(blocker);
+    }
+
+    const windows = snapshot.openings.filter((opening) => !opening.wallId.startsWith('divider-') && (isSunGlazedOpening(opening) || opening.type === 'opening'));
     for (const opening of windows) {
       const wall = getRoomWalls(snapshot.room).find((candidate) => candidate.id === opening.wallId);
       if (!wall) continue;
@@ -1573,9 +1658,22 @@ export class PlannerScene {
       const light = new THREE.SpotLight(0xf2f5ff, 0.12, 3.2, THREE.MathUtils.degToRad(52), 0.8, 2);
       light.position.copy(source);
       light.target.position.copy(targetPosition);
-      light.castShadow = false;
+      light.castShadow = dividers.length > 0;
+      light.shadow.mapSize.set(512, 512);
+      light.shadow.camera.near = 0.05;
+      light.shadow.camera.far = light.distance;
+      light.shadow.bias = -0.0001;
+      light.shadow.normalBias = 0.002;
+      light.shadow.radius = 2;
       this.daylightGroup.add(light, light.target);
     }
+  }
+
+  private disposeDaylightRig() {
+    for (const child of this.daylightGroup.children) {
+      if (child instanceof THREE.SpotLight) child.shadow.dispose();
+    }
+    this.disposeGroup(this.daylightGroup);
   }
 
   private disposeSunsetRig() {
@@ -1590,7 +1688,7 @@ export class PlannerScene {
     const walls = getRoomWalls(snapshot.room);
     const windows = snapshot.openings.flatMap((opening) => {
       const wall = walls.find((candidate) => candidate.id === opening.wallId);
-      return isSunGlazedOpening(opening) && wall ? [{ opening, wall }] : [];
+      return !opening.wallId.startsWith('divider-') && isSunGlazedOpening(opening) && wall ? [{ opening, wall }] : [];
     });
     if (!windows.length) return null;
 
@@ -1823,7 +1921,7 @@ export class PlannerScene {
 
   private applyRoomLighting(snapshot: PlannerSnapshot) {
     const enabled = snapshot.room.lighting.enabled;
-    const hasDaylight = this.daylightGroup.children.length > 0;
+    const hasDaylight = this.daylightGroup.children.some((child) => child instanceof THREE.SpotLight);
     const hasSunset = this.sunsetLights !== null;
     const pairedSuns = hasSunset && snapshot.room.lighting.sunStylePreset === 'paired-suns';
     this.hemiLight.color.setHex(pairedSuns ? 0xdce8ff : 0xf7f8fa);
@@ -1832,7 +1930,7 @@ export class PlannerScene {
     this.fillLight.color.setHex(pairedSuns ? 0xbacfff : 0xe9edf0);
     this.scene.environment = pairedSuns ? this.pairedSunsEnvironment() : null;
     this.scene.environmentIntensity = pairedSuns ? 0.28 : 1;
-    const glazedOpeningCount = snapshot.openings.filter(isSunGlazedOpening).length;
+    const glazedOpeningCount = snapshot.openings.filter((opening) => !opening.wallId.startsWith('divider-') && isSunGlazedOpening(opening)).length;
     const environmentAzimuth = effectiveSunAzimuth(snapshot.room.lighting.sunAzimuth, glazedOpeningCount);
     this.scene.environmentRotation.set(0, THREE.MathUtils.degToRad(environmentAzimuth), 0);
     // The broad terms stand in for bounced indoor light. Fixtures supply a
@@ -1898,23 +1996,85 @@ export class PlannerScene {
 
     for (const wall of getRoomWalls(snapshot.room)) {
       const wallOpenings = snapshot.openings.filter((o) => o.wallId === wall.id).sort((a, b) => a.offset - b.offset);
-      let cursor = 0;
-      for (const opening of wallOpenings) {
-        const start = Math.max(cursor, opening.offset - opening.width / 2);
-        const end = Math.min(wall.length, opening.offset + opening.width / 2);
-        if (start > cursor) this.addWallSegmentBox(wall, cursor, start, 0, height, thickness, wallColor, height, snapshot);
-        if (opening.sillHeight > 0.01) this.addWallSegmentBox(wall, start, end, 0, opening.sillHeight, thickness, wallColor, height, snapshot);
-        const openingTop = Math.min(height, opening.sillHeight + opening.height);
-        if (openingTop < height - 0.01) this.addWallSegmentBox(wall, start, end, openingTop, height, thickness, wallColor, height, snapshot);
-        this.addOpeningFrame(opening, snapshot, thickness);
-        cursor = Math.max(cursor, end);
+      const anchorCuts = snapshot.dividers.flatMap((divider) => [divider.start, divider.end])
+        .filter((anchor) => anchor.kind === 'perimeter' && anchor.id === wall.id).map((anchor) => anchor.t * wall.length);
+      const cuts = [...new Set([0, wall.length, ...anchorCuts,
+        ...wallOpenings.flatMap((opening) => [opening.offset - opening.width / 2, opening.offset + opening.width / 2])]
+        .map((value) => Math.max(0, Math.min(wall.length, Math.round(value * 100000) / 100000))))].sort((a, b) => a - b);
+      for (let i = 0; i < cuts.length - 1; i++) {
+        const start = cuts[i], end = cuts[i + 1];
+        if (end - start < 0.005) continue;
+        const space = wallAdjacentSpaces(snapshot, wall, (start + end) / 2).left;
+        const faceColor = space?.wallColor ?? wallColor;
+        const opening = wallOpenings.find((candidate) => candidate.offset - candidate.width / 2 < (start + end) / 2
+          && candidate.offset + candidate.width / 2 > (start + end) / 2);
+        if (!opening) this.addWallSegmentBox(wall, start, end, 0, height, thickness, faceColor, height, snapshot);
+        else {
+          if (opening.sillHeight > 0.01) this.addWallSegmentBox(wall, start, end, 0, opening.sillHeight, thickness, faceColor, height, snapshot);
+          const openingTop = Math.min(height, opening.sillHeight + opening.height);
+          if (openingTop < height - 0.01) this.addWallSegmentBox(wall, start, end, openingTop, height, thickness, faceColor, height, snapshot);
+        }
       }
-      if (cursor < wall.length) this.addWallSegmentBox(wall, cursor, wall.length, 0, height, thickness, wallColor, height, snapshot);
+      for (const opening of wallOpenings) this.addOpeningFrame(opening, snapshot, thickness);
 
       // Keep the normal footer requested earlier, but give the footer itself a
       // proper miter at room corners so it never sticks through a cutaway wall.
       this.addBaseboardRuns(wall, snapshot);
     }
+    for (const divider of resolveDividers(snapshot.room, snapshot.dividers).filter((item) => item.kind === 'wall')) {
+      const wall = getPhysicalWalls(snapshot.room, snapshot.dividers).find((item) => item.id === divider.id)!;
+      const wallOpenings = snapshot.openings.filter((opening) => opening.wallId === wall.id).sort((a, b) => a.offset - b.offset);
+      let cursor = 0;
+      const junctions = dividerJunctionDistances(snapshot.room, snapshot.dividers, divider.id);
+      const add = (start: number, end: number, bottom: number, top: number) => {
+        const cuts = [start, ...junctions.filter((distance) => distance > start && distance < end), end].sort((a, b) => a - b);
+        for (let i = 0; i < cuts.length - 1; i++) this.addInteriorWallPiece(wall, cuts[i], cuts[i + 1], bottom, top, snapshot);
+      };
+      for (const opening of wallOpenings) {
+        const start = Math.max(cursor, opening.offset - opening.width / 2);
+        const end = Math.min(wall.length, opening.offset + opening.width / 2);
+        if (start > cursor) add(cursor, start, 0, height);
+        if (opening.sillHeight > 0.01) add(start, end, 0, opening.sillHeight);
+        const openingTop = Math.min(height, opening.sillHeight + opening.height);
+        if (openingTop < height - 0.01) add(start, end, openingTop, height);
+        this.addOpeningFrame(opening, snapshot, thickness);
+        if (opening.type === 'door' && opening.variant !== 'door-frame') this.addInteriorThreshold(opening, wall, snapshot);
+        cursor = Math.max(cursor, end);
+      }
+      if (cursor < wall.length) add(cursor, wall.length, 0, height);
+    }
+  }
+
+  private addInteriorWallPiece(wall: ReturnType<typeof getPhysicalWalls>[number], start: number, end: number,
+    bottom: number, top: number, snapshot: PlannerSnapshot) {
+    if (end - start < 0.005 || top - bottom < 0.005) return;
+    const centre = wallPoint(wall, (start + end) / 2);
+    const { left, right } = wallAdjacentSpaces(snapshot, wall, (start + end) / 2);
+    const face = (color: string) => new THREE.MeshStandardMaterial({ color, roughness: 0.94, side: THREE.DoubleSide,
+      emissive: color, emissiveIntensity: 0.45 });
+    const cap = new THREE.MeshBasicMaterial({ color: JUNCTION_COLOR, side: THREE.DoubleSide, toneMapped: false });
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(end - start, top - bottom, WALL_THICKNESS),
+      [cap, cap.clone(), cap.clone(), cap.clone(), face(left?.wallColor ?? snapshot.room.wallColor), face(right?.wallColor ?? snapshot.room.wallColor)]);
+    mesh.rotation.y = this.wallYaw(wall);
+    mesh.position.set(centre.x, (bottom + top) / 2, centre.z);
+    mesh.receiveShadow = true;
+    mesh.name = `Interior wall ${wall.id}`;
+    this.tagCutawaySurface(mesh, wall);
+    this.tagExportPart(mesh, 'Walls', wall.id, mesh.name, mesh.rotation.y);
+    this.wallsGroup.add(mesh);
+  }
+
+  private addInteriorThreshold(opening: RoomOpening, wall: ReturnType<typeof getPhysicalWalls>[number], snapshot: PlannerSnapshot) {
+    if (!interiorDoorHasThreshold(snapshot, opening)) return;
+    const centre = wallPoint(wall, opening.offset);
+    // The existing door leaf uses this finish; no separate threshold colour is stored.
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(opening.width, 0.012, WALL_THICKNESS + 0.04),
+      new THREE.MeshStandardMaterial({ color: DOOR_LEAF_COLOR, roughness: 0.66 }));
+    mesh.rotation.y = this.wallYaw(wall);
+    mesh.position.set(centre.x, 0.006, centre.z);
+    mesh.name = `Threshold ${opening.id}`;
+    this.tagExportPart(mesh, 'Floors', `threshold:${opening.id}`, mesh.name, mesh.rotation.y);
+    this.wallsGroup.add(mesh);
   }
 
   private disposeWallCornerShades() {
@@ -1961,12 +2121,14 @@ export class PlannerScene {
       }))
       .sort((a, b) => a.start - b.start);
 
-    let cursor = 0;
-    for (const range of blocked) {
-      if (range.start > cursor) this.addBaseboard(wall, cursor, range.start, snapshot);
-      cursor = Math.max(cursor, range.end);
+    const anchors = snapshot.dividers.flatMap((divider) => [divider.start, divider.end])
+      .filter((anchor) => anchor.kind === 'perimeter' && anchor.id === wall.id).map((anchor) => anchor.t * wall.length);
+    const cuts = [...new Set([0, wall.length, ...anchors, ...blocked.flatMap((range) => [range.start, range.end])])].sort((a, b) => a - b);
+    for (let index = 0; index < cuts.length - 1; index++) {
+      const start = cuts[index], end = cuts[index + 1];
+      if (end - start < 0.005 || blocked.some((range) => (start + end) / 2 > range.start && (start + end) / 2 < range.end)) continue;
+      this.addBaseboard(wall, start, end, snapshot);
     }
-    if (cursor < wall.length) this.addBaseboard(wall, cursor, wall.length, snapshot);
   }
 
   private addWallSegmentBox(
@@ -2242,7 +2404,8 @@ export class PlannerScene {
     let floorMatchedMaterial: THREE.MeshStandardMaterial | null = null;
     let floorMatchedDefinition: FloorFinishDefinition | null = null;
     if (snapshot.room.baseboardMaterial === 'materials') {
-      floorMatchedDefinition = floorFinishDefinition(snapshot.room.floorFinish);
+      const adjacent = wallAdjacentSpaces(snapshot, wall, (start + end) / 2).left;
+      floorMatchedDefinition = floorFinishDefinition(adjacent?.floorFinish ?? snapshot.room.floorFinish);
       floorMatchedMaterial = new THREE.MeshStandardMaterial({
         color: floorMatchedDefinition.fallbackColor,
         roughness: floorMatchedDefinition.fallbackRoughness,
@@ -2293,7 +2456,7 @@ export class PlannerScene {
   }
 
   private addOpeningFrame(opening: PlannerSnapshot['openings'][number], snapshot: PlannerSnapshot, wallThickness: number) {
-    const wall = getRoomWalls(snapshot.room).find((candidate) => candidate.id === opening.wallId);
+    const wall = getPhysicalWalls(snapshot.room, snapshot.dividers).find((candidate) => candidate.id === opening.wallId);
     if (!wall) return;
     const isWindow = opening.type === 'window';
     const frame = isWindow ? 0.04 : 0.075;
@@ -2428,7 +2591,7 @@ export class PlannerScene {
       const leafLeft = along - width / 2;
       const leafRight = along + width / 2;
       const pane = paneAreas.find((area) => (area.left + area.right) / 2 > leafLeft && (area.left + area.right) / 2 < leafRight);
-      const solid = (left: number, right: number, low: number, high: number, color: THREE.ColorRepresentation = 0xcbbca7) => {
+      const solid = (left: number, right: number, low: number, high: number, color: THREE.ColorRepresentation = DOOR_LEAF_COLOR) => {
         if (right - left <= 0.001 || high - low <= 0.001) return;
         alignedBox((left + right) / 2, (low + high) / 2, right - left, high - low, leafDepth, leafOffset, color);
       };
@@ -2526,7 +2689,7 @@ export class PlannerScene {
     const showAllWalls = this.currentCameraView === 'top';
     const nextState = new Map<string, boolean>();
 
-    for (const wall of getRoomWalls(snapshot.room)) {
+    for (const wall of getPhysicalWalls(snapshot.room, snapshot.dividers)) {
       if (showAllWalls) {
         nextState.set(wall.id, false);
         continue;
@@ -2541,6 +2704,13 @@ export class PlannerScene {
       const signed = (this.camera.position.x - wall.start.x) * wall.inward.x + (this.camera.position.z - wall.start.z) * wall.inward.z;
       const along = wallProjectionDistance(wall, { x: this.camera.position.x, z: this.camera.position.z });
       const previousHidden = this.wallHiddenState.get(wall.id) ?? false;
+      if (wall.id.startsWith('divider-')) {
+        const targetSigned = (this.controls.target.x - wall.start.x) * wall.inward.x
+          + (this.controls.target.z - wall.start.z) * wall.inward.z;
+        const targetAlong = wallProjectionDistance(wall, { x: this.controls.target.x, z: this.controls.target.z });
+        nextState.set(wall.id, signed * targetSigned < 0 && targetAlong > -0.1 && targetAlong < wall.length + 0.1);
+        continue;
+      }
 
       // Camera/wall transitions are handled visually rather than by moving the camera.
       // This narrow hysteresis zone hides the complete wall assembly while the camera
@@ -4264,10 +4434,11 @@ export class PlannerScene {
     this.raycaster.setFromCamera(this.pointer, this.camera);
   }
 
-  private visibleWallUnderRay(snapshot: SceneSnapshot) {
-    const walls = getRoomWalls(snapshot.room);
+  private visibleWallUnderRay(snapshot: SceneSnapshot, openingType: RoomOpening['type']) {
+    const walls = getPhysicalWalls(snapshot.room, snapshot.dividers).filter((wall) => openingType !== 'window' || !wall.id.startsWith('divider-'));
     let best: { wall: ReturnType<typeof getRoomWalls>[number]; point: THREE.Vector3; distance: number } | null = null;
     for (const wall of walls) {
+      if (this.wallHiddenState.get(wall.id)) continue;
       const centre = wallPoint(wall, wall.length / 2);
       const outwardX = -wall.inward.x;
       const outwardZ = -wall.inward.z;
@@ -4276,7 +4447,7 @@ export class PlannerScene {
       const camLen = Math.hypot(camDx, camDz) || 1;
       const facing = outwardX * (camDx / camLen) + outwardZ * (camDz / camLen);
       // The Cutaway view system hides these foreground walls; don't let their invisible planes steal dragging.
-      if (facing > 0.18 && this.currentCameraView !== 'top') continue;
+      if (!wall.id.startsWith('divider-') && facing > 0.18 && this.currentCameraView !== 'top') continue;
       const normal = new THREE.Vector3(wall.inward.x, 0, wall.inward.z);
       const plane = new THREE.Plane(normal, -(normal.x * wall.start.x + normal.z * wall.start.z));
       const point = new THREE.Vector3();
@@ -4347,6 +4518,7 @@ export class PlannerScene {
 
   private onPointerDown = (event: PointerEvent) => {
     if (event.button !== 0) return;
+    this.spaceClick = null;
 
     this.setPointer(event);
 
@@ -4371,7 +4543,12 @@ export class PlannerScene {
       // Shift+empty-space is the inspection gesture: OrbitControls receives the
       // pointer-down, but the active furniture remains selected so its dimensions
       // stay visible while orbiting to another side.
-      if (!event.shiftKey) this.bridge.select(null);
+      if (!event.shiftKey) {
+        const floor = this.raycaster.intersectObjects(this.floorGroup.children, true)
+          .find((hit) => hit.object.userData.domusSpaceId);
+        if (floor) this.spaceClick = { id: floor.object.userData.domusSpaceId, x: event.clientX, y: event.clientY };
+        else this.bridge.select(null);
+      }
       return;
     }
     const before = structuredClone(this.bridge.getSnapshot()) as PlannerSnapshot;
@@ -4401,7 +4578,7 @@ export class PlannerScene {
       const snapshot = this.bridge.getSnapshot();
       const opening = snapshot.openings.find((candidate) => candidate.id === this.openingDragging!.id);
       if (!opening) return;
-      const hit = this.visibleWallUnderRay(snapshot);
+      const hit = this.visibleWallUnderRay(snapshot, opening.type);
       if (!hit) return;
       const half = opening.width / 2 + 0.05;
       const along = Math.max(half, Math.min(hit.wall.length - half, wallProjectionDistance(hit.wall, { x: hit.point.x, z: hit.point.z })));
@@ -4428,7 +4605,7 @@ export class PlannerScene {
       const others = snapshot.objects.filter((o) => o.id !== moving.id);
       const freeMove = event.shiftKey;
       if (freeMove) this.dragging.snap = { kind: 'none' };
-      const resolved = resolvePlacement(moving, rawX, rawZ, snapshot.room, others, {
+      const resolved = resolvePlacement(moving, rawX, rawZ, architectureRoom(snapshot), others, {
         previousSnap: freeMove ? undefined : this.dragging.snap,
         enterSnapDistance: freeMove ? 0 : undefined,
         exitSnapDistance: freeMove ? 0 : undefined,
@@ -4483,7 +4660,12 @@ export class PlannerScene {
     }
   };
 
-  private onPointerUp = () => {
+  private onPointerUp = (event: PointerEvent) => {
+    if (this.spaceClick) {
+      const click = this.spaceClick;
+      this.spaceClick = null;
+      if (Math.hypot(event.clientX - click.x, event.clientY - click.y) < 5) this.bridge.selectSpace?.(click.id);
+    }
     if (this.openingDragging) {
       this.bridge.commitDrag(this.openingDragging.before);
       this.openingDragging = null;

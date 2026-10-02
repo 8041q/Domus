@@ -1,6 +1,7 @@
 import type { AiOperation, AiProposal } from '../ai/types';
 import { PRODUCTS } from './products';
 import { isPlacementValid } from './placement';
+import { architectureRoom } from './spaces';
 import type { PlacedObject, PlannerSnapshot, ProductKind } from './types';
 
 export function snapshotRevision(snapshot: PlannerSnapshot) {
@@ -22,7 +23,7 @@ function radians(degrees: number) {
 }
 
 function validateCandidate(candidate: PlacedObject, snapshot: PlannerSnapshot) {
-  if (!isPlacementValid(candidate, snapshot.room, snapshot.objects.filter((object) => object.id !== candidate.id))) {
+  if (!isPlacementValid(candidate, architectureRoom(snapshot), snapshot.objects.filter((object) => object.id !== candidate.id))) {
     return 'The proposed position intersects a wall, leaves the room, or overlaps another item.';
   }
   return null;
