@@ -2,7 +2,7 @@ export type Vec2 = { x: number; z: number };
 
 export type AppMode = 'build' | 'plan';
 export type BuildWorkspaceView = 'plan' | '3d';
-export type PlanCameraView = 'perspective' | 'top' | 'front' | 'back' | 'left' | 'right';
+export type PlanCameraView = 'free' | 'top' | 'front' | 'back' | 'left' | 'right';
 export type MeasurementSystem = 'metric' | 'imperial';
 export type RoomWall = 'north' | 'east' | 'south' | 'west';
 export type OpeningType = 'door' | 'window' | 'opening';
@@ -77,6 +77,8 @@ export interface RoomOpening {
   sillHeight: number;
   /** Architectural subtype used by the 2D/3D opening editor. */
   variant: OpeningVariant;
+  /** Reverse the door's facing and hinge/latch direction; absent in older saves. */
+  doorFlipped?: boolean;
 }
 
 export interface RoomWallSegment {

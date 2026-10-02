@@ -59,6 +59,8 @@ export function Viewport3D({
           objects: state.objects,
           unplacedObjects: state.unplacedObjects,
           selectedId: state.selectedId,
+          selectedSpaceId: state.selectedSpaceId,
+          interiorWallView: state.interiorWallView,
           selectedOpeningId: state.selectedOpeningId,
           activeSnap: state.activeSnap,
           showClearance: state.showClearance,
@@ -71,6 +73,8 @@ export function Viewport3D({
       select: (id) => usePlannerStore.getState().select(id),
       selectSpace: (id) => usePlannerStore.getState().selectSpace(id),
       selectOpening: (id) => usePlannerStore.getState().selectOpening(id),
+      selectWall: (id) => usePlannerStore.getState().selectWall(id),
+      selectDivider: (id) => usePlannerStore.getState().selectDivider(id),
       updateObject: (id, patch) => usePlannerStore.getState().updateObject(id, patch),
       updateOpening: (id, patch, recordHistory = true) => usePlannerStore.getState().updateOpening(id, patch, recordHistory),
       commitDrag: (before) => usePlannerStore.getState().commitSnapshot(before),
@@ -98,6 +102,8 @@ export function Viewport3D({
         || state.openings !== previous.openings
         || (furniture && state.objects !== previous.objects)
         || (furniture && state.selectedId !== previous.selectedId)
+        || state.selectedSpaceId !== previous.selectedSpaceId
+        || state.interiorWallView !== previous.interiorWallView
         || (architectureInteractive && state.selectedOpeningId !== previous.selectedOpeningId)
         || (furniture && state.activeSnap !== previous.activeSnap)
         || state.showClearance !== previous.showClearance
@@ -121,9 +127,9 @@ export function Viewport3D({
 
   useEffect(() => {
     if (!view) return;
-    // When PlannerScene itself changes the active preset to Cutaway after manual
+    // When PlannerScene itself changes the active preset to Free cam after manual
     // navigation, update the UI/store without snapping the camera to the default
-    // Cutaway view position. Explicit button clicks still call setCameraView normally.
+    // free camera position. Explicit button clicks still call setCameraView normally.
     if (internallyChangedViewRef.current === view) {
       internallyChangedViewRef.current = null;
       return;

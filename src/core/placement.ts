@@ -42,6 +42,12 @@ function solidDividerRuns(room: ArchitectureRoom, objectHeight = 0) {
   });
 }
 
+/** Used only to prefer a clear insertion point; dragging treats dividers as soft targets. */
+export function overlapsInteriorWall(object: PlacedObject, room: ArchitectureRoom) {
+  const footprint = objectFootprintCorners(object);
+  return solidDividerRuns(room, PRODUCTS[object.productId].height).some((run) => polygonsOverlap(footprint, runPolygon(run)));
+}
+
 function runPolygon(run: { a: Vec2; b: Vec2 }, halfThickness = 0.025) {
   const dx = run.b.x - run.a.x, dz = run.b.z - run.a.z;
   const length = Math.hypot(dx, dz) || 1;
@@ -165,10 +171,14 @@ export function objectsOverlap(a: PlacedObject, b: PlacedObject, padding = 0): b
 
 type Candidate = SnapAxisFeedback & { distance: number };
 
-function snapDistance(kind: Candidate['kind'], phase: 'enter' | 'exit', override?: number) {
+function snapDistance(kind: Candidate['kind'], phase: 'enter' | 'exit', override?: number, targetId?: string) {
   if (override != null) return override;
-  // Deliberately tiny magnetic thresholds. Keep these values stable: collision
-  // response/dragging is handled separately and must not be faked by a large snap radius.
+  // Interior walls are passable editing targets, so give their contact snap a
+  // wider release band. Exterior walls, products and centre guides retain their
+  // existing thresholds. Explicit overrides (including Shift's zero) still win.
+  if (kind === 'wall' && targetId?.startsWith('divider-')) {
+    return phase === 'enter' ? 0.12 : 0.20;
+  }
   const defaults = {
     wall: { enter: 0.018, exit: 0.021 },
     object: { enter: 0.010, exit: 0.013 },
@@ -185,10 +195,10 @@ function chooseAxisSnap(
 ) {
   if (previous) {
     const same = candidates.find((c) => c.kind === previous.kind && c.targetId === previous.targetId && Math.abs(c.value - previous.value) < 1e-5);
-    if (same && same.distance <= snapDistance(same.kind, 'exit', exitOverride)) return same;
+    if (same && same.distance <= snapDistance(same.kind, 'exit', exitOverride, same.targetId)) return same;
   }
   return candidates
-    .filter((c) => c.distance <= snapDistance(c.kind, 'enter', enterOverride))
+    .filter((c) => c.distance <= snapDistance(c.kind, 'enter', enterOverride, c.targetId))
     .sort((a, b) => a.distance - b.distance)[0];
 }
 
@@ -219,9 +229,8 @@ function objectFitsVisibleRoom(candidate: PlacedObject, room: ArchitectureRoom) 
     const required = -inwardProjection.min + WALL_FACE_INSET;
     if (signedOrigin < required - 0.00075) return false;
   }
-  for (const run of solidDividerRuns(room, PRODUCTS[candidate.productId].height)) {
-    if (polygonsOverlap(footprint, runPolygon(run))) return false;
-  }
+  // Interior walls are soft editing targets. Their existing snap gap provides
+  // contact feedback; moving beyond it may overlap or cross the divider.
   return true;
 }
 
@@ -351,9 +360,9 @@ function supportAlong(object: PlacedObject, normal: Vec2) {
   return -footprintProjectionFromOrigin(object, normal).min;
 }
 
-function nearestContactWall(object: PlacedObject, room: ArchitectureRoom, extra = 0.04) {
+function nearestContactWall(object: PlacedObject, room: ArchitectureRoom, extra = 0.04, exteriorOnly = false) {
   let best: { wall: ReturnType<typeof getRoomWalls>[number]; gap: number } | null = null;
-  for (const baseWall of physicalWalls(room)) {
+  for (const baseWall of exteriorOnly ? getRoomWalls(room) : physicalWalls(room)) {
     const signed = (object.x - baseWall.start.x) * baseWall.inward.x + (object.z - baseWall.start.z) * baseWall.inward.z;
     const wall = baseWall.id.startsWith('divider-') && signed < 0
       ? { ...baseWall, inward: { x: -baseWall.inward.x, z: -baseWall.inward.z } } : baseWall;
@@ -363,7 +372,8 @@ function nearestContactWall(object: PlacedObject, room: ArchitectureRoom, extra 
     if (along + tangentProjection.max < -0.08 || along + tangentProjection.min > wall.length + 0.08) continue;
     const signedCentre = (object.x - wall.start.x) * wall.inward.x + (object.z - wall.start.z) * wall.inward.z;
     const gap = signedCentre - supportAlong(object, wall.inward) - WALL_FACE_INSET;
-    if (gap > extra) continue;
+    const contactDistance = wall.id.startsWith('divider-') ? Math.max(extra, snapDistance('wall', 'enter', undefined, wall.id)) : extra;
+    if (gap > contactDistance || (wall.id.startsWith('divider-') && gap < -snapDistance('wall', 'exit', undefined, wall.id))) continue;
     if (!best || gap < best.gap) best = { wall, gap };
   }
   return best;
@@ -386,7 +396,7 @@ function rotateToward(from: number, to: number, maxStep: number) {
  * Wall-affinity is contact behaviour, not a large magnetic snap. A sofa that is
  * pushed into a wall gradually pivots until its back is flush, while its centre
  * continues to track the pointer tangentially. This mirrors the reference video
- * and keeps the actual wall snap threshold at 18 mm.
+ * and uses the snap threshold of the contacted wall.
  */
 function contactAlignedObject(
   moving: PlacedObject,
@@ -410,6 +420,14 @@ function contactAlignedObject(
   const contact = currentContact
     ?? (currentNear && targetContact?.wall.id === currentNear.wall.id ? currentNear : null);
   if (!contact) return moving;
+  if (contact.wall.id.startsWith('divider-')) {
+    const signedTarget = (rawX - contact.wall.start.x) * contact.wall.inward.x
+      + (rawZ - contact.wall.start.z) * contact.wall.inward.z;
+    const targetGap = signedTarget - supportAlong(rawProbe, contact.wall.inward) - WALL_FACE_INSET;
+    // Release both contact rotation and snapping when the pointer leaves the
+    // existing exit gap. Never pivot or push an item already crossing the wall.
+    if (Math.abs(targetGap) > snapDistance('wall', 'exit', undefined, contact.wall.id)) return moving;
+  }
 
   const approach = dx * contact.wall.inward.x + dz * contact.wall.inward.z;
   // Pivot while pressing into the wall or sliding along it. Pulling away should
@@ -495,7 +513,7 @@ function moveWithCollisionSlide(
     const nLen = Math.hypot(normal.x, normal.z) || 1;
     tangent = { x: -normal.z / nLen, z: normal.x / nLen };
   } else if (first.roomBlocked) {
-    const wallContact = nearestContactWall(contactObject, room, 0.12);
+    const wallContact = nearestContactWall(contactObject, room, 0.12, true);
     if (wallContact) tangent = wallContact.wall.tangent;
   }
 
@@ -695,7 +713,7 @@ export function resolvePlacement(
   const snapTarget = { x: xSnap?.value ?? x, z: zSnap?.value ?? z };
 
   // Snaps are only millimetres away, but still run through the same continuous
-  // solver so snapping can never pull a product through another product/wall.
+  // solver so snapping can never pull a product through another product or the outer shell.
   const snapped = (xSnap || zSnap) && enter !== 0
     ? moveWithCollisionSlide({ ...working, x, z }, snapTarget, room, others, collisionGap, allowOverlap)
     : { x, z, pushed: false, colliding: false };

@@ -20,6 +20,7 @@ import { dimensionStepMetres, displayLengthValue, displayValueToMetres, formatLe
 import type { DividerAnchor, PlannerSnapshot, RoomOpening, RoomVertex, SnapFeedback, Vec2 } from './core/types';
 import { getSnapshot, usePlannerStore } from './store';
 import { themeColor, themeMetric, themeRgba } from './theme';
+import { createFrameQueue } from './core/frameQueue';
 
 const PAD = 64;
 const MIN_VIEW_SCALE = 6;
@@ -33,13 +34,13 @@ type DragView = ViewTransform & { rect: { left: number; top: number; width: numb
 
 type DragState =
   | { type: 'wall'; id: string; before: PlannerSnapshot; view: DragView }
-  | { type: 'corner'; id: string; before: PlannerSnapshot; view: DragView }
+  | { type: 'corner'; id: string; before: PlannerSnapshot; view: DragView; grabOffset: Vec2 }
   | { type: 'pan'; view: DragView; lastX: number; lastY: number }
   | { type: 'object'; id: string; before: PlannerSnapshot; snap: SnapFeedback }
-  | { type: 'opening'; id: string; before: PlannerSnapshot; view: DragView }
   | { type: 'divider-end'; id: string; end: 'start' | 'end'; before: PlannerSnapshot; view: DragView };
 
-type HoverTarget = { type: 'wall' | 'corner' | 'opening' | 'split'; id: string } | null;
+type HoverTarget = { type: 'wall' | 'corner' | 'split'; id: string } | null;
+type PointerSample = Pick<ReactPointerEvent<HTMLCanvasElement>, 'clientX' | 'clientY' | 'shiftKey' | 'currentTarget'>;
 
 
 type RoomWall = ReturnType<typeof getRoomWalls>[number];
@@ -198,13 +199,24 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
   const updateDivider = usePlannerStore((s) => s.updateDivider);
   const syncSpaces = usePlannerStore((s) => s.syncSpaces);
   const updateObject = usePlannerStore((s) => s.updateObject);
-  const updateOpening = usePlannerStore((s) => s.updateOpening);
   const setRoomVertices = usePlannerStore((s) => s.setRoomVertices);
   const splitWallById = usePlannerStore((s) => s.splitWallById);
   const resizeWallById = usePlannerStore((s) => s.resizeWallById);
   const commitSnapshot = usePlannerStore((s) => s.commitSnapshot);
   const setFeedback = usePlannerStore((s) => s.setFeedback);
-  const [drag, setDrag] = useState<DragState | null>(null);
+  const [drag, setDragState] = useState<DragState | null>(null);
+  const dragRef = useRef<DragState | null>(null);
+  const dragPointerId = useRef<number | null>(null);
+  const setDrag = (next: DragState | null) => { dragRef.current = next; setDragState(next); };
+  const moveHandler = useRef<(event: PointerSample) => void>(() => {});
+  const finishHandler = useRef<() => void>(() => {});
+  const moveQueue = useRef<ReturnType<typeof createFrameQueue<PointerSample>> | null>(null);
+  if (!moveQueue.current) moveQueue.current = createFrameQueue<PointerSample>((event) => moveHandler.current(event));
+  useEffect(() => {
+    const finish = () => finishHandler.current();
+    window.addEventListener('blur', finish);
+    return () => { window.removeEventListener('blur', finish); moveQueue.current?.clear(); };
+  }, []);
   const [hover, setHover] = useState<HoverTarget>(null);
   const [drawStart, setDrawStart] = useState<{ anchor: DividerAnchor; point: Vec2 } | null>(null);
   const [drawHover, setDrawHover] = useState<Vec2 | null>(null);
@@ -233,7 +245,8 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
     const canvas = canvasRef.current!;
     // Build drags pin the view transform and canvas rect at pointer-down. This avoids a
     // synchronous layout read on every pointermove and keeps world/screen mapping stable.
-    if (drag && drag.type !== 'object') return { rect: drag.view.rect, scale: drag.view.scale, ox: drag.view.ox, oz: drag.view.oz };
+    const active = dragRef.current;
+    if (active && active.type !== 'object') return { rect: active.view.rect, scale: active.view.scale, ox: active.view.ox, oz: active.view.oz };
     const rect = canvas.getBoundingClientRect();
 
     // The drafting viewport is intentionally stable while dimensions change. Grid cells
@@ -310,8 +323,8 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
       ? (shiftKey ? 0.01 : 0.05)
       : (shiftKey ? 0.0127 : 0.0508);
     const snappedWorld = {
-      x: Math.round(((px - ox) / scale) / gridStep) * gridStep,
-      z: Math.round(((py - oz) / scale) / gridStep) * gridStep
+      x: Math.round(((px - ox) / scale + (activeDrag.type === 'corner' ? activeDrag.grabOffset.x : 0)) / gridStep) * gridStep,
+      z: Math.round(((py - oz) / scale + (activeDrag.type === 'corner' ? activeDrag.grabOffset.z : 0)) / gridStep) * gridStep
     };
     const moveTo = (point: Vec2) => activeDrag.type === 'corner'
       ? moveCorner(activeDrag.before.room, activeDrag.id, point.x, point.z)
@@ -529,21 +542,23 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
         ctx.lineWidth = Math.max(6, scale * 0.09);
         ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
       }
-      const hoveredOpening = purpose === 'build' && hover?.type === 'opening' && hover.id === opening.id;
-      const draggingOpening = purpose === 'build' && drag?.type === 'opening' && drag.id === opening.id;
       const baseOpeningColor = opening.type === 'window' ? '#71717a' : opening.type === 'door' ? '#52525b' : '#71717a';
-      ctx.strokeStyle = (hoveredOpening || draggingOpening) ? interaction : isSelected ? interactionStrong : baseOpeningColor;
-      ctx.lineWidth = (hoveredOpening || draggingOpening) ? 5.8 : isSelected ? 5.5 : 3.5;
+      ctx.strokeStyle = isSelected ? interactionStrong : baseOpeningColor;
+      ctx.lineWidth = isSelected ? 5.5 : 3.5;
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
 
       if (opening.type === 'door' && opening.variant !== 'door-frame') {
         const n = points.wall.inward;
-        const open = toPx(points.start.x + n.x * opening.width, points.start.z + n.z * opening.width);
+        const direction = opening.doorFlipped ? -1 : 1;
+        const hinge = opening.doorFlipped ? points.end : points.start;
+        const hingePx = opening.doorFlipped ? b : a;
+        const latchPx = opening.doorFlipped ? a : b;
+        const open = toPx(hinge.x + n.x * opening.width * direction, hinge.z + n.z * opening.width * direction);
         ctx.strokeStyle = '#71717a';
         ctx.lineWidth = 1.25;
-        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(open.x, open.y); ctx.stroke();
-        const control = { x: b.x + n.x * opening.width * scale, y: b.y + n.z * opening.width * scale };
-        ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.quadraticCurveTo(control.x, control.y, open.x, open.y); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(hingePx.x, hingePx.y); ctx.lineTo(open.x, open.y); ctx.stroke();
+        const control = { x: latchPx.x + n.x * opening.width * scale * direction, y: latchPx.y + n.z * opening.width * scale * direction };
+        ctx.beginPath(); ctx.moveTo(latchPx.x, latchPx.y); ctx.quadraticCurveTo(control.x, control.y, open.x, open.y); ctx.stroke();
       }
       if (purpose === 'build' && isSelected) {
         const sameType = openings.filter((item) => item.type === opening.type);
@@ -999,16 +1014,6 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
     setWallLabelEdit(null);
   };
 
-  const hitOpening = (px: number, py: number, scale: number, ox: number, oz: number) => {
-    return [...openings].reverse().find((opening) => {
-      const points = openingPoints(opening, room, dividers);
-      if (!points) return false;
-      const a = { x: ox + points.start.x * scale, y: oz + points.start.z * scale };
-      const b = { x: ox + points.end.x * scale, y: oz + points.end.z * scale };
-      return pointSegmentDistance(px, py, a.x, a.y, b.x, b.y) <= 13;
-    });
-  };
-
   const hitDividerEnd = (px: number, py: number, scale: number, ox: number, oz: number) => {
     for (const divider of [...resolveDividers(room, dividers)].reverse()) {
       for (const end of ['start', 'end'] as const) {
@@ -1046,22 +1051,16 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
   };
 
   const updateBuildHover = (canvas: HTMLCanvasElement, px: number, py: number, scale: number, ox: number, oz: number) => {
-    const wallLabel = hitWallLabel(px, py);
-    if (wallLabel) {
-      setHover((current) => current?.type === 'wall' && current.id === wallLabel.wallId ? current : { type: 'wall', id: wallLabel.wallId });
-      canvas.style.cursor = 'text';
-      return;
-    }
     const corner = hitCorner(px, py, scale, ox, oz);
     if (corner) {
       setHover((current) => current?.type === 'corner' && current.id === corner.id ? current : { type: 'corner', id: corner.id });
       canvas.style.cursor = 'pointer';
       return;
     }
-    const opening = hitOpening(px, py, scale, ox, oz);
-    if (opening) {
-      setHover((current) => current?.type === 'opening' && current.id === opening.id ? current : { type: 'opening', id: opening.id });
-      canvas.style.cursor = 'pointer';
+    const wallLabel = hitWallLabel(px, py);
+    if (wallLabel) {
+      setHover((current) => current?.type === 'wall' && current.id === wallLabel.wallId ? current : { type: 'wall', id: wallLabel.wallId });
+      canvas.style.cursor = 'text';
       return;
     }
     const split = hitSplit(px, py, scale, ox, oz);
@@ -1081,7 +1080,9 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
   };
 
   const onPointerDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || dragRef.current) return;
+    moveQueue.current!.clear();
+    dragPointerId.current = e.pointerId;
     const { rect, scale, ox, oz } = metrics();
     const px = e.clientX - rect.left;
     const py = e.clientY - rect.top;
@@ -1104,6 +1105,15 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
         }
         return;
       }
+      const corner = hitCorner(px, py, scale, ox, oz);
+      if (corner) {
+        selectWall(null);
+        setDrag({ type: 'corner', id: corner.id, before, view,
+          grabOffset: { x: corner.x - (px - ox) / scale, z: corner.z - (py - oz) / scale } });
+        e.currentTarget.style.cursor = 'grabbing';
+        e.currentTarget.setPointerCapture(e.pointerId);
+        return;
+      }
       const dividerEnd = hitDividerEnd(px, py, scale, ox, oz);
       if (dividerEnd) {
         selectDivider(dividerEnd.id);
@@ -1112,9 +1122,7 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
         return;
       }
       const divider = hitDivider(px, py, scale, ox, oz);
-      // Door gaps sit on their divider's centreline. Let the opening hit test
-      // select and drag them before selecting the surrounding wall.
-      if (divider && !hitOpening(px, py, scale, ox, oz)) { selectDivider(divider.id); return; }
+      if (divider) { selectDivider(divider.id); return; }
       const wallLabel = hitWallLabel(px, py);
       if (wallLabel) {
         // Prevent the canvas pointer-down default action from stealing focus back
@@ -1123,22 +1131,6 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
         e.preventDefault();
         beginWallLabelEdit(wallLabel.wallId, wallLabel.rect);
         e.currentTarget.style.cursor = 'text';
-        return;
-      }
-      const corner = hitCorner(px, py, scale, ox, oz);
-      if (corner) {
-        selectWall(null);
-        setDrag({ type: 'corner', id: corner.id, before, view });
-        e.currentTarget.style.cursor = 'grabbing';
-        e.currentTarget.setPointerCapture(e.pointerId);
-        return;
-      }
-      const opening = hitOpening(px, py, scale, ox, oz);
-      if (opening) {
-        selectOpening(opening.id);
-        setDrag({ type: 'opening', id: opening.id, before, view });
-        e.currentTarget.style.cursor = 'grabbing';
-        e.currentTarget.setPointerCapture(e.pointerId);
         return;
       }
       const split = hitSplit(px, py, scale, ox, oz);
@@ -1180,7 +1172,8 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
     }
   };
 
-  const onPointerMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
+  const applyPointerMove = (e: PointerSample) => {
+    const drag = dragRef.current;
     const { rect, scale, ox, oz } = metrics();
     const px = e.clientX - rect.left;
     const py = e.clientY - rect.top;
@@ -1219,16 +1212,6 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
       if (target) updateDivider(drag.id, { [drag.end]: target.anchor }, false);
       return;
     }
-    if (drag.type === 'opening') {
-      const opening = openings.find((o) => o.id === drag.id);
-      if (!opening) return;
-      const wall = getPhysicalWalls(room, dividers).find((candidate) => candidate.id === opening.wallId);
-      if (!wall) return;
-      const raw = wallProjectionDistance(wall, world);
-      const next = Math.max(opening.width / 2 + 0.05, Math.min(raw, wall.length - opening.width / 2 - 0.05));
-      updateOpening(opening.id, { offset: next }, false);
-      return;
-    }
     if (drag.type === 'object') {
       const obj = objects.find((o) => o.id === drag.id);
       if (!obj) return;
@@ -1246,21 +1229,32 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
       setFeedback(resolved.snap, resolved.colliding ? obj.id : null, resolved.pushedByCollision);
     }
   };
+  moveHandler.current = applyPointerMove;
+  const onPointerMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (dragRef.current && e.pointerId !== dragPointerId.current) return;
+    moveQueue.current!.push({ clientX: e.clientX, clientY: e.clientY, shiftKey: e.shiftKey, currentTarget: e.currentTarget });
+  };
 
   const onPointerUp = (e?: ReactPointerEvent<HTMLCanvasElement>) => {
+    const drag = dragRef.current;
     if (!drag) return;
-    if (e && (drag.type === 'wall' || drag.type === 'corner')) {
-      moveDraggedRoom(drag, e.clientX - drag.view.rect.left, e.clientY - drag.view.rect.top, e.shiftKey);
-    }
+    if (e && e.pointerId !== dragPointerId.current) return;
+    if (e) moveQueue.current!.push({ clientX: e.clientX, clientY: e.clientY, shiftKey: e.shiftKey, currentTarget: e.currentTarget });
+    moveQueue.current!.flush();
     if (drag.type === 'divider-end' || drag.type === 'wall' || drag.type === 'corner') syncSpaces(drag.before);
     else if (drag.type !== 'pan') commitSnapshot(drag.before);
     setDrag(null);
+    const pointerId = dragPointerId.current;
+    dragPointerId.current = null;
+    if (pointerId != null && canvasRef.current?.hasPointerCapture(pointerId)) canvasRef.current.releasePointerCapture(pointerId);
     setFeedback({ kind: 'none' }, null, false);
     if (e && purpose === 'build') e.currentTarget.style.cursor = 'default';
   };
+  finishHandler.current = () => onPointerUp();
 
   const onPointerLeave = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     if (drag) return;
+    moveQueue.current!.clear();
     setHover(null);
     e.currentTarget.style.cursor = 'default';
   };
@@ -1274,6 +1268,7 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={() => onPointerUp()}
+        onLostPointerCapture={() => onPointerUp()}
         onPointerLeave={onPointerLeave}
       />
       {purpose === 'build' && (

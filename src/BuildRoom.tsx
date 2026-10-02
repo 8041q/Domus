@@ -207,7 +207,12 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
           <strong>{openingDisplayName(opening, openings)}</strong>
           <span>{wall ? `${wall.id.startsWith('divider-') ? 'Interior wall' : `Wall ${wall.index + 1}`} · ${formatLength(wall.length, system)}` : 'Selected opening'}</span>
         </div>
-        <button className="text-danger" type="button" onClick={() => removeOpening(opening.id)}>Remove</button>
+        <div className="opening-editor-actions">
+          {opening.type === 'door' && opening.variant !== 'door-frame' && <button type="button" className="small-button"
+            aria-label="Flip door direction" title="Flip door direction" aria-pressed={!!opening.doorFlipped}
+            onClick={() => updateOpening(opening.id, { doorFlipped: !opening.doorFlipped })}>↔ Flip</button>}
+          <button className="text-danger" type="button" onClick={() => removeOpening(opening.id)}>Remove</button>
+        </div>
       </div>
       <div className="opening-type-grid">
         <label className="field-label">Kind
@@ -281,7 +286,8 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
             onPointerUp={finishSize} onBlur={finishSize} />
         </label>
       </div>
-      {opening.type !== 'door' && opening.variant !== 'full-height-window' && opening.variant !== 'sliding-window' && (
+      {opening.type !== 'door' && !(opening.type === 'opening' && opening.wallId.startsWith('divider-'))
+        && opening.variant !== 'full-height-window' && opening.variant !== 'sliding-window' && (
         <label className="field-label range-field vertical-position-slider">
           <EditableRangeValue label="Vertical Position" value={opening.sillHeight} min={0} max={Math.max(0, room.height - opening.height)} system={system} onCommit={(sillHeight) => updateOpening(opening.id, { sillHeight })} />
           <input
@@ -353,6 +359,7 @@ export function BuildRoom() {
   const openings = usePlannerStore((s) => s.openings);
   const dividers = usePlannerStore((s) => s.dividers);
   const selectedDividerId = usePlannerStore((s) => s.selectedDividerId);
+  const spaces = usePlannerStore((s) => s.spaces);
   const selectedSpaceId = usePlannerStore((s) => s.selectedSpaceId);
   const placedFurnitureCount = usePlannerStore((s) => s.objects.length);
   const system = usePlannerStore((s) => s.measurementSystem);
@@ -371,7 +378,7 @@ export function BuildRoom() {
   const setMode = usePlannerStore((s) => s.setMode);
   const selectedOpening = openings.find((o) => o.id === selectedOpeningId) ?? null;
   const roomArea = Math.abs(polygonArea(room.vertices));
-  const derivedSpaces = deriveSpaces(getSnapshot());
+  const derivedSpaces = useMemo(() => deriveSpaces(usePlannerStore.getState()), [room, dividers, spaces]);
   const selectedSpace = derivedSpaces.find((space) => space.id === selectedSpaceId) ?? null;
   const selectedDivider = resolveDividers(room, dividers).find((divider) => divider.id === selectedDividerId) ?? null;
 
@@ -395,10 +402,10 @@ export function BuildRoom() {
         <div className="panel-intro">
           <span className="eyebrow">Step 1</span>
           <h1>Build your room</h1>
-          <p>Shape the walls and openings first. Finishes and furniture come together in the design step.</p>
+          <p>{buildView === 'plan' ? 'Arrange outer walls and interior divisions in 2D.' : 'Add and adjust doors, windows and openings in 3D.'}</p>
         </div>
 
-        <section className="tool-section">
+        {buildView === 'plan' && <><section className="tool-section">
           <div className="section-title-row">
             <div><span className="section-step">1</span><h2>Room shape</h2></div>
             {room.shapeKind === 'custom' && <span className="quiet-pill">Custom</span>}
@@ -426,28 +433,15 @@ export function BuildRoom() {
           </div>
         </section>
 
-        <section className="tool-section">
-          <div className="section-title-row">
-            <div><span className="section-step">3</span><h2>Dimensions</h2></div>
-            <div className="dimension-tools">
-              <div className="unit-toggle" role="group" aria-label="Measurement units">
-                <button type="button" className={system === 'metric' ? 'active' : ''} onClick={() => setMeasurementSystem('metric')}>Metric</button>
-                <button type="button" className={system === 'imperial' ? 'active' : ''} onClick={() => setMeasurementSystem('imperial')}>Imperial</button>
-              </div>
-              <span className="quiet-pill">{room.vertices.length} walls</span>
-            </div>
-          </div>
-          <div className="dimension-grid">
-            <DimensionField label="Room height" value={room.height} min={1} max={3.3} system={system} metricStep={0.01} onCommit={(height) => updateRoom({ height })} />
-          </div>
-        </section>
+        </>}
 
-        <section className="tool-section opening-section">
-          <div className="section-title-row"><div><span className="section-step">4</span><h2>Doors, windows & openings</h2></div></div>
+        {buildView === '3d' && <section className="tool-section opening-section">
+          <div className="section-title-row"><div><span className="section-step">1</span><h2>Doors, windows & openings</h2></div></div>
           <div className="opening-quick-add" aria-label="Add an opening">
-            <button type="button" onClick={() => addOpening('door')}><span className="opening-add-mark" aria-hidden="true">+</span><span>Door</span></button>
-            <button type="button" onClick={() => addOpening('window')}><span className="opening-add-mark" aria-hidden="true">+</span><span>Window</span></button>
-            <button type="button" onClick={() => addOpening('opening')}><span className="opening-add-mark" aria-hidden="true">+</span><span>Opening</span></button>
+            <button type="button" disabled={selectedDivider?.kind === 'open'} onClick={() => addOpening('door')}><span className="opening-add-mark" aria-hidden="true">+</span><span>Door</span></button>
+            <button type="button" disabled={!!selectedDivider} title={selectedDivider ? 'Windows belong on exterior walls' : undefined}
+              onClick={() => addOpening('window')}><span className="opening-add-mark" aria-hidden="true">+</span><span>Window</span></button>
+            <button type="button" disabled={selectedDivider?.kind === 'open'} onClick={() => addOpening('opening')}><span className="opening-add-mark" aria-hidden="true">+</span><span>Opening</span></button>
           </div>
           <p className="hint compact-hint">Select a wall first to place the opening there.</p>
           {!!openings.length && (
@@ -470,13 +464,31 @@ export function BuildRoom() {
               </select>
             </label>
           )}
+        </section>}
+
+        <section className="tool-section">
+          <div className="section-title-row">
+            <div><span className="section-step">{buildView === 'plan' ? '3' : '2'}</span><h2>Dimensions</h2></div>
+            <div className="dimension-tools">
+              <div className="unit-toggle" role="group" aria-label="Measurement units">
+                <button type="button" className={system === 'metric' ? 'active' : ''} onClick={() => setMeasurementSystem('metric')}>Metric</button>
+                <button type="button" className={system === 'imperial' ? 'active' : ''} onClick={() => setMeasurementSystem('imperial')}>Imperial</button>
+              </div>
+              <span className="quiet-pill">{room.vertices.length} walls</span>
+            </div>
+          </div>
+          <div className="dimension-grid">
+            <DimensionField label="Room height" value={room.height} min={1} max={3.3} system={system} metricStep={0.01} onCommit={(height) => updateRoom({ height })} />
+          </div>
         </section>
+
+        {buildView === 'plan' && <p className="hint">Switch to 3D to add or edit doors, windows and openings.</p>}
         </div>
 
         <div className="builder-inspector-dock" aria-live="polite">
-          {selectedOpening ? (
-            <OpeningEditor opening={selectedOpening} />
-          ) : selectedDivider ? (
+          {selectedOpening && buildView === '3d' ? (
+            <OpeningEditor key={selectedOpening.id} opening={selectedOpening} />
+          ) : selectedDivider && buildView === 'plan' ? (
             <div className="wall-editor">
               <div className="opening-editor-title"><strong>{selectedDivider.kind === 'wall' ? 'Interior wall' : 'Open boundary'}</strong><button className="text-danger" type="button" onClick={() => removeDivider(selectedDivider.id)}>Remove</button></div>
               <span>{formatLength(selectedDivider.length, system)}</span>
@@ -493,12 +505,19 @@ export function BuildRoom() {
               <div className="opening-editor-title"><strong>{selectedSpace.name}</strong><span>{formatArea(selectedSpace.area, system)}</span></div>
               <p className="hint">Edit this space’s name and finishes in Plan Room.</p>
             </div>
+          ) : buildView === '3d' && (selectedWallId || selectedDivider) ? (
+            <div className="builder-inspector-empty">
+              <span className="eyebrow">{selectedDivider ? 'Interior wall' : 'Exterior wall'}</span>
+              <strong>Add an opening to this wall</strong>
+              <p>{selectedDivider?.kind === 'open' ? 'This is an invisible boundary. Change it to a physical wall in 2D to add a door.'
+                : selectedDivider ? 'Use Door or Opening above. Windows belong on exterior walls.' : 'Use Door, Window or Opening above.'}</p>
+            </div>
           ) : selectedWallId ? (
             <WallEditor wallId={selectedWallId} />
           ) : (
             <div className="builder-inspector-empty">
               <span className="eyebrow">Selection settings</span>
-              <strong>Select a wall, door, window or opening</strong>
+              <strong>{buildView === 'plan' ? 'Select a wall, corner or division' : 'Select a wall, door, window or opening'}</strong>
             </div>
           )}
         </div>
@@ -514,8 +533,8 @@ export function BuildRoom() {
             <div className="workspace-toolbar-actions">
               <span className="workspace-area-badge" title="Room area"><small>Room area</small><strong>{formatArea(roomArea, system)}</strong></span>
               <div className="segmented-control" role="group" aria-label="Room builder view">
-                <button type="button" className={buildView === 'plan' ? 'active' : ''} onClick={() => setBuildView('plan')} aria-pressed={buildView === 'plan'}>2D</button>
-                <button type="button" className={buildView === '3d' ? 'active' : ''} onClick={() => setBuildView('3d')} aria-pressed={buildView === '3d'}>3D</button>
+                <button type="button" className={buildView === 'plan' ? 'active' : ''} onClick={() => { selectOpening(null); setBuildView('plan'); }} aria-pressed={buildView === 'plan'}>2D</button>
+                <button type="button" className={buildView === '3d' ? 'active' : ''} onClick={() => { setDividerTool(null); setBuildView('3d'); }} aria-pressed={buildView === '3d'}>3D</button>
               </div>
             </div>
           </div>
@@ -525,7 +544,7 @@ export function BuildRoom() {
             <div
               className="builder-3d-selection-surface"
               onPointerDownCapture={(event) => {
-                if (!selectedOpeningId && !selectedWallId) return;
+                if (!selectedOpeningId && !selectedWallId && !selectedDividerId) return;
                 // Clear the current architectural focus before the renderer handles the hit.
                 // Clicking a door/window immediately re-selects it; clicking empty 3D space leaves it cleared.
                 selectOpening(null);

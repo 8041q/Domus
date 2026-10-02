@@ -202,21 +202,21 @@ test('malformed interior saves are rejected atomically', () => {
 });
 
 for (const rotationY of [0, Math.PI / 4, Math.PI / 2]) {
-  test(`door gaps test rotated furniture at ${Math.round(rotationY * 180 / Math.PI)} degrees`, () => {
+  test(`interior boundaries permit rotated furniture at ${Math.round(rotationY * 180 / Math.PI)} degrees`, () => {
     const main = addMainWall();
     const chair = { id: 'chair', productId: 'chair', x: 2.6, z: 1.9, rotationY };
     const opening = { id: 'door', type: 'door', variant: 'single-door', wallId: main.id, width: 0.9, offset: 1.9, height: 2.08, sillHeight: 0 };
     const room = spaces.architectureRoom({ ...getSnapshot(), openings: [opening] });
     assert.equal(placement.isPlacementValid(chair, room, []), true);
-    assert.equal(placement.isPlacementValid(chair, { ...room, openings: [{ ...opening, width: 0.3 }] }, []), false);
+    assert.equal(placement.isPlacementValid(chair, { ...room, openings: [{ ...opening, width: 0.3 }] }, []), true);
   });
 }
 
-test('short floor-level openings block furniture taller than the gap', () => {
+test('short floor-level openings remain soft targets for taller furniture', () => {
   const main = addMainWall();
   const opening = { id: 'gap', type: 'opening', variant: 'wall-opening', wallId: main.id, width: 1.4, offset: 1.9, height: 0.5, sillHeight: 0 };
   const room = spaces.architectureRoom({ ...getSnapshot(), openings: [opening] });
-  assert.equal(placement.isPlacementValid({ id: 'tall', productId: 'chair', x: 2.6, z: 1.9, rotationY: 0 }, room, []), false);
+  assert.equal(placement.isPlacementValid({ id: 'tall', productId: 'chair', x: 2.6, z: 1.9, rotationY: 0 }, room, []), true);
   assert.equal(placement.isPlacementValid({ id: 'low', productId: 'coffee-table', x: 2.6, z: 1.9, rotationY: 0 }, room, []), true);
 });
 
@@ -305,8 +305,8 @@ test('adding furniture to a divided room always finds a valid position or leaves
   }
 });
 
-test('furniture too wide for every space is kept unplaced', () => {
-  const snapshot = assignSpaces(snapshotFor({ width: 3, vertices: roomGeometry.roomTemplate('rectangle', 3, 3.8) }, [
+test('furniture too wide for the exterior shell is kept unplaced', () => {
+  const snapshot = assignSpaces(snapshotFor({ width: 1.5, vertices: roomGeometry.roomTemplate('rectangle', 3, 3.8).map((v) => ({ ...v, x: v.x / 2 })) }, [
     divider('narrow-left', anchor('wall-v0-v1', 1 / 3), anchor('wall-v2-v3', 2 / 3)),
     divider('narrow-right', anchor('wall-v0-v1', 2 / 3), anchor('wall-v2-v3', 1 / 3))
   ]));
@@ -324,6 +324,21 @@ test('furniture too wide for every space is kept unplaced', () => {
   assert.deepEqual(getSnapshot(), before);
 });
 
+test('furniture wider than every divided space can still be inserted and moved across the layout', () => {
+  const snapshot = assignSpaces(snapshotFor({ width: 3, vertices: roomGeometry.roomTemplate('rectangle', 3, 3.8) }, [
+    divider('left', anchor('wall-v0-v1', 1 / 3), anchor('wall-v2-v3', 2 / 3)),
+    divider('right', anchor('wall-v0-v1', 2 / 3), anchor('wall-v2-v3', 1 / 3))
+  ]));
+  snapshot.spaces = snapshot.spaces.map(({ polygon, area, ...space }) => space);
+  store.setState(snapshot);
+  store.getState().addObject('sofa');
+  const object = getSnapshot().objects[0];
+  assert.ok(object);
+  assert.equal(getSnapshot().unplacedObjects.length, 0);
+  assert.equal(placement.overlapsInteriorWall(object, spaces.architectureRoom(getSnapshot())), true);
+  assert.equal(placement.isPlacementValid(object, spaces.architectureRoom(getSnapshot()), []), true);
+});
+
 test('a threshold detects different finishes anywhere along a door crossed by an invisible boundary', () => {
   const room = { vertices: roomGeometry.roomTemplate('rectangle', 6, 5) };
   const main = divider('main', anchor('wall-v0-v1', 0.4), anchor('wall-v2-v3', 0.6));
@@ -335,10 +350,10 @@ test('a threshold detects different finishes anywhere along a door crossed by an
   assert.equal(spaces.interiorDoorHasThreshold(snapshot, door), true);
 });
 
-test('free furniture overlap still respects physical dividers', () => {
+test('free furniture overlap crosses physical dividers', () => {
   addMainWall();
   const chair = { id: 'chair', productId: 'chair', x: 1, z: 1, rotationY: 0 };
-  assert.ok(placement.resolvePlacement(chair, 4, 1, spaces.architectureRoom(getSnapshot()), [], { allowOverlap: true }).x < 2.6);
+  assert.ok(placement.resolvePlacement(chair, 4, 1, spaces.architectureRoom(getSnapshot()), [], { allowOverlap: true }).x === 4);
 });
 
 test('splits inherit the containing space finishes, including a second split beside differently decorated spaces', () => {
@@ -371,37 +386,54 @@ test('selection and finish edits remain independent for each space', () => {
   assert.equal(getSnapshot().spaces.find((space) => space.id === second.id).wallColor, second.wallColor);
 });
 
-test('the editing space controls furniture spawn and selection without changing the camera', () => {
+test('editing spaces control finishes while furniture searches the whole shell without changing the camera', () => {
   addMainWall();
   store.getState().setMode('plan');
-  assert.ok(store.getState().selectedSpaceId);
   store.getState().setPlanView('top');
-  const left = spaces.spaceAtPoint(getSnapshot(), { x: 1, z: 1 });
   const right = spaces.spaceAtPoint(getSnapshot(), { x: 4, z: 1 });
-  for (const space of [left, right]) {
-    store.getState().selectSpace(space.id);
-    store.getState().addObject('chair');
-    assert.equal(spaces.spaceAtPoint(getSnapshot(), getSnapshot().objects.at(-1)).id, space.id);
-    assert.equal(store.getState().planView, 'top');
-  }
-  store.getState().select(getSnapshot().objects[0].id);
-  assert.equal(store.getState().selectedSpaceId, left.id);
-  store.getState().select(null);
-  assert.equal(store.getState().selectedSpaceId, left.id);
+  store.getState().selectSpace(right.id);
+  store.getState().addObject('chair');
+  const object = getSnapshot().objects.at(-1);
+  assert.equal(placement.isPlacementValid(object, spaces.architectureRoom(getSnapshot()), []), true);
+  assert.equal(placement.overlapsInteriorWall(object, spaces.architectureRoom(getSnapshot())), false);
+  assert.equal(store.getState().planView, 'top');
+  store.getState().select(object.id);
+  assert.equal(store.getState().selectedSpaceId, spaces.spaceAtPoint(getSnapshot(), object).id);
+  const before = getSnapshot();
+  store.getState().updateObject(object.id, { x: 4, z: 1 });
+  store.getState().commitSnapshot(before);
+  assert.equal(store.getState().selectedSpaceId, right.id);
+  store.getState().undo();
+  near(getSnapshot().objects[0].x, object.x);
+  store.getState().redo();
+  near(getSnapshot().objects[0].x, 4);
+  store.getState().saveLocal();
+  store.getState().resetProject();
+  assert.equal(store.getState().loadLocal(), true);
+  near(getSnapshot().objects[0].x, 4);
 });
 
-test('a crowded editing space never spills new furniture into another space and can retry there', () => {
+test('a narrow editing space does not prevent adding furniture elsewhere in the shell', () => {
   store.getState().addDivider('wall', anchor('wall-v0-v1', 0.12), anchor('wall-v2-v3', 0.88));
   const narrow = spaces.spaceAtPoint(getSnapshot(), { x: 0.3, z: 1 });
   const wide = spaces.spaceAtPoint(getSnapshot(), { x: 3, z: 1 });
   store.getState().selectSpace(narrow.id);
   store.getState().addObject('sofa');
-  assert.equal(getSnapshot().objects.length, 0);
-  const item = getSnapshot().unplacedObjects[0];
-  assert.equal(item.productId, 'sofa');
-  store.getState().selectSpace(wide.id);
-  store.getState().placeUnplacedObject(item.id);
+  assert.equal(getSnapshot().objects.length, 1);
   assert.equal(getSnapshot().unplacedObjects.length, 0);
-  assert.equal(getSnapshot().objects[0].id, item.id);
   assert.equal(spaces.spaceAtPoint(getSnapshot(), getSnapshot().objects[0]).id, wide.id);
+});
+
+test('furniture straddling a divider survives save, load and rotation', () => {
+  addMainWall();
+  store.getState().addObject('chair');
+  const object = getSnapshot().objects[0];
+  store.getState().updateObject(object.id, { x: 2.6, z: 1.9 });
+  store.getState().rotateSelected(Math.PI / 4);
+  const snapshot = getSnapshot();
+  assert.equal(placement.isPlacementValid(snapshot.objects[0], spaces.architectureRoom(snapshot), []), true);
+  store.getState().saveLocal();
+  store.getState().resetProject();
+  assert.equal(store.getState().loadLocal(), true);
+  assert.deepEqual(getSnapshot().objects, snapshot.objects);
 });

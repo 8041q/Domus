@@ -47,7 +47,9 @@ interface PlannerSnapshot {
 - `RoomState` contains an ordered polygon, dimensions, finishes, baseboard
   settings, and lighting settings.
 - Each opening belongs to a stable wall-segment ID and stores its wall offset,
-  size, sill height, type, and architectural variant.
+  size, sill height, type, and architectural variant. Doors may store `doorFlipped`
+  to reverse their facing and hinge/latch direction; older saves default to the
+  original direction.
 - Interior dividers attach to perimeter walls or existing dividers. Physical walls
   and invisible boundaries form a planar graph; its bounded faces are named spaces
   with independent floor finishes and wall colours.
@@ -68,6 +70,13 @@ valid room position when possible. The active key is
 Legacy sun-style values are also mapped to the corrected style names while
 preserving the lighting each saved room displayed.
 
+During development, `store.ts` accepts hot updates and retains the existing
+Zustand store and snapshot history in Vite's hot data. `core/hotStore.ts` replaces
+action implementations while retaining all project/UI values and the store's
+identity, so cached lazy views and live renderer subscriptions keep reading the
+same project. This avoids a store reset or full-page invalidation when this data
+module is updated. Production startup still creates a fresh store normally.
+
 Undo and redo use cloned semantic snapshots. Continuous drags update live but
 commit the state captured at pointer-down once, producing one history entry per
 gesture.
@@ -77,9 +86,24 @@ gesture.
 ### Build Room
 
 Build Room owns room topology and architectural openings. Its 2D canvas handles
-wall, corner, opening, divider, and split-wall interactions against a world-anchored
+wall, corner, divider, and split-wall interactions against a world-anchored
 drafting grid. Wall edits preserve world coordinates; angled walls and negative
 coordinates are valid.
+
+Door/window/passage creation and editing are available only in 3D. The 2D layout
+retains their plan symbols as context. 3D picking selects visible physical walls;
+windows remain restricted to the exterior. Leaf doors have a Flip button, and
+their closed leaf, panels, handles, casings and hinges are modelled on both sides.
+Door flips keep the aperture and threshold unchanged and survive history/save/load
+and GLB export.
+
+Pointer samples are coalesced by `core/frameQueue.ts`; the final sample is flushed
+before history is committed. Corner and opening drags retain the initial grab
+offset. Opening drags stay on their existing wall; use the Wall selector to move
+them to another wall. Pointer cancellation and focus loss release drag controls.
+Opening edits rebuild only the affected old/new walls and reuse window-fill lights
+and their shadow maps. Adjacent space lookups share one derived layout per wall
+rebuild, and repeated identical geometry samples do not notify the store.
 
 Divider edits commit immediately, assigning stable space IDs and automatically
 inheriting the containing space’s finishes for new faces. Names and finishes are
@@ -98,21 +122,43 @@ defined as semantic product data with dimensions, collision footprints,
 interaction tags, wall affinity, and clearances. Models are currently generated
 procedurally by the renderer.
 
-The top-left editing-space selector controls finish edits and new furniture
-placement. Selecting a floor or an existing item also selects its space; the
-finishes panel opens from its toolbar button. Space and divider
-changes schedule a scene refresh, including floor materials and per-side wall
-colours. Design and Room finishes use the same draggable panel component; each
-stores its position in local storage and clamps it to the available workspace
+The top-left editing-space selector controls finish edits. Selecting a floor or
+an existing item also selects its space; dropping furniture in another space
+follows that space. The finishes panel opens from its toolbar button. The space selector uses an
+anchored list below its trigger, with mouse and keyboard selection, Escape and
+outside-click dismissal; it does not use the OS-positioned native select menu. Space and
+divider changes schedule a scene refresh, including floor materials and per-side
+wall colours. Rendered space floors are clipped to the slab's inner miter edge by
+`renderer/floorGeometry.ts`, including concave shells. Semantic space outlines and
+areas stay on wall centre lines. The same clipped surfaces are used in GLB exports.
+Design and Room finishes use the same draggable panel component;
+each stores its position in local storage and clamps it to the available workspace
 when reopened or resized. These UI preferences are separate from project history.
 
-New furniture searches valid destinations inside the selected space without
-changing the camera preset. Items that cannot fit remain unplaced and can be
-retried after switching spaces. Invisible boundaries do not block furniture.
+New furniture searches valid destinations throughout the exterior shell without
+requiring a selected space or changing the camera preset. Insertion prefers clear
+points away from interior walls, then allows divider overlap if needed. Items that
+cannot fit the shell or other furniture remain unplaced. During dragging, interior
+walls are soft targets: a 12 cm entry / 20 cm exit snap gap applies to interior walls; exterior snaps retain 18 mm / 21 mm;
+continued dragging releases the snap and crosses the wall. Exterior bounds and
+product collision rules still apply. Interior walls remain spacing and clearance
+targets; invisible boundaries provide neither collision nor snapping.
 
 Interior walls have invisible shadow geometry independent of camera cutaways.
 It blocks window sunlight and fill lights, with apertures for open passages and
 glazed door panes. Window fill lights use shadow maps when physical dividers exist.
+
+Walls up shows full-height physical dividers; Walls down shows flat 22 cm sections.
+Neither mode depends on camera angle, furniture selection or editing space.
+Dropped sections have closed neutral gray poché caps, original per-side finishes,
+and low door jambs. Existing floor thresholds stay visible. Exterior cutaway logic
+is independent and unchanged. Presentation meshes are excluded from export;
+canonical walls and doors retain full height for GLB, and daylight blockers use
+the complete architecture.
+
+Free cam is independent of wall presentation. An orbit from Top, Front, Back,
+Left or Right switches to Free cam while retaining the view direction and framing.
+Zoom and pan retain the fixed preset; the wall toggle does not reset the camera.
 
 Placement resolves in core code before rendering. It keeps oriented footprints
 inside arbitrary room polygons, applies magnetic wall/object/centre snaps, and

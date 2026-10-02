@@ -12,13 +12,14 @@ import type { BaseboardMaterial, BaseboardStyle } from './core/types';
 import { getSnapshot, usePlannerStore } from './store';
 import { Icon } from './ui';
 import { FloatingPanel } from './FloatingPanel';
+import { EditingSpaceSelector } from './EditingSpaceSelector';
 
 const Viewport3D = lazy(() => import('./Viewport3D').then((module) => ({ default: module.Viewport3D })));
 const AIExperimentPanel = lazy(() => import('./ai/AIExperimentPanel').then((module) => ({ default: module.AIExperimentPanel })));
 
 const CATEGORIES: Array<'All' | ProductCategory> = ['All', 'Seating', 'Tables', 'Storage', 'Decor'];
 const VIEW_PRESETS: Array<{ id: PlanCameraView; label: string }> = [
-  { id: 'perspective', label: 'Cutaway' },
+  { id: 'free', label: 'Free cam' },
   { id: 'top', label: 'Top' },
   { id: 'front', label: 'Front' },
   { id: 'right', label: 'Right' },
@@ -394,6 +395,8 @@ export function PlanRoom({ onExportReady }: { onExportReady?: (handler: (() => P
   const sunRaysEnabled = usePlannerStore((s) => s.room.lighting.sunRaysEnabled);
   const planView = usePlannerStore((s) => s.planView);
   const setPlanView = usePlannerStore((s) => s.setPlanView);
+  const interiorWallView = usePlannerStore((s) => s.interiorWallView);
+  const setInteriorWallView = usePlannerStore((s) => s.setInteriorWallView);
 
   useEffect(() => {
     if (spaces.length && !spaces.some((space) => space.id === selectedSpaceId)) selectSpace(spaces[0].id);
@@ -420,14 +423,13 @@ export function PlanRoom({ onExportReady }: { onExportReady?: (handler: (() => P
 
       <section className="designer-canvas">
         <div className="designer-stage">
-          <label className="editing-space-selector">Editing space
-            <select value={selectedSpaceId ?? spaces[0]?.id ?? ''} onChange={(event) => selectSpace(event.target.value)}>
-              {spaces.map((space) => <option key={space.id} value={space.id}>{space.name}</option>)}
-            </select>
-          </label>
+          <EditingSpaceSelector spaces={spaces} value={selectedSpaceId ?? spaces[0]?.id ?? ''} onChange={selectSpace} />
           <div className="designer-topbar" aria-label="Room view controls">
             <div className="view-preset-bar" role="group" aria-label="3D room view">
-              {VIEW_PRESETS.map((view) => <button key={view.id} type="button" className={planView === view.id ? 'active' : ''} onClick={() => setPlanView(view.id)}>{view.label}</button>)}
+              <button type="button" className={interiorWallView === 'up' ? 'active' : ''} aria-pressed={interiorWallView === 'up'} onClick={() => setInteriorWallView('up')}>Walls up</button>
+              <button type="button" className={interiorWallView === 'down' ? 'active' : ''} aria-pressed={interiorWallView === 'down'} onClick={() => setInteriorWallView('down')}>Walls down</button>
+              <span className="view-control-divider" aria-hidden="true" />
+              {VIEW_PRESETS.map((view) => <button key={view.id} type="button" className={planView === view.id ? 'active' : ''} aria-pressed={planView === view.id} onClick={() => setPlanView(view.id)}>{view.label}</button>)}
             </div>
             <div className="designer-meta">
               <div className="room-count">{objectCount} item{objectCount === 1 ? '' : 's'} · {formatArea(Math.abs(polygonArea(roomVertices)), measurementSystem)} · {roomVertices.length} walls</div>

@@ -1,8 +1,8 @@
-import { create } from 'zustand';
+import { createHotStore } from './core/hotStore';
 import type { AiApplyResult, AiProposal } from './ai/types';
 import { applyAiProposal as executeAiProposal, snapshotRevision } from './core/aiProposal';
 import { PRODUCTS, rotatedFootprint } from './core/products';
-import { isPlacementValid, objectsOverlap, resolvePlacement, resolveRotationPlacement } from './core/placement';
+import { isPlacementValid, objectsOverlap, overlapsInteriorWall, resolvePlacement, resolveRotationPlacement } from './core/placement';
 import { SnapshotHistory } from './core/history';
 import { architectureRoom, deriveSpaces, resolveDividers, spaceAtPoint, validateDividers, validateInteriorOpenings } from './core/spaces';
 import { normalizeFloorFinish } from './core/roomFinishes';
@@ -15,7 +15,6 @@ import {
   resizeWallCentered,
   splitWall,
   roomBounds,
-  pointInRoom,
   roomTemplate,
   scaleRoom,
   syncRoomBounds
@@ -48,6 +47,7 @@ interface PlannerStore extends PlannerSnapshot {
   mode: AppMode;
   buildView: BuildWorkspaceView;
   planView: PlanCameraView;
+  interiorWallView: 'up' | 'down';
   measurementSystem: MeasurementSystem;
   selectedId: string | null;
   selectedOpeningId: string | null;
@@ -65,6 +65,7 @@ interface PlannerStore extends PlannerSnapshot {
   setMode: (mode: AppMode) => void;
   setBuildView: (view: BuildWorkspaceView) => void;
   setPlanView: (view: PlanCameraView) => void;
+  setInteriorWallView: (view: 'up' | 'down') => void;
   setMeasurementSystem: (system: MeasurementSystem) => void;
   setShowClearance: (show: boolean) => void;
   setShowRoomDimensions: (show: boolean) => void;
@@ -111,7 +112,9 @@ interface PlannerStore extends PlannerSnapshot {
   resetProject: () => void;
 }
 
-const history = new SnapshotHistory();
+// Lazy 2D/3D views and renderer bridges must retain the same store after HMR.
+// Preserve history alongside the store, then refresh action implementations below.
+const history: SnapshotHistory = import.meta.hot?.data.history ?? new SnapshotHistory();
 const initialVertices = roomTemplate('rectangle', 5.2, 3.8);
 const defaultRoom: RoomState = {
   width: 5.2,
@@ -255,7 +258,8 @@ function normalizeOpening(opening: RoomOpening & { wall?: RoomWall }, room: Room
   const sillHeight = forcedFloor ? 0 : Math.max(0, opening.sillHeight);
   const maxHeight = Math.max(minHeight, room.height - sillHeight);
   const height = Math.max(minHeight, Math.min(opening.height, maxHeight));
-  return { id: opening.id, type: opening.type, variant, wallId, width, offset, height, sillHeight };
+  return { id: opening.id, type: opening.type, variant, wallId, width, offset, height, sillHeight,
+    ...(opening.type === 'door' && opening.doorFlipped != null ? { doorFlipped: opening.doorFlipped === true } : {}) };
 }
 
 function normalizeSnapshot(snapshot: Omit<PlannerSnapshot, 'dividers' | 'spaces'> & Partial<Pick<PlannerSnapshot, 'dividers' | 'spaces'>>): PlannerSnapshot {
@@ -283,10 +287,8 @@ function validInteriorArchitecture(snapshot: PlannerSnapshot) {
     && snapshot.objects.every((object) => isPlacementValid(object, architectureRoom(snapshot), []));
 }
 
-function findSpawnPosition(productId: ProductKind, snapshot: PlannerSnapshot, spaceId?: string | null) {
-  const space = spaceId ? deriveSpaces(snapshot).find((space) => space.id === spaceId) : null;
-  const vertices = space ? space.polygon.map((point, index) => ({ ...point, id: `spawn-${index}` })) : snapshot.room.vertices;
-  const bounds = roomBounds(vertices);
+function findSpawnPosition(productId: ProductKind, snapshot: PlannerSnapshot) {
+  const bounds = roomBounds(snapshot.room.vertices);
   const room = architectureRoom(snapshot);
   const moving: PlacedObject = {
     id: 'spawn',
@@ -298,21 +300,21 @@ function findSpawnPosition(productId: ProductKind, snapshot: PlannerSnapshot, sp
   const step = 0.1;
   const centreX = moving.x;
   const centreZ = moving.z;
-  const fits = (x: number, z: number) => (!space || pointInRoom({ x, z }, { ...snapshot.room, vertices }, false))
-    && isPlacementValid({ ...moving, x, z }, room, snapshot.objects);
-  if (space && fits(space.seed.x, space.seed.z)) return { x: space.seed.x, z: space.seed.z };
+  const fits = (x: number, z: number) => isPlacementValid({ ...moving, x, z }, room, snapshot.objects);
 
   const maxRadius = Math.ceil(Math.max(bounds.width, bounds.depth) / (2 * step));
-  for (let radius = 0; radius <= maxRadius; radius += 1) {
-    for (let dz = -radius; dz <= radius; dz += 1) {
-      for (let dx = -radius; dx <= radius; dx += 1) {
-        if (Math.abs(dx) !== radius && Math.abs(dz) !== radius) continue;
-        const rawX = centreX + dx * step;
-        const rawZ = centreZ + dz * step;
-        if (rawX < bounds.minX || rawX > bounds.maxX || rawZ < bounds.minZ || rawZ > bounds.maxZ) continue;
-        // A newly added item has no drag path. Test its destination directly so
-        // a divider through the room centre cannot trap every spawn candidate.
-        if (fits(rawX, rawZ)) return { x: rawX, z: rawZ };
+  // Prefer a clear initial position anywhere in the shell. If no such point
+  // exists, dividers may be crossed just as they can during furniture dragging.
+  for (const avoidWalls of [true, false]) {
+    for (let radius = 0; radius <= maxRadius; radius += 1) {
+      for (let dz = -radius; dz <= radius; dz += 1) {
+        for (let dx = -radius; dx <= radius; dx += 1) {
+          if (Math.abs(dx) !== radius && Math.abs(dz) !== radius) continue;
+          const x = centreX + dx * step;
+          const z = centreZ + dz * step;
+          if (x < bounds.minX || x > bounds.maxX || z < bounds.minZ || z > bounds.maxZ) continue;
+          if (fits(x, z) && (!avoidWalls || !overlapsInteriorWall({ ...moving, x, z }, room))) return { x, z };
+        }
       }
     }
   }
@@ -320,7 +322,7 @@ function findSpawnPosition(productId: ProductKind, snapshot: PlannerSnapshot, sp
   return null;
 }
 
-export const usePlannerStore = create<PlannerStore>((set, get) => ({
+export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
   room: defaultRoom,
   openings: defaultOpenings,
   dividers: [],
@@ -329,7 +331,8 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
   unplacedObjects: [],
   mode: 'build',
   buildView: 'plan',
-  planView: 'perspective',
+  planView: 'free',
+  interiorWallView: 'up',
   measurementSystem: 'metric',
   selectedId: null,
   selectedOpeningId: null,
@@ -346,7 +349,7 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
 
   setMode: (mode) => set((state) => ({
     mode,
-    planView: mode === 'plan' && state.mode !== 'plan' ? 'perspective' : state.planView,
+    planView: mode === 'plan' && state.mode !== 'plan' ? 'free' : state.planView,
     selectedId: null,
     selectedOpeningId: null,
     selectedWallId: null,
@@ -357,6 +360,7 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
   })),
   setBuildView: (buildView) => set({ buildView }),
   setPlanView: (planView) => set({ planView }),
+  setInteriorWallView: (interiorWallView) => set({ interiorWallView }),
   setMeasurementSystem: (measurementSystem) => set({ measurementSystem }),
   setShowClearance: (showClearance) => set({ showClearance }),
   setShowRoomDimensions: (showRoomDimensions) => set({ showRoomDimensions }),
@@ -371,14 +375,15 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
   addObject: (productId) => {
     const before = snapshotOf(get());
     const id = `${productId}-${crypto.randomUUID().slice(0, 8)}`;
-    const pos = findSpawnPosition(productId, before, get().selectedSpaceId);
+    const pos = findSpawnPosition(productId, before);
     if (!pos) {
       set((state) => ({ unplacedObjects: [...state.unplacedObjects, { id, productId }] }));
       history.push(before);
       return;
     }
     const object: PlacedObject = { id, productId, x: pos.x, z: pos.z, rotationY: 0 };
-    set((state) => ({ objects: [...state.objects, object], selectedId: id }));
+    set((state) => ({ objects: [...state.objects, object], selectedId: id,
+      selectedSpaceId: spaceAtPoint(before, object)?.id ?? state.selectedSpaceId }));
     history.push(before);
   },
 
@@ -386,13 +391,14 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
     const item = get().unplacedObjects.find((object) => object.id === id);
     if (!item) return;
     const before = snapshotOf(get());
-    const pos = findSpawnPosition(item.productId, before, get().selectedSpaceId);
+    const pos = findSpawnPosition(item.productId, before);
     if (!pos) return;
     const object: PlacedObject = { ...item, x: pos.x, z: pos.z, rotationY: 0 };
     set((state) => ({
       objects: [...state.objects, object],
       unplacedObjects: state.unplacedObjects.filter((candidate) => candidate.id !== id),
-      selectedId: id
+      selectedId: id,
+      selectedSpaceId: spaceAtPoint(before, object)?.id ?? state.selectedSpaceId
     }));
     history.push(before);
   },
@@ -430,7 +436,11 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
   updateObject: (id, patch) => set((state) => ({ objects: state.objects.map((o) => o.id === id ? { ...o, ...patch } : o) })),
   commitSnapshot: (before) => {
     const current = snapshotOf(get());
-    if (JSON.stringify(before) !== JSON.stringify(current)) history.push(before);
+    if (JSON.stringify(before) !== JSON.stringify(current)) {
+      history.push(before);
+      const selected = current.objects.find((object) => object.id === get().selectedId);
+      if (selected) set({ selectedSpaceId: spaceAtPoint(current, selected)?.id ?? get().selectedSpaceId });
+    }
   },
   applyAiProposal: (proposal) => {
     const before = snapshotOf(get());
@@ -455,6 +465,9 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
   setRoom: (room) => set((state) => normalizeSnapshot({ room, openings: state.openings, objects: state.objects, unplacedObjects: state.unplacedObjects })),
   setRoomVertices: (vertices, shapeKind = 'custom') => {
     const state = get();
+    if (state.room.shapeKind === shapeKind && vertices.length === state.room.vertices.length
+      && vertices.every((vertex, index) => vertex.id === state.room.vertices[index].id
+        && vertex.x === state.room.vertices[index].x && vertex.z === state.room.vertices[index].z)) return;
     const room = syncRoomBounds({ ...state.room, shapeKind }, vertices);
     if (!validateDividers(room, state.dividers)) return;
     const candidate = normalizeSnapshot({ room, openings: state.openings, dividers: state.dividers, spaces: state.spaces,
@@ -562,9 +575,10 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
   updateDivider: (id, patch, recordHistory = true) => {
     const before = recordHistory ? snapshotOf(get()) : null;
     const dividers = get().dividers.map((divider) => divider.id === id ? { ...divider, ...patch, id } : divider);
+    if (JSON.stringify(dividers) === JSON.stringify(get().dividers)) return true;
     if (!validateDividers(get().room, dividers)) return false;
     if (patch.kind === 'open' && get().openings.some((opening) => opening.wallId === id)) return false;
-    const candidate = normalizeSnapshot({ ...snapshotOf(get()), dividers });
+    const candidate = normalizeSnapshot({ ...get(), dividers });
     if (!validInteriorArchitecture(candidate)) return false;
     if (!candidate.objects.every((object) => isPlacementValid(object, architectureRoom(candidate), candidate.objects.filter((other) => other.id !== object.id)))) return false;
     set({ dividers, openings: candidate.openings });
@@ -703,7 +717,13 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
       }
       return normalizeOpening({ ...o, ...preset, ...patch, type: nextType, variant: nextVariant }, state.room, state.dividers);
     });
-    if (!validInteriorArchitecture({ ...state, openings })) return;
+    if (openings.every((opening, index) => {
+      const previous = state.openings[index];
+      return Object.entries(opening).every(([key, value]) => value === previous[key as keyof RoomOpening])
+        && Object.entries(previous).every(([key, value]) => value === opening[key as keyof RoomOpening]);
+    })) return;
+    // Moving an aperture cannot change the divider network or furniture bounds.
+    if (!validateInteriorOpenings(state.room, state.dividers, openings)) return;
     set({ openings });
     if (before) history.push(before);
   },
@@ -742,7 +762,8 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
       if (parsed.openings != null && (!Array.isArray(parsed.openings) || !parsed.openings.every((opening) => opening
         && typeof opening.id === 'string' && ['door', 'window', 'opening'].includes(opening.type)
         && Number.isFinite(opening.width) && opening.width > 0 && Number.isFinite(opening.height) && opening.height > 0
-        && Number.isFinite(opening.offset) && Number.isFinite(opening.sillHeight) && opening.sillHeight >= 0))) return false;
+        && Number.isFinite(opening.offset) && Number.isFinite(opening.sillHeight) && opening.sillHeight >= 0
+        && (opening.doorFlipped == null || typeof opening.doorFlipped === 'boolean')))) return false;
       const migratedObjects = parsed.objects
         .map((object) => {
           const legacyId = String(object.productId);
@@ -793,10 +814,20 @@ export const usePlannerStore = create<PlannerStore>((set, get) => ({
       collisionPush: false,
       mode: 'build',
       buildView: 'plan',
-      planView: 'perspective'
+      planView: 'free',
+      interiorWallView: 'up'
     });
     history.push(before);
   }
-}));
+}), import.meta.hot?.data.store);
+
+// Self-accept this data module so Vite does not invalidate lazy view boundaries
+// and fall back to a page reload. All views retain the hook above; refreshed
+// actions notify their existing subscriptions.
+import.meta.hot?.accept();
+import.meta.hot?.dispose((data) => {
+  data.store = usePlannerStore;
+  data.history = history;
+});
 
 export const getSnapshot = (): PlannerSnapshot => snapshotOf(usePlannerStore.getState());

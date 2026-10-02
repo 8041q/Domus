@@ -196,12 +196,12 @@ export function spaceAtPoint(snapshot: PlannerSnapshot, point: Vec2) {
 }
 
 /** Probe the semantic face beside the centreline, including very narrow spaces. */
-export function wallAdjacentSpaces(snapshot: PlannerSnapshot, wall: RoomWallSegment, distance: number) {
+export function wallAdjacentSpaces(snapshot: PlannerSnapshot, wall: RoomWallSegment, distance: number, spaces = deriveSpaces(snapshot)) {
   const centre = mix(wall.start, wall.end, distance / wall.length);
   const offset = 1e-4;
   return {
-    left: spaceAtPoint(snapshot, { x: centre.x + wall.inward.x * offset, z: centre.z + wall.inward.z * offset }),
-    right: spaceAtPoint(snapshot, { x: centre.x - wall.inward.x * offset, z: centre.z - wall.inward.z * offset })
+    left: spaces.find((space) => pointInPolygon({ x: centre.x + wall.inward.x * offset, z: centre.z + wall.inward.z * offset }, space.polygon)) ?? null,
+    right: spaces.find((space) => pointInPolygon({ x: centre.x - wall.inward.x * offset, z: centre.z - wall.inward.z * offset }, space.polygon)) ?? null
   };
 }
 
