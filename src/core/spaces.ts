@@ -1,3 +1,4 @@
+import { activeArchitecture } from './activeArchitecture';
 import { getRoomWalls, isValidRoom, pointInRoom, polygonArea } from './roomGeometry';
 import type { DividerAnchor, InteriorDivider, NamedSpace, PlannerSnapshot, RoomOpening, RoomState, RoomWallSegment, Vec2 } from './types';
 
@@ -229,7 +230,8 @@ export function getPhysicalWalls(room: RoomState, dividers: InteriorDivider[]): 
 }
 
 export function architectureRoom(snapshot: PlannerSnapshot) {
-  return { ...snapshot.room, dividers: snapshot.dividers, openings: snapshot.openings };
+  const active = activeArchitecture(snapshot);
+  return { ...active.room, dividers: active.dividers, openings: active.openings };
 }
 
 export function validateDividers(room: RoomState, dividers: InteriorDivider[]) {

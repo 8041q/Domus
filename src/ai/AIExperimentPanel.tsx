@@ -1,3 +1,5 @@
+import { FEATURES } from '../config/features';
+import { activeArchitecture } from '../core/activeArchitecture';
 import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
 import { PRODUCT_LIST, PRODUCTS } from '../core/products';
 import { snapshotRevision } from '../core/aiProposal';
@@ -57,6 +59,10 @@ function operationLabel(operation: NonNullable<AiTurnResponse['proposal']>['oper
 }
 
 export function AIExperimentPanel({ onClose }: { onClose: () => void }) {
+  return FEATURES.aiExperiment ? <EnabledAIExperimentPanel onClose={onClose} /> : null;
+}
+
+function EnabledAIExperimentPanel({ onClose }: { onClose: () => void }) {
   const applyProposal = usePlannerStore((state) => state.applyAiProposal);
   const [settings, setSettings] = useState(loadSettings);
   const [ollamaEndpoints, setOllamaEndpoints] = useState<Array<{ id: string; label: string }>>([]);
@@ -187,7 +193,7 @@ export function AIExperimentPanel({ onClose }: { onClose: () => void }) {
         credential,
         ollamaEndpoint: settings.ollamaEndpoint,
         messages: nextMessages,
-        snapshot,
+        snapshot: activeArchitecture(snapshot),
         projectRevision: snapshotRevision(snapshot),
         productCatalog: PRODUCT_LIST.map(({ id, name, width, depth, height }) => ({ id, name, width, depth, height }))
       });

@@ -1,3 +1,4 @@
+import { FEATURES } from './config/features';
 import { createHotStore } from './core/hotStore';
 import type { AiApplyResult, AiProposal } from './ai/types';
 import { applyAiProposal as executeAiProposal, snapshotRevision } from './core/aiProposal';
@@ -10,6 +11,7 @@ import { BASEBOARD_STYLES } from './core/architecturalStyles';
 import { clampSunAngle, normalizeSunAzimuth, SUN_DEFAULT_AZIMUTH, SUN_DEFAULT_ELEVATION, SUN_ELEVATION_MAX, SUN_ELEVATION_MIN } from './core/sun';
 import {
   findNearestValidPosition,
+  isValidRoom,
   getRoomWalls,
   getWall,
   resizeWallCentered,
@@ -110,6 +112,7 @@ interface PlannerStore extends PlannerSnapshot {
   saveLocal: () => void;
   loadLocal: () => boolean;
   resetProject: () => void;
+  openProject: (snapshot: unknown) => boolean;
 }
 
 // Lazy 2D/3D views and renderer bridges must retain the same store after HMR.
@@ -322,6 +325,72 @@ function findSpawnPosition(productId: ProductKind, snapshot: PlannerSnapshot) {
   return null;
 }
 
+/** Validate/migrate an incoming project before mutating the active room. */
+export function parseProjectSnapshot(value: unknown): PlannerSnapshot | null {
+  try {
+    if (!value || typeof value !== 'object') return null;
+    const parsed = value as Partial<PlannerSnapshot> & { room?: Partial<RoomState>; openings?: Array<RoomOpening & { wall?: RoomWall }> };
+    if (!parsed.room || typeof parsed.room !== 'object' || !Array.isArray(parsed.objects)) return null;
+    if (!parsed.objects.every((object) => object && typeof object.id === 'string' && object.id.length > 0
+      && typeof object.productId === 'string' && Number.isFinite(object.x) && Number.isFinite(object.z) && Number.isFinite(object.rotationY))
+      || new Set(parsed.objects.map((object) => object.id)).size !== parsed.objects.length) return null;
+    if (parsed.room.vertices != null && (!Array.isArray(parsed.room.vertices) || parsed.room.vertices.length < 4
+      || !parsed.room.vertices.every((vertex) => vertex && typeof vertex.id === 'string' && Number.isFinite(vertex.x) && Number.isFinite(vertex.z))
+      || new Set(parsed.room.vertices.map((vertex) => vertex.id)).size !== parsed.room.vertices.length)) return null;
+    for (const dimension of ['width', 'depth', 'height'] as const) {
+      const number = parsed.room[dimension];
+      if (number != null && (!Number.isFinite(number) || number <= 0)) return null;
+    }
+    if (parsed.spaces != null && (!Array.isArray(parsed.spaces) || !parsed.spaces.every((space) => space
+      && typeof space.id === 'string' && typeof space.name === 'string' && space.seed
+      && Number.isFinite(space.seed.x) && Number.isFinite(space.seed.z))
+      || new Set(parsed.spaces.map((space) => space.id)).size !== parsed.spaces.length)) return null;
+    if (parsed.openings != null && (!Array.isArray(parsed.openings) || !parsed.openings.every((opening) => opening
+      && typeof opening.id === 'string' && opening.id.length > 0 && ['door', 'window', 'opening'].includes(opening.type)
+      && Number.isFinite(opening.width) && opening.width > 0 && Number.isFinite(opening.height) && opening.height > 0
+      && Number.isFinite(opening.offset) && Number.isFinite(opening.sillHeight) && opening.sillHeight >= 0
+      && (opening.doorFlipped == null || typeof opening.doorFlipped === 'boolean'))
+      || new Set(parsed.openings.map((opening) => opening.id)).size !== parsed.openings.length)) return null;
+    const migratedObjects = parsed.objects
+      .map((object) => {
+        const legacyId = String(object.productId);
+        const productId = (legacyId === 'table' ? 'dining-table' : legacyId) as ProductKind;
+        return { ...object, productId };
+      })
+      .filter((object) => object.productId in PRODUCTS);
+    const unplacedObjects = Array.isArray(parsed.unplacedObjects)
+      ? parsed.unplacedObjects.filter((object): object is UnplacedObject =>
+        typeof object?.id === 'string' && typeof object?.productId === 'string' && object.productId in PRODUCTS
+          && !migratedObjects.some((placed) => placed.id === object.id))
+      : [];
+    const room = ensureRoom(parsed.room);
+    const upgraded: PlannerSnapshot = {
+      room,
+      openings: Array.isArray(parsed.openings) ? parsed.openings : [],
+      dividers: Array.isArray(parsed.dividers) ? parsed.dividers : [],
+      spaces: Array.isArray(parsed.spaces) && parsed.spaces.length ? parsed.spaces : [{ ...defaultSpaces[0], seed: { x: (roomBounds(room.vertices).minX + roomBounds(room.vertices).maxX) / 2, z: (roomBounds(room.vertices).minZ + roomBounds(room.vertices).maxZ) / 2 }, floorFinish: room.floorFinish, wallColor: room.wallColor }],
+      objects: migratedObjects,
+      unplacedObjects
+    };
+    if (!isValidRoom(room.vertices)) return null;
+    const boundaryIds = new Set([...getRoomWalls(room).map((wall) => wall.id), ...upgraded.dividers.filter((divider) => divider?.kind === 'wall').map((divider) => divider.id)]);
+    if (!upgraded.openings.every((opening) => boundaryIds.has(opening.wallId)
+      || (!opening.wallId && ['north', 'south', 'east', 'west'].includes((opening as RoomOpening & { wall?: RoomWall }).wall ?? '')))) return null;
+    if (!validateDividers(room, upgraded.dividers)) return null;
+    if (!validateInteriorOpenings(room, upgraded.dividers, upgraded.openings)) return null;
+    if (!validInteriorArchitecture(normalizeSnapshot(upgraded))) return null;
+    return normalizeSnapshot(upgraded);
+  } catch { return null; }
+}
+
+export function emptyRoomSnapshot(shape: Exclude<RoomShapeKind, 'custom'> = 'rectangle'): PlannerSnapshot {
+  const room = ensureRoom({ ...structuredClone(defaultRoom), shapeKind: shape,
+    vertices: roomTemplate(shape, defaultRoom.width, defaultRoom.depth) });
+  const snapshot: PlannerSnapshot = { room, openings: [], dividers: [], spaces: [], objects: [], unplacedObjects: [] };
+  snapshot.spaces = [{ ...defaultSpaces[0], seed: deriveSpaces(snapshot)[0].seed }];
+  return snapshot;
+}
+
 export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
   room: defaultRoom,
   openings: defaultOpenings,
@@ -354,13 +423,13 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
     selectedOpeningId: null,
     selectedWallId: null,
     selectedDividerId: null,
-    selectedSpaceId: mode === 'plan' ? state.selectedSpaceId ?? state.spaces[0]?.id ?? null : null,
+    selectedSpaceId: FEATURES.interiorWalls && mode === 'plan' ? state.selectedSpaceId ?? state.spaces[0]?.id ?? null : null,
     activeSnap: { kind: 'none' },
     collisionId: null
   })),
   setBuildView: (buildView) => set({ buildView }),
   setPlanView: (planView) => set({ planView }),
-  setInteriorWallView: (interiorWallView) => set({ interiorWallView }),
+  setInteriorWallView: (interiorWallView) => set({ interiorWallView: FEATURES.interiorWalls ? interiorWallView : 'up' }),
   setMeasurementSystem: (measurementSystem) => set({ measurementSystem }),
   setShowClearance: (showClearance) => set({ showClearance }),
   setShowRoomDimensions: (showRoomDimensions) => set({ showRoomDimensions }),
@@ -383,7 +452,7 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
     }
     const object: PlacedObject = { id, productId, x: pos.x, z: pos.z, rotationY: 0 };
     set((state) => ({ objects: [...state.objects, object], selectedId: id,
-      selectedSpaceId: spaceAtPoint(before, object)?.id ?? state.selectedSpaceId }));
+      selectedSpaceId: (FEATURES.interiorWalls ? spaceAtPoint(before, object) : null)?.id ?? state.selectedSpaceId }));
     history.push(before);
   },
 
@@ -398,7 +467,7 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
       objects: [...state.objects, object],
       unplacedObjects: state.unplacedObjects.filter((candidate) => candidate.id !== id),
       selectedId: id,
-      selectedSpaceId: spaceAtPoint(before, object)?.id ?? state.selectedSpaceId
+      selectedSpaceId: (FEATURES.interiorWalls ? spaceAtPoint(before, object) : null)?.id ?? state.selectedSpaceId
     }));
     history.push(before);
   },
@@ -431,7 +500,7 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
   select: (id) => set((state) => {
     const object = state.objects.find((object) => object.id === id);
     return { selectedId: id, selectedOpeningId: null, selectedWallId: null, selectedDividerId: null,
-      selectedSpaceId: object ? spaceAtPoint(snapshotOf(state), object)?.id ?? state.selectedSpaceId : state.selectedSpaceId };
+      selectedSpaceId: object ? (FEATURES.interiorWalls ? spaceAtPoint(snapshotOf(state), object) : null)?.id ?? state.selectedSpaceId : state.selectedSpaceId };
   }),
   updateObject: (id, patch) => set((state) => ({ objects: state.objects.map((o) => o.id === id ? { ...o, ...patch } : o) })),
   commitSnapshot: (before) => {
@@ -439,10 +508,11 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
     if (JSON.stringify(before) !== JSON.stringify(current)) {
       history.push(before);
       const selected = current.objects.find((object) => object.id === get().selectedId);
-      if (selected) set({ selectedSpaceId: spaceAtPoint(current, selected)?.id ?? get().selectedSpaceId });
+      if (selected) set({ selectedSpaceId: (FEATURES.interiorWalls ? spaceAtPoint(current, selected) : null)?.id ?? get().selectedSpaceId });
     }
   },
   applyAiProposal: (proposal) => {
+    if (!FEATURES.aiExperiment) return { ok: false, error: 'The AI experiment is disabled.' };
     const before = snapshotOf(get());
     if (snapshotRevision(before) !== proposal.baseRevision) {
       return { ok: false, error: 'The room changed after this proposal was created. Ask the AI to try again.' };
@@ -559,9 +629,10 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
   },
 
   selectWall: (selectedWallId) => set({ selectedWallId, selectedDividerId: null, selectedSpaceId: null, selectedOpeningId: null, selectedId: null }),
-  selectDivider: (selectedDividerId) => set({ selectedDividerId, selectedWallId: null, selectedSpaceId: null, selectedOpeningId: null, selectedId: null }),
-  selectSpace: (selectedSpaceId) => set({ selectedSpaceId, selectedDividerId: null, selectedWallId: null, selectedOpeningId: null, selectedId: null }),
+  selectDivider: (selectedDividerId) => set({ selectedDividerId: FEATURES.interiorWalls ? selectedDividerId : null, selectedWallId: null, selectedSpaceId: null, selectedOpeningId: null, selectedId: null }),
+  selectSpace: (selectedSpaceId) => set({ selectedSpaceId: FEATURES.interiorWalls ? selectedSpaceId : null, selectedDividerId: null, selectedWallId: null, selectedOpeningId: null, selectedId: null }),
   addDivider: (kind, start, end) => {
+    if (!FEATURES.interiorWalls) return false;
     const before = snapshotOf(get());
     const divider: InteriorDivider = { id: `divider-${crypto.randomUUID().slice(0, 8)}`, kind, start, end };
     const dividers = [...get().dividers, divider];
@@ -573,6 +644,7 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
     return true;
   },
   updateDivider: (id, patch, recordHistory = true) => {
+    if (!FEATURES.interiorWalls) return false;
     const before = recordHistory ? snapshotOf(get()) : null;
     const dividers = get().dividers.map((divider) => divider.id === id ? { ...divider, ...patch, id } : divider);
     if (JSON.stringify(dividers) === JSON.stringify(get().dividers)) return true;
@@ -586,6 +658,7 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
     return true;
   },
   removeDivider: (id) => {
+    if (!FEATURES.interiorWalls) return;
     const before = snapshotOf(get());
     const removed = new Set([id]);
     let changed = true;
@@ -597,11 +670,18 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
     get().syncSpaces(before);
   },
   updateSpace: (id, patch) => {
+    if (!FEATURES.interiorWalls) return;
     const before = snapshotOf(get());
     set({ spaces: get().spaces.map((space) => space.id === id ? { ...space, ...patch, id } : space) });
     history.push(before);
   },
   syncSpaces: (before) => {
+    // Keep hidden project data attached/normalised during shell edits, but do not
+    // reassign names or finishes while the feature is disabled.
+    if (!FEATURES.interiorWalls) {
+      if (JSON.stringify(before) !== JSON.stringify(snapshotOf(get()))) history.push(before);
+      return;
+    }
     const current = snapshotOf(get());
     const derived = deriveSpaces(current);
     const usedNames = new Set(derived.filter((space) => !space.id.startsWith('unassigned-')).map((space) => space.name));
@@ -663,7 +743,7 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
 
   addOpening: (type) => {
     const before = snapshotOf(get());
-    let wall: { id: string; length: number } | null = type !== 'window' && get().selectedDividerId
+    let wall: { id: string; length: number } | null = FEATURES.interiorWalls && type !== 'window' && get().selectedDividerId
       ? resolveDividers(get().room, get().dividers).find((divider) => divider.id === get().selectedDividerId && divider.kind === 'wall') ?? null
       : get().selectedWallId ? getWall(get().room, get().selectedWallId!) : null;
     if (!wall) {
@@ -695,10 +775,12 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
 
   selectOpening: (id) => {
     const opening = get().openings.find((o) => o.id === id);
+    if (!FEATURES.interiorWalls && opening?.wallId.startsWith('divider-')) return;
     set({ selectedOpeningId: id, selectedWallId: opening?.wallId ?? null,
       selectedDividerId: opening?.wallId.startsWith('divider-') ? opening.wallId : null, selectedSpaceId: null, selectedId: null });
   },
   updateOpening: (id, patch, recordHistory = true) => {
+    if (!FEATURES.interiorWalls && (get().openings.find((opening) => opening.id === id)?.wallId.startsWith('divider-') || patch.wallId?.startsWith('divider-'))) return;
     // Live opening drags/sliders call this with recordHistory=false. Avoid cloning the
     // complete project on every pointer event; the interaction already captured one
     // snapshot at drag start and commits it once on pointer-up.
@@ -728,6 +810,7 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
     if (before) history.push(before);
   },
   removeOpening: (id) => {
+    if (!FEATURES.interiorWalls && get().openings.find((opening) => opening.id === id)?.wallId.startsWith('divider-')) return;
     const before = snapshotOf(get());
     const openings = get().openings.filter((o) => o.id !== id);
     if (!validInteriorArchitecture({ ...before, openings })) return;
@@ -753,46 +836,19 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
     const raw = localStorage.getItem('room-planner-project-v4') ?? localStorage.getItem('room-planner-project-v3') ?? localStorage.getItem('room-planner-project-v2') ?? localStorage.getItem('room-planner-project');
     if (!raw) return false;
     try {
-      const parsed = JSON.parse(raw) as Partial<PlannerSnapshot> & { room?: Partial<RoomState>; openings?: Array<RoomOpening & { wall?: RoomWall }> };
-      if (!parsed.room || !Array.isArray(parsed.objects)) return false;
-      if (parsed.spaces != null && (!Array.isArray(parsed.spaces) || !parsed.spaces.every((space) => space
-        && typeof space.id === 'string' && typeof space.name === 'string' && space.seed
-        && Number.isFinite(space.seed.x) && Number.isFinite(space.seed.z))
-        || new Set(parsed.spaces.map((space) => space.id)).size !== parsed.spaces.length)) return false;
-      if (parsed.openings != null && (!Array.isArray(parsed.openings) || !parsed.openings.every((opening) => opening
-        && typeof opening.id === 'string' && ['door', 'window', 'opening'].includes(opening.type)
-        && Number.isFinite(opening.width) && opening.width > 0 && Number.isFinite(opening.height) && opening.height > 0
-        && Number.isFinite(opening.offset) && Number.isFinite(opening.sillHeight) && opening.sillHeight >= 0
-        && (opening.doorFlipped == null || typeof opening.doorFlipped === 'boolean')))) return false;
-      const migratedObjects = parsed.objects
-        .map((object) => {
-          const legacyId = String(object.productId);
-          const productId = (legacyId === 'table' ? 'dining-table' : legacyId) as ProductKind;
-          return { ...object, productId };
-        })
-        .filter((object) => object.productId in PRODUCTS);
-      const unplacedObjects = Array.isArray(parsed.unplacedObjects)
-        ? parsed.unplacedObjects.filter((object): object is UnplacedObject =>
-          typeof object?.id === 'string' && typeof object?.productId === 'string' && object.productId in PRODUCTS
-            && !migratedObjects.some((placed) => placed.id === object.id))
-        : [];
-      const room = ensureRoom(parsed.room);
-      const upgraded: PlannerSnapshot = {
-        room,
-        openings: Array.isArray(parsed.openings) ? parsed.openings : [],
-        dividers: Array.isArray(parsed.dividers) ? parsed.dividers : [],
-        spaces: Array.isArray(parsed.spaces) && parsed.spaces.length ? parsed.spaces : [{ ...defaultSpaces[0], seed: { x: (roomBounds(room.vertices).minX + roomBounds(room.vertices).maxX) / 2, z: (roomBounds(room.vertices).minZ + roomBounds(room.vertices).maxZ) / 2 }, floorFinish: room.floorFinish, wallColor: room.wallColor }],
-        objects: migratedObjects,
-        unplacedObjects
-      };
-      if (!validateDividers(room, upgraded.dividers)) return false;
-      if (!validateInteriorOpenings(room, upgraded.dividers, upgraded.openings)) return false;
-      if (!validInteriorArchitecture(normalizeSnapshot(upgraded))) return false;
-      set({ ...normalizeSnapshot(upgraded), selectedId: null, selectedOpeningId: null, selectedWallId: null, selectedDividerId: null, selectedSpaceId: null, activeSnap: { kind: 'none' }, collisionId: null });
-      return true;
-    } catch {
-      return false;
-    }
+      const snapshot = parseProjectSnapshot(JSON.parse(raw));
+      return snapshot ? get().openProject(snapshot) : false;
+    } catch { return false; }
+  },
+
+  openProject: (value) => {
+    const snapshot = parseProjectSnapshot(value);
+    if (!snapshot) return false;
+    set({ ...snapshot, mode: 'build', buildView: 'plan', planView: 'free', interiorWallView: 'up',
+      selectedId: null, selectedOpeningId: null, selectedWallId: null, selectedDividerId: null, selectedSpaceId: null,
+      activeSnap: { kind: 'none' }, collisionId: null, collisionPush: false });
+    history.clear();
+    return true;
   },
 
   resetProject: () => {
@@ -831,3 +887,5 @@ import.meta.hot?.dispose((data) => {
 });
 
 export const getSnapshot = (): PlannerSnapshot => snapshotOf(usePlannerStore.getState());
+
+export const getInitialSnapshot = (): PlannerSnapshot => snapshotOf(usePlannerStore.getInitialState());

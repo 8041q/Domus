@@ -4,6 +4,8 @@ import { createServer } from 'vite';
 
 const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: 'custom', logLevel: 'silent' });
 after(async () => vite.close());
+const { FEATURES } = await vite.ssrLoadModule('/src/config/features.ts');
+FEATURES.interiorWalls = true;
 const spaces = await vite.ssrLoadModule('/src/core/spaces.ts');
 const roomGeometry = await vite.ssrLoadModule('/src/core/roomGeometry.ts');
 const placement = await vite.ssrLoadModule('/src/core/placement.ts');

@@ -58,6 +58,7 @@ export function Icon({ name, ...props }: SVGProps<SVGSVGElement> & { name: IconN
     cube: <><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/></>,
     plus: <><path d="M12 5v14M5 12h14"/></>,
     x: <><path d="m6 6 12 12M18 6 6 18"/></>,
+    trash: <><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></>,
     copy: <><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></>,
     rotateLeft: <><path d="M7 7H3V3"/><path d="M3 7a9 9 0 1 1 1.8 9"/></>,
     rotateRight: <><path d="M17 7h4V3"/><path d="M21 7a9 9 0 1 0-1.8 9"/></>,
@@ -76,4 +77,4 @@ export function Icon({ name, ...props }: SVGProps<SVGSVGElement> & { name: IconN
 export type IconName =
   | 'undo' | 'redo' | 'save' | 'folder' | 'more' | 'search' | 'settings' | 'palette'
   | 'ruler' | 'cube' | 'plus' | 'x' | 'copy' | 'rotateLeft' | 'rotateRight'
-  | 'chevronRight' | 'chevronDown' | 'download' | 'check' | 'arrowLeft' | 'eye' | 'grid' | 'box';
+  | 'chevronRight' | 'chevronDown' | 'download' | 'check' | 'arrowLeft' | 'eye' | 'grid' | 'box' | 'trash';

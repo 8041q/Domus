@@ -1,13 +1,13 @@
 # Interior walls and named spaces: validation
 
-Validated on 2 October 2026. Run the regression suite with `npm test` and the production gate with `npm run build`.
+Validated on 4 October 2026. Run the regression suite with `npm test` and the production gate with `npm run build`.
 
 ## Results
 
-- 71 automated tests pass across `tests/interiorSpaces.test.mjs`, `tests/interiorEdgeCases.test.mjs`, `tests/viewSync.test.mjs` and `tests/buildRoomInteractions.test.mjs`.
+- 78 automated tests pass across `tests/interiorSpaces.test.mjs`, `tests/interiorEdgeCases.test.mjs`, `tests/viewSync.test.mjs`, `tests/buildRoomInteractions.test.mjs` and `tests/featureSwitch.test.mjs`.
 - The geometry tests include 80 reproducible crossing networks using seed `20261002`, plus room template matrices.
 - TypeScript compilation and Vite production build pass. Vite still reports its large 3D bundle warning.
-- The browser smoke tests passed in a separate temporary localhost tab. No warning or error logs were returned at the final check.
+- The browser smoke tests passed in a separate temporary localhost tab. No unexpected warning or error logs were returned at the final check (the deliberately injected failure was logged as expected).
 
 ## Coverage
 
@@ -30,7 +30,27 @@ Validated on 2 October 2026. Run the regression suite with `npm test` and the pr
 | Build interactions | A 400-sample corner burst applies once per frame; final flush preserves undo/redo; cleared samples never apply. Opening projection retains its wall and grab offset, flushes before release, and produces one history edit. Identical samples send no store notifications. Moving/flipping an opening retains floors and unrelated walls; moving across walls cleans the old assembly; interior thresholds are replaced once without duplicates. |
 | Persistence | Decorated multi-space round trip, undo/redo, legacy single-space saves, cardinal-wall opening migration, malformed save rejection without changing the current project. |
 
-## Latest browser smoke tests
+## 4 October: feature switch and view recovery
+
+- Room height is present in Build 2D and absent in Build 3D.
+- Both flag configurations compile. Disabled mode hides division drawing,
+  editing-space/name controls and interior wall-view buttons. Global sage wall
+  colour and wood flooring still update the whole 3D room.
+- Automated checks cover disabled renderer/export geometry, furniture insertion,
+  snapping/spacing targets, guarded mutations, save/load, undo/redo, and restoring
+  the complete interior data when re-enabled.
+- A temporary exception injected at the end of scene initialization verified the
+  error controls in Build 3D and Plan Room. Returning to 2D preserved a newly
+  drawn divider and both space areas. The temporary exception was removed.
+- Six successive Build 2D → Build 3D → Plan Room → Build 3D cycles with an
+  interior wall and door passed with no unexpected warnings/errors. Walls up/down
+  worked on every cycle. Re-enabling the flag restored the same divider layout.
+- The original intermittent white-page exception was not reproduced with the
+  default room or the tested divider/door layouts. Failures during mount, state
+  synchronization, animation, context loss, or lazy view loading now have recovery
+  paths; further root-cause diagnosis needs a failing layout/error log.
+
+## Earlier browser smoke tests
 
 - Build Room's 2D view shows wall layout tools and no opening creation/editor;
   3D shows opening controls and no room-shape/divider drawing tools. Repeated corner

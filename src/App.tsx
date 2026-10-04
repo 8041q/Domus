@@ -1,26 +1,22 @@
+import { ViewErrorBoundary } from './ViewErrorBoundary';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { BuildRoom } from './BuildRoom';
 import { usePlannerStore } from './store';
 import { Button, Icon } from './ui';
+import { ProjectControls } from './ProjectControls';
 
 const PlanRoom = lazy(() => import('./PlanRoom').then((module) => ({ default: module.PlanRoom })));
 
 export default function App() {
   const mode = usePlannerStore((s) => s.mode);
+  const buildView = usePlannerStore((s) => s.buildView);
   const setMode = usePlannerStore((s) => s.setMode);
   const rotate = usePlannerStore((s) => s.rotateSelected);
   const remove = usePlannerStore((s) => s.removeSelected);
   const undo = usePlannerStore((s) => s.undo);
   const redo = usePlannerStore((s) => s.redo);
-  const saveLocal = usePlannerStore((s) => s.saveLocal);
-  const loadLocal = usePlannerStore((s) => s.loadLocal);
-  const resetProject = usePlannerStore((s) => s.resetProject);
-  const [notice, setNotice] = useState('');
-  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [canExport, setCanExport] = useState(false);
-  const projectMenuRef = useRef<HTMLDivElement>(null);
   const exportAction = useRef<(() => Promise<void>) | null>(null);
-  const noticeTimer = useRef<number | null>(null);
 
   const registerExport = useCallback((handler: (() => Promise<void>) | null) => {
     exportAction.current = handler;
@@ -30,7 +26,7 @@ export default function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
-      if (target?.matches('input, textarea, select')) return;
+      if (target?.matches('input, textarea, select') || document.querySelector('dialog[open]')) return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault();
         e.shiftKey ? redo() : undo();
@@ -42,54 +38,6 @@ export default function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [mode, redo, remove, rotate, undo]);
-
-  useEffect(() => () => {
-    if (noticeTimer.current != null) window.clearTimeout(noticeTimer.current);
-  }, []);
-
-  useEffect(() => {
-    if (!projectMenuOpen) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (event.target instanceof Node && !projectMenuRef.current?.contains(event.target)) setProjectMenuOpen(false);
-    };
-    const onEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setProjectMenuOpen(false);
-    };
-    document.addEventListener('pointerdown', onPointerDown);
-    document.addEventListener('keydown', onEscape);
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown);
-      document.removeEventListener('keydown', onEscape);
-    };
-  }, [projectMenuOpen]);
-
-  const flash = (message: string) => {
-    setNotice(message);
-    if (noticeTimer.current != null) window.clearTimeout(noticeTimer.current);
-    noticeTimer.current = window.setTimeout(() => {
-      noticeTimer.current = null;
-      setNotice('');
-    }, 1800);
-  };
-
-  const save = () => {
-    setProjectMenuOpen(false);
-    try {
-      saveLocal();
-      flash('Room saved in this browser');
-    } catch {
-      flash('Could not save this room');
-    }
-  };
-
-  const load = () => {
-    setProjectMenuOpen(false);
-    try {
-      flash(loadLocal() ? 'Saved room loaded' : 'No valid saved room found');
-    } catch {
-      flash('Could not load a saved room');
-    }
-  };
 
   return (
     <div className="app-shell">
@@ -116,34 +64,20 @@ export default function App() {
             <Button variant="ghost" size="icon" title="Undo (Ctrl/Cmd+Z)" aria-label="Undo" onClick={undo}><Icon name="undo" /></Button>
             <Button variant="ghost" size="icon" title="Redo (Ctrl/Cmd+Y)" aria-label="Redo" onClick={redo}><Icon name="redo" /></Button>
           </div>
-          <div className="project-menu-wrap" ref={projectMenuRef}>
-            <Button variant="outline" size="sm" className="project-menu-trigger" aria-haspopup="menu" aria-expanded={projectMenuOpen}
-              onClick={() => setProjectMenuOpen((open) => !open)}><Icon name="folder" />Project<Icon name="chevronDown" /></Button>
-            {projectMenuOpen && <div className="project-menu" role="menu" aria-label="Project actions">
-              <button type="button" role="menuitem" onClick={() => {
-                setProjectMenuOpen(false);
-                if (window.confirm('Start a new room? Your current unsaved changes will be replaced.')) resetProject();
-              }}><Icon name="plus" /><span><strong>New room</strong><small>Start with the default room</small></span></button>
-              <button type="button" role="menuitem" onClick={save}><Icon name="save" /><span><strong>Save room</strong><small>Store one copy in this browser</small></span></button>
-              <button type="button" role="menuitem" onClick={load}><Icon name="folder" /><span><strong>Load saved room</strong><small>Open your browser copy</small></span></button>
-              {mode === 'plan' && <>
-                <span className="project-menu-divider" role="separator" />
-                <button type="button" role="menuitem" disabled={!canExport} onClick={() => { setProjectMenuOpen(false); void exportAction.current?.(); }}><Icon name="download" /><span><strong>Export GLB</strong><small>Download the complete 3D room</small></span></button>
-              </>}
-            </div>}
-          </div>
+          <ProjectControls canExport={canExport} onExport={mode === 'plan' ? () => { void exportAction.current?.(); } : undefined} />
         </div>
       </header>
 
       <main className="app-main">
-        {mode === 'build' ? <BuildRoom /> : (
-          <Suspense fallback={<div className="mode-loading">Loading room planner…</div>}>
-            <PlanRoom onExportReady={registerExport} />
-          </Suspense>
-        )}
+        <ViewErrorBoundary key={`${mode}-${buildView}`}>
+          {mode === 'build' ? <BuildRoom /> : (
+            <Suspense fallback={<div className="mode-loading">Loading room planner…</div>}>
+              <PlanRoom onExportReady={registerExport} />
+            </Suspense>
+          )}
+        </ViewErrorBoundary>
       </main>
 
-      {notice && <div className="toast" role="status"><Icon name="check" />{notice}</div>}
     </div>
   );
 }

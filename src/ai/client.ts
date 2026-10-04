@@ -1,4 +1,10 @@
+import { FEATURES } from '../config/features';
 import type { AiGatewayConfig, AiProviderId, AiTurnRequest, AiTurnResponse } from './types';
+
+function requireAiEnabled() {
+  if (!FEATURES.aiExperiment) throw new Error('The AI experiment is disabled.');
+}
+
 
 async function readResponse<T>(response: Response): Promise<T> {
   const body = await response.json().catch(() => null) as { error?: string } | T | null;
@@ -12,6 +18,7 @@ async function readResponse<T>(response: Response): Promise<T> {
 }
 
 export async function getAiGatewayConfig() {
+  requireAiEnabled();
   return readResponse<AiGatewayConfig>(await fetch('/api/ai/config'));
 }
 
@@ -20,6 +27,7 @@ export async function listAiModels(input: {
   credential?: string;
   ollamaEndpoint?: string;
 }) {
+  requireAiEnabled();
   const response = await fetch('/api/ai/models', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -29,6 +37,7 @@ export async function listAiModels(input: {
 }
 
 export async function sendAiTurn(request: AiTurnRequest) {
+  requireAiEnabled();
   const response = await fetch('/api/ai/turn', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

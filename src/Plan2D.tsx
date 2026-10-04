@@ -1,3 +1,5 @@
+import { FEATURES } from './config/features';
+import { activeArchitecture } from './core/activeArchitecture';
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { PRODUCTS, rotatedFootprint } from './core/products';
 import { floorFinishDefinition } from './core/roomFinishes';
@@ -179,9 +181,10 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const room = usePlannerStore((s) => s.room);
   const measurementSystem = usePlannerStore((s) => s.measurementSystem);
-  const openings = usePlannerStore((s) => s.openings);
-  const dividers = usePlannerStore((s) => s.dividers);
-  const spaces = usePlannerStore((s) => s.spaces);
+  const savedOpenings = usePlannerStore((s) => s.openings);
+  const savedDividers = usePlannerStore((s) => s.dividers);
+  const savedSpaces = usePlannerStore((s) => s.spaces);
+  const { openings, dividers, spaces } = useMemo(() => activeArchitecture({ room, openings: savedOpenings, dividers: savedDividers, spaces: savedSpaces, objects: [], unplacedObjects: [] }), [room, savedOpenings, savedDividers, savedSpaces]);
   const selectedDividerId = usePlannerStore((s) => s.selectedDividerId);
   const selectedSpaceId = usePlannerStore((s) => s.selectedSpaceId);
   const objects = usePlannerStore((s) => s.objects);
@@ -1095,7 +1098,7 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
     };
 
     if (purpose === 'build') {
-      if (dividerTool) {
+      if (FEATURES.interiorWalls && dividerTool) {
         const target = closestBoundaryAnchor(room, dividers, { x: (px - ox) / scale, z: (py - oz) / scale }, 16 / scale);
         if (!target) { setDividerError('Start and end each divider on an existing boundary.'); return; }
         if (!drawStart) { setDrawStart({ anchor: target.anchor, point: target.point }); setDividerError(''); }

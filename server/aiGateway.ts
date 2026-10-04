@@ -1,3 +1,4 @@
+import { FEATURES } from '../src/config/features';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 
@@ -368,6 +369,9 @@ export function experimentalAiGateway(configuredOllamaEndpoints?: string): Plugi
   const allowedOllama = ollamaEndpoints(configuredOllamaEndpoints);
   const middleware = async (request: IncomingMessage, response: ServerResponse, next: () => void) => {
     try {
+      if (!FEATURES.aiExperiment && new URL(request.url ?? '/', 'http://localhost').pathname.startsWith('/api/ai/')) {
+        throw new GatewayError(503, 'The AI experiment is disabled.');
+      }
       const handled = await handleRequest(request, response, allowedOllama);
       if (!handled) next();
     } catch (error) {

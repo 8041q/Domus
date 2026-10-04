@@ -5,6 +5,8 @@ import * as THREE from 'three';
 
 const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: 'custom', logLevel: 'silent' });
 after(async () => { await vite.close(); });
+const { FEATURES } = await vite.ssrLoadModule('/src/config/features.ts');
+FEATURES.interiorWalls = true;
 const geometry = await vite.ssrLoadModule('/src/core/spaces.ts');
 const placement = await vite.ssrLoadModule('/src/core/placement.ts');
 const { usePlannerStore, getSnapshot } = await vite.ssrLoadModule('/src/store.ts');

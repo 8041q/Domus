@@ -1,3 +1,4 @@
+import { FEATURES } from './config/features';
 import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from 'react';
 import { PRODUCT_LIST, PRODUCTS } from './core/products';
 import { clearanceIssues } from './core/placement';
@@ -170,32 +171,32 @@ function FinishesPanel({ onClose }: { onClose: () => void }) {
   const selectedSpaceId = usePlannerStore((s) => s.selectedSpaceId);
   const updateSpace = usePlannerStore((s) => s.updateSpace);
   const updateRoom = usePlannerStore((s) => s.updateRoom);
-  const space = spaces.find((item) => item.id === selectedSpaceId) ?? spaces[0];
+  const space = FEATURES.interiorWalls ? spaces.find((item) => item.id === selectedSpaceId) ?? spaces[0] : undefined;
   return (
     <FloatingPanel id="finishes" title="Room finishes" className="finish-panel" onClose={onClose}>
-      <div className="finish-fields">
+      {FEATURES.interiorWalls && <div className="finish-fields">
         <label className="finish-space-name">Space name
           <input className="finish-style-select" value={space?.name ?? ''}
             onChange={(event) => space && updateSpace(space.id, { name: event.target.value })} />
         </label>
-      </div>
+      </div>}
       <div className="finish-colour-row"><span>Wall colour</span>
-        <FinishColorPicker label="Wall" value={space?.wallColor ?? room.wallColor} onChange={(wallColor) => space && updateSpace(space.id, { wallColor })} />
+        <FinishColorPicker label="Wall" value={space?.wallColor ?? room.wallColor} onChange={(wallColor) => space ? updateSpace(space.id, { wallColor }) : updateRoom({ wallColor })} />
       </div>
       <section className="finish-floor-section" aria-label="Floor finish">
         <h3>Floor</h3>
         <div className="floor-options">
           {FLOOR_FINISHES.map((floor) => (
-            <button key={floor.id} type="button" className={`floor-option ${space?.floorFinish === floor.id ? 'selected' : ''}`}
-              aria-pressed={space?.floorFinish === floor.id} title={floor.source}
-              onClick={() => space && updateSpace(space.id, { floorFinish: floor.id })}>
+            <button key={floor.id} type="button" className={`floor-option ${(space?.floorFinish ?? room.floorFinish) === floor.id ? 'selected' : ''}`}
+              aria-pressed={(space?.floorFinish ?? room.floorFinish) === floor.id} title={floor.source}
+              onClick={() => space ? updateSpace(space.id, { floorFinish: floor.id }) : updateRoom({ floorFinish: floor.id })}>
               <span style={{ backgroundImage: `url(${floor.previewUrl})`, backgroundColor: floor.fallbackColor }} />{floor.name}
             </button>
           ))}
         </div>
       </section>
       <section className="finish-shared-section" aria-label="Shared room finishes">
-        <h3>Shared room finishes</h3>
+        <h3>{FEATURES.interiorWalls ? 'Shared room finishes' : 'Room finishes'}</h3>
         <div className="finish-colour-row"><span>Ceiling colour</span>
           <FinishColorPicker label="Ceiling" value={room.ceilingColor} onChange={(ceilingColor) => updateRoom({ ceilingColor })} />
         </div>
@@ -399,7 +400,7 @@ export function PlanRoom({ onExportReady }: { onExportReady?: (handler: (() => P
   const setInteriorWallView = usePlannerStore((s) => s.setInteriorWallView);
 
   useEffect(() => {
-    if (spaces.length && !spaces.some((space) => space.id === selectedSpaceId)) selectSpace(spaces[0].id);
+    if (FEATURES.interiorWalls && spaces.length && !spaces.some((space) => space.id === selectedSpaceId)) selectSpace(spaces[0].id);
   }, [spaces, selectedSpaceId, selectSpace]);
 
   useEffect(() => {
@@ -423,23 +424,23 @@ export function PlanRoom({ onExportReady }: { onExportReady?: (handler: (() => P
 
       <section className="designer-canvas">
         <div className="designer-stage">
-          <EditingSpaceSelector spaces={spaces} value={selectedSpaceId ?? spaces[0]?.id ?? ''} onChange={selectSpace} />
-          <div className="designer-topbar" aria-label="Room view controls">
+          {FEATURES.interiorWalls && <EditingSpaceSelector spaces={spaces} value={selectedSpaceId ?? spaces[0]?.id ?? ''} onChange={selectSpace} />}
+          <div className={`designer-topbar ${FEATURES.interiorWalls ? '' : 'without-space-selector'}`} aria-label="Room view controls">
             <div className="view-preset-bar" role="group" aria-label="3D room view">
-              <button type="button" className={interiorWallView === 'up' ? 'active' : ''} aria-pressed={interiorWallView === 'up'} onClick={() => setInteriorWallView('up')}>Walls up</button>
+              {FEATURES.interiorWalls && <><button type="button" className={interiorWallView === 'up' ? 'active' : ''} aria-pressed={interiorWallView === 'up'} onClick={() => setInteriorWallView('up')}>Walls up</button>
               <button type="button" className={interiorWallView === 'down' ? 'active' : ''} aria-pressed={interiorWallView === 'down'} onClick={() => setInteriorWallView('down')}>Walls down</button>
-              <span className="view-control-divider" aria-hidden="true" />
+              <span className="view-control-divider" aria-hidden="true" /></>}
               {VIEW_PRESETS.map((view) => <button key={view.id} type="button" className={planView === view.id ? 'active' : ''} aria-pressed={planView === view.id} onClick={() => setPlanView(view.id)}>{view.label}</button>)}
             </div>
             <div className="designer-meta">
               <div className="room-count">{objectCount} item{objectCount === 1 ? '' : 's'} · {formatArea(Math.abs(polygonArea(roomVertices)), measurementSystem)} · {roomVertices.length} walls</div>
-              <button
+              {FEATURES.aiExperiment && <button
                 type="button"
                 className={`ai-experiment-toggle ${showAi ? 'active' : ''}`}
                 onClick={() => { setShowFinishes(false); setShowViewOptions(false); setShowAi((value) => !value); }}
                 aria-label="Experimental AI room assistant"
                 aria-expanded={showAi}
-              ><span>AI</span><small>Experimental</small></button>
+              ><span>AI</span><small>Experimental</small></button>}
               <div className="view-options-wrap">
                 <button
                   type="button"
@@ -465,10 +466,10 @@ export function PlanRoom({ onExportReady }: { onExportReady?: (handler: (() => P
           <Suspense fallback={<div className="viewport-loading">Loading 3D room…</div>}>
             <Viewport3D furniture interactive sunRays={sunRaysEnabled} view={planView} resetViewRequest={resetViewRequest} onExportReady={onExportReady} />
           </Suspense>
-          {showAi && <Suspense fallback={<div className="ai-panel-loading">Loading AI assistant…</div>}><AIExperimentPanel onClose={() => setShowAi(false)} /></Suspense>}
+          {FEATURES.aiExperiment && showAi && <Suspense fallback={<div className="ai-panel-loading">Loading AI assistant…</div>}><AIExperimentPanel onClose={() => setShowAi(false)} /></Suspense>}
           {showFinishes && <FinishesPanel onClose={() => setShowFinishes(false)} />}
           {showViewOptions && <DesignPanel onClose={() => setShowViewOptions(false)} />}
-          {selectedId && !showAi && <SelectionPanel />}
+          {selectedId && !(FEATURES.aiExperiment && showAi) && <SelectionPanel />}
         </div>
 
         <InteractionStatus />

@@ -1,3 +1,4 @@
+import { FEATURES } from '../config/features';
 import { PRODUCTS } from './products';
 import { getPhysicalWalls, resolveDividers } from './spaces';
 import {
@@ -21,10 +22,10 @@ import type {
 import type { InteriorDivider, RoomOpening } from './types';
 
 export type ArchitectureRoom = RoomState & { dividers?: InteriorDivider[]; openings?: RoomOpening[] };
-const physicalWalls = (room: ArchitectureRoom) => getPhysicalWalls(room, room.dividers ?? []);
+const physicalWalls = (room: ArchitectureRoom) => getPhysicalWalls(room, FEATURES.interiorWalls ? room.dividers ?? [] : []);
 
 function solidDividerRuns(room: ArchitectureRoom, objectHeight = 0) {
-  const walls = resolveDividers(room, room.dividers ?? []).filter((divider) => divider.kind === 'wall');
+  const walls = resolveDividers(room, FEATURES.interiorWalls ? room.dividers ?? [] : []).filter((divider) => divider.kind === 'wall');
   return walls.flatMap((wall) => {
     const openings = (room.openings ?? []).filter((opening) => opening.wallId === wall.id && opening.sillHeight < 0.03 && opening.height >= objectHeight - 0.0005)
       .map((opening) => ({ start: Math.max(0, opening.offset - opening.width / 2), end: Math.min(wall.length, opening.offset + opening.width / 2) }))

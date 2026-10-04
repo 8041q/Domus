@@ -15,6 +15,8 @@ const vite = await createServer({
   } }]
 });
 after(async () => { await vite.close(); delete globalThis.__domusViewSyncHot; });
+const { FEATURES } = await vite.ssrLoadModule('/src/config/features.ts');
+FEATURES.interiorWalls = true;
 async function reloadStore() {
   for (const dispose of disposers) dispose(globalThis.__domusViewSyncHot.data);
   disposers = [];

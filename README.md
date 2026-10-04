@@ -17,7 +17,7 @@ runs with Vite during local development and preview.
   corner.
 - Draw connected interior walls or open boundaries to create named spaces.
 - New spaces inherit their containing space’s finishes automatically; place doors in interior walls.
-- Work in metric or imperial units.
+- Set room height in 2D and work in metric or imperial units.
 - Add, position, resize, and restyle windows, doors, and custom openings.
 - Inspect the architecture in a neutral 3D preview. Direct sun rays are
   intentionally disabled in this workspace.
@@ -27,7 +27,7 @@ runs with Vite during local development and preview.
 - Place, move, rotate, duplicate, and remove procedural furniture.
 - Use wall, object, and room-centre snapping with deterministic collision and
   clearance checks.
-- Switch between Cutaway, Top, Front, Right, Back, and Left views.
+- Switch between Free cam, Top, Front, Right, Back, and Left views, with interior walls up or down.
 - Toggle room, product, spacing, and clearance annotations.
 - Change PBR floor finishes, wall and ceiling colours, baseboard styles, and
   ceiling-light settings.
@@ -41,6 +41,27 @@ runs with Vite during local development and preview.
 
 Both workspaces edit the same project. A change made in Build Room is available
 immediately in Plan Room and vice versa.
+
+## Developer feature switches
+
+Set `FEATURES.interiorWalls` in `src/config/features.ts` to `false` to disable
+interior walls and named spaces. `FEATURES.aiExperiment` controls the experimental
+AI assistant; set it to `false` to hide the panel and refuse client requests,
+proposal application and gateway routes (HTTP 503), without deleting existing
+AI preferences. Current settings are interior walls disabled and AI enabled. Reload/restart development
+or rebuild production after changing it.
+
+When disabled, Build Room shows exterior layout/opening tools and Plan Room edits
+one global wall colour and floor finish. Interior divisions, space selection,
+per-space finishes, interior doors/thresholds, wall view controls, shadow blockers,
+and furniture snap/spacing targets are inactive in 2D, 3D, AI context and GLB export.
+Saved interior data and undo snapshots are retained for re-enabling. Existing
+hidden connections continue to follow shell edits and project validation protects
+them; changing the room template or resetting the project clears them as usual.
+
+3D failures now keep the application available with **Try again** and
+**Return to 2D** controls. Failed scene initialization releases its graphics
+resources; returning to 2D retains the layout.
 
 ## Run locally
 
@@ -91,10 +112,29 @@ item opens its numeric controls for precise edits.
 
 ## Saving and export
 
-In the header, **Project → Save room** stores one project snapshot in this browser under
-`room-planner-project-v4`; **Project → Load saved room** restores it. Older local snapshot keys are
-accepted and normalized when possible. Clearing site data removes the save.
-There is no automatic save or cloud backup.
+Use **Project** in the header to manage rooms:
+
+- **New room** creates an empty named room with your chosen starting shape.
+- **Save room** stores the current named room; **Save as** keeps a separate copy.
+  Ctrl/Cmd+S saves, and Ctrl/Cmd+Shift+S opens Save as.
+- **Open room** lists all rooms saved in this browser, with their last save time.
+  Each row has a delete icon with confirmation. Deleting the active saved room
+  keeps your working layout open as an unsaved room.
+- **Download room file** and **Import room file** provide portable `.domus.json`
+  backups. Imported rooms open as unsaved copies; legacy snapshot JSON also works.
+
+New, Open and Import ask you to Save, Discard or Cancel when the current room has
+unsaved changes. Failed saves keep the current room and stop the replacement.
+Opening another room starts fresh undo history. Names cannot duplicate an existing
+saved room, and stale saves from another tab are rejected; use Save as to keep both.
+
+A debounced recovery draft restores the latest layout after reloading, including
+unsaved changes. Recovery is shared across tabs in the same browser origin; the
+latest draft wins. A changed layout also triggers the browser's leave-page warning.
+Explicit named saves are separate from recovery. Old single-slot saves migrate to
+**Recovered room**, and their original browser keys are retained as backups.
+Clearing site data removes saved rooms and recovery drafts. Download a room file
+for a lasting backup; cloud backup is not provided.
 
 **Project → Export GLB** is available in Plan Room. It exports the complete room rather
 than the current cutaway: walls, floor, baseboards, frames, ceiling, and
@@ -107,7 +147,7 @@ It saves catalogue and placement fields on a model root for Blender's built-in G
 ## Current limitations
 
 - The furniture catalogue uses procedural placeholder models and sample prices.
-- Projects are local to one browser and there is one manual save slot.
+- Saved rooms are local to one browser origin; portable room files are the backup and transfer mechanism.
 - The renderer requires a browser with WebGL support.
 - AI assistance is experimental, furniture-only, non-streaming, and intended
   for trusted local use. A static `dist` deployment does not provide its API

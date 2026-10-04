@@ -602,3 +602,44 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .design-panel .sun-angle-section { padding-left: 0; padding-right: 0; }
 .design-panel .sun-angle-control { margin: 8px 0 0; }
 .design-panel .sun-angle-section > small { display: block; margin-top: 8px; line-height: 1.4; }
+
+.designer-topbar.without-space-selector { left: 12px; max-width: calc(100% - 132px); }
+
+.view-error { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 260px; height: 100%; padding: 32px; text-align: center; background: var(--background); }
+.view-error h2, .view-error p { margin: 0; }
+.view-error p { color: var(--muted-foreground); }
+.view-error-actions { display: flex; align-items: center; gap: 12px; }
+.viewport[hidden] { display: none; }
+
+/* Project lifecycle dialogs live above the workspace and trap keyboard focus. */
+.project-status { display: grid; gap: 3px; max-width: 160px; min-width: 0; }
+.project-status strong { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.project-status small { font-size: 9px; color: var(--muted-foreground); }
+.project-dialog { width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); overflow: auto; padding: 22px; color: var(--foreground); background: var(--card); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 24px 80px rgba(0,0,0,.22); }
+.project-dialog::backdrop { background: rgba(30,35,40,.35); }
+.project-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.project-dialog h2 { margin: 0; font-size: 19px; }
+.project-dialog p { font-size: 13px; line-height: 1.55; color: var(--muted-foreground); margin: 12px 0 20px; overflow-wrap: anywhere; }
+.project-dialog footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
+.project-field { display: grid; gap: 7px; margin-top: 16px; font-size: 12px; font-weight: 600; }
+.project-field input, .project-field select { width: 100%; height: 40px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--background); color: var(--foreground); font: inherit; font-weight: 400; }
+.project-field input:focus, .project-field select:focus { outline: 2px solid var(--ring); outline-offset: 2px; }
+.project-dialog .project-error { color: #a42929; background: #fff0f0; border-radius: 7px; padding: 10px 12px; margin-bottom: 0; }
+.saved-room-list { display: grid; gap: 6px; max-height: 360px; overflow: auto; }
+.saved-room-row { display: flex; align-items: center; gap: 2px; padding: 0 6px 0 0; border: 1px solid var(--border); border-radius: 9px; background: var(--background); color: var(--foreground); text-align: left; }
+.saved-room-select { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1; padding: 13px 12px; border: 0; border-radius: 9px; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.saved-room-delete { flex-shrink: 0; color: #a42929; }
+.saved-room-delete:hover { background: #fff0f0; }
+.saved-room-delete svg { width: 17px; height: 17px; }
+.saved-room-row:hover { background: var(--accent); }
+.saved-room-select > span:first-of-type { display: grid; gap: 5px; flex: 1; min-width: 0; }
+.saved-room-row strong { font-size: 13px; overflow-wrap: anywhere; }
+.saved-room-row small { font-size: 10px; color: var(--muted-foreground); }
+.saved-room-open { display: flex; align-items: center; gap: 3px; font-size: 11px; }
+.saved-room-open svg { width: 13px; }
+.saved-room-empty { display: grid; justify-items: center; gap: 10px; padding: 30px 12px; font-size: 13px; color: var(--muted-foreground); }
+.project-warning { position: fixed; z-index: 100; left: 16px; right: 16px; bottom: 16px; display: flex; align-items: center; gap: 12px; width: fit-content; max-width: calc(100vw - 32px); margin-inline: auto; border: 1px solid #e0bbbb; border-radius: 10px; background: #fff6f6; color: #792525; padding: 12px 16px; font-size: 12px; box-shadow: 0 6px 24px #0002; }
+.project-warning > span { max-width: 650px; }
+.project-warning .ui-button { flex-shrink: 0; }
+@media (max-width: 900px) { .project-status { max-width: 100px; } }
+@media (max-width: 640px) { .project-status { display: none; } .project-warning { flex-wrap: wrap; } }

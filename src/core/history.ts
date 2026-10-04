@@ -27,6 +27,8 @@ export class SnapshotHistory {
     return structuredClone(next);
   }
 
+  clear() { this.past = []; this.future = []; }
+
   get canUndo() { return this.past.length > 0; }
   get canRedo() { return this.future.length > 0; }
 }

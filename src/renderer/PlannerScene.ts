@@ -1,3 +1,4 @@
+import { activeArchitecture } from '../core/activeArchitecture';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
@@ -56,6 +57,7 @@ interface SceneOptions {
   interactiveFurniture: boolean;
   interactiveArchitecture: boolean;
   sunRays: boolean;
+  onError?: (error: unknown) => void;
 }
 
 const DIMENSION_COLOR = themeHex('dimension-line');
@@ -198,115 +200,123 @@ export class PlannerScene {
   private spacingDimensionLabels = new Map<SpacingMeasurement['side'], THREE.Mesh>();
 
   constructor(private container: HTMLElement, private bridge: SceneBridge, private options: SceneOptions) {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
-    const pixelRatio = Math.min(window.devicePixelRatio, 1.6);
-    this.renderer.setPixelRatio(pixelRatio);
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFShadowMap;
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.NeutralToneMapping;
-    this.renderer.toneMappingExposure = 0.98;
-    this.container.appendChild(this.renderer.domElement);
+    // Release even a partially constructed scene if graphics setup fails.
+    // Leaked contexts can make subsequent 3D mounts fail as well.
+    try {
+      this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
+      const pixelRatio = Math.min(window.devicePixelRatio, 1.6);
+      this.renderer.setPixelRatio(pixelRatio);
+      this.renderer.shadowMap.enabled = true;
+      this.renderer.shadowMap.type = THREE.PCFShadowMap;
+      this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+      this.renderer.toneMapping = THREE.NeutralToneMapping;
+      this.renderer.toneMappingExposure = 0.98;
+      this.container.appendChild(this.renderer.domElement);
 
-    // IKEA Kreativ uses a neutral studio field around the cutaway room. Keeping this
-    // noticeably darker than the shell is important: white chamfers and selection
-    // annotations should remain readable without making the room itself look greyed out.
-    this.scene.background = new THREE.Color(0xd2d2d2);
-    // Start open by construction. The first camera evaluation may opt into the
-    // ceiling, but there is never a one-frame closed-room flash while Plan Room mounts.
-    this.ceilingGroup.visible = false;
-    this.scene.add(this.floorGroup, this.wallsGroup, this.ceilingGroup, this.architecturalShadeGroup, this.lightFixtureGroup, this.interiorLightGroup, this.daylightGroup, this.sunsetGroup, this.contactShadowGroup, this.objectGroup, this.helperGroup);
-    this.scene.add(this.interiorViewGroup);
+      // IKEA Kreativ uses a neutral studio field around the cutaway room. Keeping this
+      // noticeably darker than the shell is important: white chamfers and selection
+      // annotations should remain readable without making the room itself look greyed out.
+      this.scene.background = new THREE.Color(0xd2d2d2);
+      // Start open by construction. The first camera evaluation may opt into the
+      // ceiling, but there is never a one-frame closed-room flash while Plan Room mounts.
+      this.ceilingGroup.visible = false;
+      this.scene.add(this.floorGroup, this.wallsGroup, this.ceilingGroup, this.architecturalShadeGroup, this.lightFixtureGroup, this.interiorLightGroup, this.daylightGroup, this.sunsetGroup, this.contactShadowGroup, this.objectGroup, this.helperGroup);
+      this.scene.add(this.interiorViewGroup);
 
-    // Screen-space silhouette outlining matches the reference planner: the selected
-    // product gets one crisp yellow contour, independent of its component meshes.
-    // Only selected furniture needs the off-screen outline path. The ordinary
-    // room uses the renderer's native MSAA, avoiding a fullscreen filter and its
-    // softened texture detail on every camera movement.
-    this.composer = new EffectComposer(this.renderer);
-    this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.outlinePass = new OutlinePass(new THREE.Vector2(1, 1), this.scene, this.camera);
-    this.outlinePass.visibleEdgeColor.setHex(SELECTION_COLOR);
-    this.outlinePass.hiddenEdgeColor.setHex(SELECTION_COLOR);
-    this.outlinePass.edgeStrength = 20.0;
-    this.outlinePass.edgeThickness = 3.8;
-    this.outlinePass.edgeGlow = 0;
-    this.outlinePass.pulsePeriod = 0;
-    this.composer.addPass(this.outlinePass);
-    this.composer.addPass(new OutputPass());
+      // Screen-space silhouette outlining matches the reference planner: the selected
+      // product gets one crisp yellow contour, independent of its component meshes.
+      // Only selected furniture needs the off-screen outline path. The ordinary
+      // room uses the renderer's native MSAA, avoiding a fullscreen filter and its
+      // softened texture detail on every camera movement.
+      this.composer = new EffectComposer(this.renderer);
+      this.composer.addPass(new RenderPass(this.scene, this.camera));
+      this.outlinePass = new OutlinePass(new THREE.Vector2(1, 1), this.scene, this.camera);
+      this.outlinePass.visibleEdgeColor.setHex(SELECTION_COLOR);
+      this.outlinePass.hiddenEdgeColor.setHex(SELECTION_COLOR);
+      this.outlinePass.edgeStrength = 20.0;
+      this.outlinePass.edgeThickness = 3.8;
+      this.outlinePass.edgeGlow = 0;
+      this.outlinePass.pulsePeriod = 0;
+      this.composer.addPass(this.outlinePass);
+      this.composer.addPass(new OutputPass());
 
-    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    this.controls.enableDamping = true;
-    this.controls.dampingFactor = 0.07;
-    this.controls.maxPolarAngle = Math.PI * 0.495;
-    this.controls.minPolarAngle = 0.01;
-    this.controls.minDistance = 1.8;
-    this.controls.maxDistance = 20;
-    this.controls.screenSpacePanning = false;
+      this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+      this.controls.enableDamping = true;
+      this.controls.dampingFactor = 0.07;
+      this.controls.maxPolarAngle = Math.PI * 0.495;
+      this.controls.minPolarAngle = 0.01;
+      this.controls.minDistance = 1.8;
+      this.controls.maxDistance = 20;
+      this.controls.screenSpacePanning = false;
 
-    // OrbitControls swaps rotate/pan whenever Shift is held. Shift already has an
-    // application-level meaning here (free furniture movement), so keep the normal
-    // mouse mapping stable: LMB = orbit and RMB = pan even while Shift is down.
-    // This only changes the mouse-action decision inside OrbitControls; furniture
-    // pointer-downs still disable controls before OrbitControls sees the gesture.
-    const controlsInternal = this.controls as OrbitControls & { _onMouseDown?: (event: PointerEvent) => void };
-    const orbitMouseDown = controlsInternal._onMouseDown;
-    if (orbitMouseDown) {
-      controlsInternal._onMouseDown = (event: PointerEvent) => {
-        if (!event.shiftKey) {
-          orbitMouseDown(event);
-          return;
-        }
-        const unmodifiedEvent = new Proxy(event, {
-          get(target, property) {
-            if (property === 'shiftKey') return false;
-            return Reflect.get(target, property, target);
+      // OrbitControls swaps rotate/pan whenever Shift is held. Shift already has an
+      // application-level meaning here (free furniture movement), so keep the normal
+      // mouse mapping stable: LMB = orbit and RMB = pan even while Shift is down.
+      // This only changes the mouse-action decision inside OrbitControls; furniture
+      // pointer-downs still disable controls before OrbitControls sees the gesture.
+      const controlsInternal = this.controls as OrbitControls & { _onMouseDown?: (event: PointerEvent) => void };
+      const orbitMouseDown = controlsInternal._onMouseDown;
+      if (orbitMouseDown) {
+        controlsInternal._onMouseDown = (event: PointerEvent) => {
+          if (!event.shiftKey) {
+            orbitMouseDown(event);
+            return;
           }
-        }) as PointerEvent;
-        orbitMouseDown(unmodifiedEvent);
-      };
+          const unmodifiedEvent = new Proxy(event, {
+            get(target, property) {
+              if (property === 'shiftKey') return false;
+              return Reflect.get(target, property, target);
+            }
+          }) as PointerEvent;
+          orbitMouseDown(unmodifiedEvent);
+        };
+      }
+
+      this.controls.addEventListener('change', this.onControlsChange);
+      this.controls.addEventListener('start', this.onControlsStart);
+      this.controls.addEventListener('end', this.onControlsEnd);
+
+      // Broad bounced light keeps the architectural shell legible. A single
+      // directional shadow map supplies contact and furniture shadows; fixtures
+      // remain visual accents instead of carrying the room's entire exposure.
+      this.hemiLight = new THREE.HemisphereLight(0xf7f8fa, 0xb8b4ae, 1.1);
+      this.ambientLight = new THREE.AmbientLight(0xffffff, 0.35);
+      this.mainLight = new THREE.DirectionalLight(0xfff6eb, 0.9);
+      this.mainLight.position.set(4.2, 7.2, 4.8);
+      this.mainLight.castShadow = true;
+
+      // Only controls darkness of projected shadow.Does NOT change room illumination.
+      this.mainLight.shadow.intensity = 0.6;
+
+      this.mainLight.shadow.mapSize.set(1024, 1024);
+      this.mainLight.shadow.camera.near = 0.25;
+      this.mainLight.shadow.camera.far = 34;
+      this.mainLight.shadow.bias = -0.00012;
+      this.mainLight.shadow.normalBias = 0.012;
+      this.mainLight.shadow.radius = 6;
+      this.fillLight = new THREE.DirectionalLight(0xe9edf0, 0.3);
+      this.fillLight.position.set(-4.5, 5.2, -4.2);
+      this.scene.add(this.hemiLight, this.ambientLight, this.mainLight, this.mainLight.target, this.fillLight);
+
+      // Capture pointer-down before OrbitControls. Furniture drags disable controls
+      // before they enter a camera gesture. Shift+empty-space is allowed through so
+      // the user can orbit without clearing the active furniture selection.
+      this.renderer.domElement.addEventListener('pointerdown', this.onPointerDown, true);
+      this.renderer.domElement.addEventListener('webglcontextlost', this.onContextLost);
+      window.addEventListener('pointermove', this.onPointerMove);
+      window.addEventListener('pointerup', this.onPointerUp);
+      window.addEventListener('pointercancel', this.onPointerCancel);
+      window.addEventListener('blur', this.onWindowBlur);
+
+      this.resizeObserver = new ResizeObserver(() => this.resize());
+      this.resizeObserver.observe(this.container);
+      this.resize();
+      this.resetCamera();
+      this.renderFromState();
+    } catch (error) {
+      this.dispose();
+      throw error;
     }
-
-    this.controls.addEventListener('change', this.onControlsChange);
-    this.controls.addEventListener('start', this.onControlsStart);
-    this.controls.addEventListener('end', this.onControlsEnd);
-
-    // Broad bounced light keeps the architectural shell legible. A single
-    // directional shadow map supplies contact and furniture shadows; fixtures
-    // remain visual accents instead of carrying the room's entire exposure.
-    this.hemiLight = new THREE.HemisphereLight(0xf7f8fa, 0xb8b4ae, 1.1);
-    this.ambientLight = new THREE.AmbientLight(0xffffff, 0.35);
-    this.mainLight = new THREE.DirectionalLight(0xfff6eb, 0.9);
-    this.mainLight.position.set(4.2, 7.2, 4.8);
-    this.mainLight.castShadow = true;
-
-    // Only controls darkness of projected shadow.Does NOT change room illumination.
-    this.mainLight.shadow.intensity = 0.6;
-
-    this.mainLight.shadow.mapSize.set(1024, 1024);
-    this.mainLight.shadow.camera.near = 0.25;
-    this.mainLight.shadow.camera.far = 34;
-    this.mainLight.shadow.bias = -0.00012;
-    this.mainLight.shadow.normalBias = 0.012;
-    this.mainLight.shadow.radius = 6;
-    this.fillLight = new THREE.DirectionalLight(0xe9edf0, 0.3);
-    this.fillLight.position.set(-4.5, 5.2, -4.2);
-    this.scene.add(this.hemiLight, this.ambientLight, this.mainLight, this.mainLight.target, this.fillLight);
-
-    // Capture pointer-down before OrbitControls. Furniture drags disable controls
-    // before they enter a camera gesture. Shift+empty-space is allowed through so
-    // the user can orbit without clearing the active furniture selection.
-    this.renderer.domElement.addEventListener('pointerdown', this.onPointerDown, true);
-    window.addEventListener('pointermove', this.onPointerMove);
-    window.addEventListener('pointerup', this.onPointerUp);
-    window.addEventListener('pointercancel', this.onPointerCancel);
-    window.addEventListener('blur', this.onWindowBlur);
-
-    this.resizeObserver = new ResizeObserver(() => this.resize());
-    this.resizeObserver.observe(this.container);
-    this.resize();
-    this.resetCamera();
-    this.renderFromState();
   }
 
   dispose() {
@@ -315,17 +325,18 @@ export class PlannerScene {
     this.floorFinishRequest += 1;
     if (this.animationFrame) cancelAnimationFrame(this.animationFrame);
     this.animationFrame = 0;
-    this.resizeObserver.disconnect();
-    this.renderer.domElement.removeEventListener('pointerdown', this.onPointerDown, true);
+    this.resizeObserver?.disconnect();
+    this.renderer?.domElement.removeEventListener('pointerdown', this.onPointerDown, true);
+    this.renderer?.domElement.removeEventListener('webglcontextlost', this.onContextLost);
     window.removeEventListener('pointermove', this.onPointerMove);
     window.removeEventListener('pointerup', this.onPointerUp);
     window.removeEventListener('pointercancel', this.onPointerCancel);
     window.removeEventListener('blur', this.onWindowBlur);
     this.openingMoves.clear();
-    this.controls.removeEventListener('change', this.onControlsChange);
-    this.controls.removeEventListener('start', this.onControlsStart);
-    this.controls.removeEventListener('end', this.onControlsEnd);
-    this.controls.dispose();
+    this.controls?.removeEventListener('change', this.onControlsChange);
+    this.controls?.removeEventListener('start', this.onControlsStart);
+    this.controls?.removeEventListener('end', this.onControlsEnd);
+    this.controls?.dispose();
     this.disposeGroup(this.floorGroup);
     this.disposeGroup(this.wallsGroup);
     this.disposeGroup(this.interiorViewGroup);
@@ -342,15 +353,15 @@ export class PlannerScene {
     this.floorMapAssets.clear();
     this.floorMapCache.clear();
     this.floorMapResults.clear();
-    this.outlinePass.dispose();
-    this.composer.dispose();
+    this.outlinePass?.dispose();
+    this.composer?.dispose();
     this.scene.environment = null;
     this.pairedSunsEnvironmentTarget?.dispose();
     this.pairedSunsEnvironmentTarget = null;
     this.floorMaterial = null;
-    this.renderer.dispose();
-    this.renderer.forceContextLoss();
-    if (this.renderer.domElement.parentNode === this.container) this.container.removeChild(this.renderer.domElement);
+    this.renderer?.dispose();
+    this.renderer?.forceContextLoss();
+    if (this.renderer?.domElement.parentNode === this.container) this.container.removeChild(this.renderer.domElement);
   }
 
   resetCamera() {
@@ -697,7 +708,7 @@ export class PlannerScene {
       return;
     }
     this.currentCameraView = view;
-    const room = this.bridge.getSnapshot().room;
+    const room = this.sceneSnapshot().room;
     const bounds = roomBounds(room.vertices);
     const cx = (bounds.minX + bounds.maxX) / 2;
     const cz = (bounds.minZ + bounds.maxZ) / 2;
@@ -762,7 +773,7 @@ export class PlannerScene {
     this.requestRender();
   }
 
-  private updateCameraClipping(room = this.bridge.getSnapshot().room) {
+  private updateCameraClipping(room = this.sceneSnapshot().room) {
     const bounds = roomBounds(room.vertices);
     const centre = new THREE.Vector3((bounds.minX + bounds.maxX) / 2, room.height / 2, (bounds.minZ + bounds.maxZ) / 2);
     const radius = Math.hypot(bounds.width, bounds.depth, room.height) / 2;
@@ -783,9 +794,13 @@ export class PlannerScene {
     }
   }
 
+  private sceneSnapshot() {
+    return activeArchitecture(this.bridge.getSnapshot());
+  }
+
   renderFromState() {
     if (this.disposed) return;
-    const snapshot = this.bridge.getSnapshot();
+    const snapshot = this.sceneSnapshot();
     const { floorFinish, ...roomWithoutFloorFinish } = snapshot.room;
     const { sunAzimuth, sunElevation, ...lightingWithoutSunAngles } = roomWithoutFloorFinish.lighting;
     const roomKey = JSON.stringify({ ...roomWithoutFloorFinish, lighting: lightingWithoutSunAngles, dividers: snapshot.dividers, spaces: snapshot.spaces });
@@ -2022,7 +2037,7 @@ export class PlannerScene {
     this.architecturalShadeGroup.children.forEach((shade) => {
       if (shade.userData.ceilingShade) shade.visible = visible;
     });
-    this.updateLightFixtureVisibility(this.bridge.getSnapshot());
+    this.updateLightFixtureVisibility(this.sceneSnapshot());
     this.updateRoomDimensionVisibility();
   }
 
@@ -2762,7 +2777,7 @@ export class PlannerScene {
   }
 
   private updateCutawayWalls(force = false) {
-    const snapshot = this.bridge.getSnapshot();
+    const snapshot = this.sceneSnapshot();
     // Only the explicit Top preset shows the complete wall outline. In Free cam,
     // foreground walls must stay hidden even as the camera approaches top-down.
     const showAllWalls = this.currentCameraView === 'top';
@@ -4661,7 +4676,7 @@ export class PlannerScene {
     }
     const before = structuredClone(this.bridge.getSnapshot()) as PlannerSnapshot;
     this.bridge.select(id);
-    const selected = this.bridge.getSnapshot().objects.find((object) => object.id === id);
+    const selected = this.sceneSnapshot().objects.find((object) => object.id === id);
     if (!selected) return;
     const mapping = this.dragMappingFor(selected);
     this.dragging = {
@@ -4688,7 +4703,7 @@ export class PlannerScene {
     this.setPointer(event);
 
     if (this.dragging) {
-      const snapshot = this.bridge.getSnapshot();
+      const snapshot = this.sceneSnapshot();
       const moving = snapshot.objects.find((o) => o.id === this.dragging!.id);
       if (!moving) return;
 
@@ -4728,7 +4743,7 @@ export class PlannerScene {
       // Keep every moving annotation on the same immediate path as the mesh rather
       // than waiting for the store subscription's next RAF. Spacing helpers are now
       // persistent, so this is an in-place buffer/canvas update rather than a rebuild.
-      const liveSnapshot = this.bridge.getSnapshot();
+      const liveSnapshot = this.sceneSnapshot();
       this.syncHelperTransforms(liveSnapshot);
       if (liveSnapshot.showSpacingDimensions) {
         this.syncSpacingHelpers(liveSnapshot);
@@ -4748,7 +4763,7 @@ export class PlannerScene {
       if (openingId !== this.hoverOpeningId) {
         this.hoverOpeningId = openingId;
         this.renderer.domElement.style.cursor = openingId ? 'pointer' : '';
-        this.syncOpeningHighlight(this.bridge.getSnapshot());
+        this.syncOpeningHighlight(this.sceneSnapshot());
         this.requestRender();
       }
       return;
@@ -4779,7 +4794,7 @@ export class PlannerScene {
     this.controls.enabled = true;
     this.renderer.domElement.style.cursor = '';
     this.bridge.feedback({ kind: 'none' }, null, false);
-    const snapshot = this.bridge.getSnapshot();
+    const snapshot = this.sceneSnapshot();
     this.syncSpacingHelpers(snapshot);
     this.lastSpacingHelperKey = this.spacingHelperStateKey(snapshot);
     this.rebuildSnapHelpers(snapshot);
@@ -4800,7 +4815,7 @@ export class PlannerScene {
   private moveOpening(event: PointerEvent) {
     if (!this.openingDragging) return;
     this.setPointer(event);
-    const snapshot = this.bridge.getSnapshot();
+    const snapshot = this.sceneSnapshot();
     const opening = snapshot.openings.find((opening) => opening.id === this.openingDragging!.id);
     if (!opening) return;
     const along = this.openingAlongUnderRay(snapshot, opening);
@@ -4910,7 +4925,21 @@ export class PlannerScene {
     this.animationFrame = requestAnimationFrame(this.animate);
   };
 
-  private animate = () => {
+  private onContextLost = () => {
+    if (!this.disposed) this.options.onError?.(new Error('The WebGL context was lost.'));
+  };
+
+  private animate = () => this.renderSafely();
+
+  private renderSafely() {
+    try { this.renderFrame(); }
+    catch (error) {
+      if (this.options.onError) this.options.onError(error);
+      else throw error;
+    }
+  }
+
+  private renderFrame() {
     this.animationFrame = 0;
     if (this.disposed) return;
     const controlsChanged = this.controls.update();
@@ -4949,5 +4978,5 @@ export class PlannerScene {
     // OrbitControls damping needs a few follow-up frames, but an idle scene should do
     // no RAF/GPU work at all. `change` events also schedule a frame during interaction.
     if (this.controlsInteracting || controlsChanged) this.requestRender();
-  };
+  }
 }
