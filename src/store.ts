@@ -1,4 +1,5 @@
 import { FEATURES } from './config/features';
+import { createId } from './core/id';
 import { createHotStore } from './core/hotStore';
 import type { AiApplyResult, AiProposal } from './ai/types';
 import { applyAiProposal as executeAiProposal, snapshotRevision } from './core/aiProposal';
