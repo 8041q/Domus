@@ -133,7 +133,7 @@ bpy.ops.object.select_all(action="DESELECT")
 outside.select_set(True)
 bpy.context.view_layer.objects.active = outside
 
-with tempfile.TemporaryDirectory() as directory:
+with tempfile.TemporaryDirectory(dir=os.path.dirname(__file__)) as directory:
     path = os.path.join(directory,"hospital-bed.glb")
     assert bpy.ops.domus.export_product(filepath=path) == {"FINISHED"}
     gltf = glb_json(path)

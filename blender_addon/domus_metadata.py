@@ -12,6 +12,7 @@ import ast
 import hashlib
 import importlib
 import sys
+from types import ModuleType
 from pathlib import Path
 
 import bpy
@@ -430,7 +431,8 @@ def capture_metadata():
             props = target.domus_metadata
             values = {key: getattr(props, key) for key in DomusMetadata.__annotations__ if hasattr(props, key)}
             category = values.get("category", "UNSET")
-            values["category"] = SCHEMA["legacyCategoryAliases"].get(category, category)
+            category = SCHEMA["legacyCategoryAliases"].get(category, category)
+            values["category"] = category if any(item[0] == category for item in CATEGORIES) else "UNSET"
             saved.append((target, values))
     return saved
 
@@ -442,9 +444,10 @@ def restore_metadata(saved):
 
 
 def clear_registration():
-    previous = bpy.app.driver_namespace.pop(REGISTRATION_KEY, None)
+    # Unlike driver_namespace, this survives opening another .blend file.
+    previous = sys.modules.pop(REGISTRATION_KEY, None)
     if previous:
-        timer, classes = previous
+        timer, classes = previous.timer, previous.classes
         if bpy.app.timers.is_registered(timer):
             bpy.app.timers.unregister(timer)
     else:
@@ -464,6 +467,18 @@ def clear_registration():
 
 
 def register():
+    # Blender restricts scene data while enabling add-ons. Defer migration until
+    # the next UI tick, so old RNA values can be read before replacing classes.
+    if not hasattr(bpy.data, "objects"):
+        if not bpy.app.timers.is_registered(complete_registration):
+            bpy.app.timers.register(complete_registration, first_interval=0.01)
+        return
+    complete_registration()
+
+
+def complete_registration():
+    if bpy.app.timers.is_registered(complete_registration):
+        bpy.app.timers.unregister(complete_registration)
     saved = capture_metadata()
     # Migrate the legacy module automatically when this stable package is enabled.
     if __name__ == "domus_product_metadata":
@@ -481,11 +496,15 @@ def register():
     restore_metadata(saved)
     global _installed_signature
     _installed_signature = installed_signature()
-    bpy.app.driver_namespace[REGISTRATION_KEY] = (check_for_update, CLASSES)
+    runtime = ModuleType(REGISTRATION_KEY)
+    runtime.timer, runtime.classes = check_for_update, CLASSES
+    sys.modules[REGISTRATION_KEY] = runtime
     bpy.app.timers.register(check_for_update, first_interval=1.0, persistent=True)
 
 
 def unregister():
+    if bpy.app.timers.is_registered(complete_registration):
+        bpy.app.timers.unregister(complete_registration)
     clear_registration()
 
 

@@ -102,7 +102,7 @@ interface PlannerStore extends PlannerSnapshot {
   setSelectedRotation: (rotationY: number, recordHistory?: boolean) => void;
   removeSelected: () => void;
 
-  addOpening: (type: OpeningType) => void;
+  addOpening: (type: OpeningType) => boolean;
   selectOpening: (id: string | null) => void;
   updateOpening: (id: string, patch: Partial<RoomOpening>, recordHistory?: boolean) => void;
   removeOpening: (id: string) => void;
@@ -752,7 +752,7 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
       const preferred = getRoomWalls(get().room).filter((w) => type === 'door' ? !w.horizontal : w.horizontal);
       wall = [...(preferred.length ? preferred : getRoomWalls(get().room))].sort((a, b) => b.length - a.length)[0] ?? null;
     }
-    if (!wall) return;
+    if (!wall) return false;
     const variant = defaultOpeningVariant(type);
     const preset = openingPreset(type, variant, get().room);
     if (type === 'opening' && wall.id.startsWith('divider-')) { preset.height = Math.min(get().room.height, 2.1); preset.sillHeight = 0; }
@@ -778,10 +778,11 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
     const offset = possible.find((value) => existing.every((candidate) =>
       Math.abs(value - candidate.offset) >= halfWidth + candidate.width / 2 + 0.05)
       && validateInteriorOpenings(get().room, get().dividers, [...get().openings, { ...opening, offset: value }]));
-    if (offset == null) return;
+    if (offset == null) return false;
     opening.offset = offset;
     set((state) => ({ openings: [...state.openings, opening], selectedOpeningId: opening.id, selectedWallId: wall!.id, selectedId: null }));
     history.push(before);
+    return true;
   },
 
   selectOpening: (id) => {
@@ -817,7 +818,9 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
     })) return;
     // Moving an aperture cannot change the divider network or furniture bounds.
     if (!validateInteriorOpenings(state.room, state.dividers, openings)) return;
-    set({ openings });
+    const selected = openings.find((opening) => opening.id === get().selectedOpeningId);
+    set({ openings, ...(selected ? { selectedWallId: selected.wallId,
+      selectedDividerId: selected.wallId.startsWith('divider-') ? selected.wallId : null } : {}) });
     if (before) history.push(before);
   },
   removeOpening: (id) => {

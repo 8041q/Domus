@@ -193,6 +193,7 @@ export class PlannerScene {
   private mainLight: THREE.DirectionalLight;
   private fillLight: THREE.DirectionalLight;
   private wallHiddenState = new Map<string, boolean>();
+  private lastCutawayOpeningWall: string | null = null;
   private floorTextureReady: Promise<void> = Promise.resolve();
   private spaceFloorReady: Promise<void>[] = [];
   private spaceFloorMaterials = new Set<THREE.MeshStandardMaterial>();
@@ -892,8 +893,12 @@ export class PlannerScene {
     this.applyRoomLighting(snapshot);
     this.updateShadowBounds(snapshot);
     this.updateLightFixtureVisibility(snapshot);
-    // Cutaway visibility depends on architecture/camera, not furniture/selection state.
-    if (architectureChanged) this.updateCutawayWalls(true);
+    const openingWall = this.options.interactiveArchitecture
+      ? snapshot.openings.find((opening) => opening.id === snapshot.selectedOpeningId)?.wallId ?? null : null;
+    if (architectureChanged || openingWall !== this.lastCutawayOpeningWall) {
+      this.lastCutawayOpeningWall = openingWall;
+      this.updateCutawayWalls(true);
+    }
     this.requestRender();
   }
 
@@ -2795,10 +2800,14 @@ export class PlannerScene {
     // Only the explicit Top preset shows the complete wall outline. In Free cam,
     // foreground walls must stay hidden even as the camera approaches top-down.
     const showAllWalls = this.currentCameraView === 'top';
+    const editingWall = this.options.interactiveArchitecture
+      ? snapshot.openings.find((opening) => opening.id === snapshot.selectedOpeningId)?.wallId : null;
     const nextState = new Map<string, boolean>();
 
     for (const wall of getRoomWalls(snapshot.room)) {
-      if (showAllWalls) {
+      // Reveal the selected aperture even when its wall faces the camera and
+      // would normally be cut away. This makes a newly inserted door visible.
+      if (showAllWalls || wall.id === editingWall) {
         nextState.set(wall.id, false);
         continue;
       }

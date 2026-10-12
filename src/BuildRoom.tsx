@@ -358,6 +358,7 @@ function WallEditor({ wallId }: { wallId: string }) {
 export function BuildRoom() {
   const [resetViewRequest, setResetViewRequest] = useState(0);
   const [dividerTool, setDividerTool] = useState<'wall' | 'open' | null>(null);
+  const [openingWarning, setOpeningWarning] = useState('');
   const room = usePlannerStore((s) => s.room);
   const savedOpenings = usePlannerStore((s) => s.openings);
   const openings = useMemo(() => FEATURES.interiorWalls ? savedOpenings : savedOpenings.filter((opening) => !opening.wallId.startsWith('divider-')), [savedOpenings]);
@@ -385,6 +386,10 @@ export function BuildRoom() {
   const derivedSpaces = useMemo(() => deriveSpaces(activeArchitecture(usePlannerStore.getState())), [room, dividers, spaces]);
   const selectedSpace = FEATURES.interiorWalls ? derivedSpaces.find((space) => space.id === selectedSpaceId) ?? null : null;
   const selectedDivider = FEATURES.interiorWalls ? resolveDividers(room, dividers).find((divider) => divider.id === selectedDividerId) ?? null : null;
+  const insertOpening = (type: RoomOpening['type']) => {
+    setOpeningWarning(addOpening(type) ? '' : 'No free gap on this wall. Choose another wall or move an existing opening.');
+  };
+  useEffect(() => { setOpeningWarning(''); }, [selectedWallId, selectedDividerId, savedOpenings]);
 
   const changeShape = (shape: Exclude<RoomShapeKind, 'custom'>) => {
     if (shape === room.shapeKind) return;
@@ -442,12 +447,13 @@ export function BuildRoom() {
         {buildView === '3d' && <section className="tool-section opening-section">
           <div className="section-title-row"><div><span className="section-step">1</span><h2>Doors, windows & openings</h2></div></div>
           <div className="opening-quick-add" aria-label="Add an opening">
-            <button type="button" disabled={selectedDivider?.kind === 'open'} onClick={() => addOpening('door')}><span className="opening-add-mark" aria-hidden="true">+</span><span>Door</span></button>
+            <button type="button" disabled={selectedDivider?.kind === 'open'} onClick={() => insertOpening('door')}><span className="opening-add-mark" aria-hidden="true">+</span><span>Door</span></button>
             <button type="button" disabled={!!selectedDivider} title={selectedDivider ? 'Windows belong on exterior walls' : undefined}
-              onClick={() => addOpening('window')}><span className="opening-add-mark" aria-hidden="true">+</span><span>Window</span></button>
-            <button type="button" disabled={selectedDivider?.kind === 'open'} onClick={() => addOpening('opening')}><span className="opening-add-mark" aria-hidden="true">+</span><span>Opening</span></button>
+              onClick={() => insertOpening('window')}><span className="opening-add-mark" aria-hidden="true">+</span><span>Window</span></button>
+            <button type="button" disabled={selectedDivider?.kind === 'open'} onClick={() => insertOpening('opening')}><span className="opening-add-mark" aria-hidden="true">+</span><span>Opening</span></button>
           </div>
           <p className="hint compact-hint">Select a wall first to place the opening there.</p>
+          {openingWarning && <p className="hint compact-hint" role="alert">{openingWarning}</p>}
           {!!openings.length && (
             <label className="opening-selector">
               <span>Selected opening</span>

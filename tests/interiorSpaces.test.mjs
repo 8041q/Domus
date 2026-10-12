@@ -109,7 +109,7 @@ test('Walls down preserves exterior visibility, doorway thresholds, lighting and
     interiorWallView: 'down' };
   snapshot.spaces = geometry.deriveSpaces(snapshot).map((space, index) => ({ ...space, floorFinish: index ? 'carpet-011' : 'wood-floor-057' }));
   const scene = Object.create(PlannerScene.prototype);
-  Object.assign(scene, { bridge: { getSnapshot: () => snapshot }, camera: new THREE.PerspectiveCamera(),
+  Object.assign(scene, { bridge: { getSnapshot: () => snapshot }, options: { interactiveArchitecture: false }, camera: new THREE.PerspectiveCamera(),
     controls: { target: new THREE.Vector3(1, 1, 2) }, currentCameraView: 'free', wallHiddenState: new Map(),
     interiorProfiles: new Map(), interiorViewKey: '', wallsGroup: new THREE.Group(), interiorViewGroup: new THREE.Group(),
     daylightGroup: new THREE.Group(), floorGroup: new THREE.Group(), ceilingGroup: new THREE.Group(), objectGroup: new THREE.Group(), architecturalShadeGroup: new THREE.Group(),

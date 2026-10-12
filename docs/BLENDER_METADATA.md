@@ -2,10 +2,21 @@
 
 ## Install the Blender add-on
 
-In Blender 4.2 or newer, disable the previous Domus add-on, then open
+In Blender 4.2 or newer, open
 **Edit → Preferences → Add-ons → Install from Disk** and select
 [`blender_addon/domus_metadata_addon.zip`](../blender_addon/domus_metadata_addon.zip).
-Enable **Domus Product Metadata**. The ZIP contains the Python add-on and its
+Leave **Overwrite** checked and select **Enable on Install**, or enable the new
+**Domus Product Metadata** entry after installation. Version 0.4 automatically
+disables the legacy single-file/v0.3 package and migrates the existing inputs,
+including category names, without changing your saved metadata or model parts.
+You do not need to disable or uninstall the previous version first.
+
+For later upgrades, install the same ZIP again with **Overwrite** checked. An
+enabled add-on detects the replaced files and reloads itself within a second,
+preserving the source and metadata inputs. Installing identical contents is
+also safe. If the add-on is disabled, enable it after installing.
+
+The ZIP contains the Python add-on and its
 shared category schema; install the ZIP rather than the individual Python file.
 
 To rebuild the ZIP after editing its sources:

@@ -162,3 +162,85 @@ test('repeated identical opening and corner samples do not notify the store', ()
   unsubscribe();
   assert.equal(updates, 0);
 });
+
+test('exterior insertions find separate apertures, select the result, and stop when the wall is full', () => {
+  const store = usePlannerStore;
+  for (const type of ['door', 'window', 'opening']) {
+    store.getState().resetProject();
+    store.getState().selectWall('wall-v0-v1');
+    const before = getSnapshot();
+    assert.equal(store.getState().addOpening(type), true);
+    const state = store.getState();
+    const inserted = state.openings.find((opening) => opening.id === state.selectedOpeningId);
+    assert.equal(inserted.type, type);
+    assert.equal(inserted.wallId, 'wall-v0-v1');
+    assert.ok(before.openings.filter((opening) => opening.wallId === inserted.wallId).every((opening) =>
+      Math.abs(opening.offset - inserted.offset) >= (opening.width + inserted.width) / 2 + 0.05 - 1e-6));
+    store.getState().undo();
+    assert.deepEqual(JSON.parse(JSON.stringify(getSnapshot())), JSON.parse(JSON.stringify(before)));
+    store.getState().redo();
+    assert.equal(store.getState().openings.length, before.openings.length + 1);
+  }
+  let additions = 0;
+  while (store.getState().addOpening('window')) assert.ok(++additions < 20);
+  const before = getSnapshot();
+  assert.equal(store.getState().addOpening('window'), false);
+  assert.deepEqual(getSnapshot(), before);
+});
+
+test('adding openings and furniture still works without secure-context randomUUID', () => {
+  const descriptor = Object.getOwnPropertyDescriptor(crypto, 'randomUUID');
+  Object.defineProperty(crypto, 'randomUUID', { value: undefined, configurable: true });
+  try {
+    const store = usePlannerStore;
+    store.getState().resetProject();
+    assert.equal(store.getState().addOpening('door'), true);
+    store.getState().addObject('chair');
+    assert.equal(store.getState().objects.length, 1);
+    assert.equal(store.getState().selectedId, store.getState().objects[0].id);
+    store.getState().duplicateSelected();
+    assert.equal(store.getState().objects.length, 2);
+    assert.notEqual(store.getState().objects[0].id, store.getState().objects[1].id);
+  } finally {
+    if (descriptor) Object.defineProperty(crypto, 'randomUUID', descriptor);
+    else delete crypto.randomUUID;
+  }
+});
+
+test('moving the selected opening to another wall keeps that wall active for the next insertion', () => {
+  const store = usePlannerStore;
+  store.getState().resetProject();
+  const door = store.getState().openings.find((opening) => opening.type === 'door');
+  store.getState().selectOpening(door.id);
+  store.getState().updateOpening(door.id, { wallId: 'wall-v3-v0' });
+  assert.equal(store.getState().selectedWallId, 'wall-v3-v0');
+  assert.equal(store.getState().addOpening('window'), true);
+  assert.equal(store.getState().openings.find((opening) => opening.id === store.getState().selectedOpeningId).wallId, 'wall-v3-v0');
+});
+
+test('a selected door is revealed on a cutaway wall in Build Room and the normal cutaway returns afterward', () => {
+  const store = usePlannerStore;
+  store.getState().resetProject();
+  const opening = store.getState().openings.find((opening) => opening.type === 'door');
+  const scene = Object.create(PlannerScene.prototype);
+  Object.assign(scene, { bridge: { getSnapshot: () => store.getState() },
+    options: { interactiveArchitecture: true }, currentCameraView: 'free',
+    camera: { position: new THREE.Vector3(12, 12, 12) }, wallHiddenState: new Map(),
+    wallsGroup: new THREE.Group(), floorGroup: new THREE.Group(), architecturalShadeGroup: new THREE.Group(),
+    updateInteriorWallView: () => {}, rebuildRoomDimensionHelpers: () => {} });
+  const door = new THREE.Object3D();
+  door.userData.cutawayWallId = opening.wallId;
+  scene.wallsGroup.add(door);
+  scene.updateCutawayWalls(true);
+  assert.equal(door.visible, false);
+  store.getState().selectOpening(opening.id);
+  scene.updateCutawayWalls(true);
+  assert.equal(door.visible, true);
+  scene.options.interactiveArchitecture = false;
+  scene.updateCutawayWalls(true);
+  assert.equal(door.visible, false, 'Plan Room keeps its normal cutaway');
+  scene.options.interactiveArchitecture = true;
+  store.getState().selectOpening(null);
+  scene.updateCutawayWalls(true);
+  assert.equal(door.visible, false);
+});
