@@ -1,3 +1,4 @@
+import { createId } from './id';
 import type { RoomShapeKind, RoomState, RoomVertex, RoomWallSegment, Vec2 } from './types';
 
 const EPS = 1e-6;
@@ -340,7 +341,7 @@ export function resizeWallCentered(room: RoomState, id: string, newLength: numbe
 }
 
 /** Insert a new editable corner at the midpoint of a wall. */
-export function splitWall(room: RoomState, id: string, vertexId = `v-${crypto.randomUUID().slice(0, 8)}`): RoomVertex[] | null {
+export function splitWall(room: RoomState, id: string, vertexId = `v-${createId()}`): RoomVertex[] | null {
   const wall = getWall(room, id);
   if (!wall || wall.length < MIN_WALL_LENGTH * 2.05) return null;
   const midpoint = wallPoint(wall, wall.length / 2);

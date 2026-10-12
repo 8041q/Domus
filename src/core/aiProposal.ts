@@ -1,3 +1,4 @@
+import { createId } from './id';
 import type { AiOperation, AiProposal } from '../ai/types';
 import { PRODUCTS } from './products';
 import { isPlacementValid } from './placement';
@@ -36,7 +37,7 @@ function applyOperation(snapshot: PlannerSnapshot, operation: AiOperation, index
   if (operation.type === 'add-object') {
     if (!operation.productId || !(operation.productId in PRODUCTS)) return `${prefix} uses an unknown catalogue product.`;
     const candidate: PlacedObject = {
-      id: `ai-${operation.productId}-${crypto.randomUUID().slice(0, 8)}`,
+      id: `ai-${operation.productId}-${createId()}`,
       productId: operation.productId as ProductKind,
       x: operation.x,
       z: operation.z,

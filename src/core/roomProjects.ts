@@ -1,3 +1,4 @@
+import { createId } from './id';
 import type { PlannerSnapshot, RoomShapeKind } from './types';
 
 export const ROOM_LIBRARY_KEY = 'domus-room-library-v1';
@@ -110,7 +111,7 @@ export class RoomProjects {
     const snapshot = this.adapter.decode(this.adapter.snapshot());
     if (!snapshot) throw new Error('The room contains invalid geometry and could not be saved.');
     const now = new Date().toISOString();
-    const record: SavedRoom = { id: id ?? crypto.randomUUID(), name, createdAt: existing?.createdAt ?? now, updatedAt: now, revision: crypto.randomUUID(), snapshot };
+    const record: SavedRoom = { id: id ?? createId(), name, createdAt: existing?.createdAt ?? now, updatedAt: now, revision: createId(), snapshot };
     const updated = [...rooms.filter((room) => room.id !== record.id), record];
     // Commit metadata only after the complete library has been written successfully.
     this.writeRooms(updated);

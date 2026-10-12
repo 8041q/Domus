@@ -545,15 +545,7 @@ export function BuildRoom() {
           {buildView === '3d' && <button className="floating-reset-view" type="button" onClick={() => setResetViewRequest((value) => value + 1)}><Icon name="rotateLeft" />Reset view</button>}
 
           {buildView === 'plan' ? <Plan2D purpose="build" dividerTool={FEATURES.interiorWalls ? dividerTool : null} onDividerAdded={() => setDividerTool(null)} /> : (
-            <div
-              className="builder-3d-selection-surface"
-              onPointerDownCapture={(event) => {
-                if (!selectedOpeningId && !selectedWallId && !selectedDividerId) return;
-                // Clear the current architectural focus before the renderer handles the hit.
-                // Clicking a door/window immediately re-selects it; clicking empty 3D space leaves it cleared.
-                selectOpening(null);
-              }}
-            >
+            <div className="builder-3d-selection-surface">
               <Suspense fallback={<div className="viewport-loading">Loading 3D preview…</div>}>
                 <Viewport3D furniture={false} interactive={false} architectureInteractive sunRays={false} resetViewRequest={resetViewRequest} />
               </Suspense>

@@ -171,6 +171,7 @@ export class PlannerScene {
   private openingDragging: { id: string; before: PlannerSnapshot; grabOffset: number; pointerId: number } | null = null;
   private openingMoves = createFrameQueue<PointerEvent>((event) => this.moveOpening(event));
   private spaceClick: { id: string; x: number; y: number } | null = null;
+  private wallClick: { id: string; x: number; y: number; pointerId: number } | null = null;
   private hoverOpeningId: string | null = null;
   private resizeObserver: ResizeObserver;
   private animationFrame = 0;
@@ -4742,6 +4743,7 @@ export class PlannerScene {
   private onPointerDown = (event: PointerEvent) => {
     if (event.button !== 0) return;
     this.spaceClick = null;
+    this.wallClick = null;
 
     this.setPointer(event);
 
@@ -4761,8 +4763,7 @@ export class PlannerScene {
       }
       const hit = openingHits.find((hit) => hit.object.visible && hit.object.userData.cutawayWallId);
       const wallId = hit?.object.userData.cutawayWallId as string | undefined;
-      if (wallId?.startsWith('divider-')) this.bridge.selectDivider?.(wallId);
-      else if (wallId) this.bridge.selectWall?.(wallId);
+      if (wallId) this.wallClick = { id: wallId, x: event.clientX, y: event.clientY, pointerId: event.pointerId };
     }
 
     if (!this.options.interactiveFurniture) return;
@@ -4883,6 +4884,15 @@ export class PlannerScene {
   };
 
   private onPointerUp = (event: PointerEvent) => {
+    if (this.wallClick?.pointerId === event.pointerId) {
+      const click = this.wallClick;
+      this.wallClick = null;
+      // Navigation beginning on a wall must not replace the active editor.
+      if (Math.hypot(event.clientX - click.x, event.clientY - click.y) < 5) {
+        if (click.id.startsWith('divider-')) this.bridge.selectDivider?.(click.id);
+        else this.bridge.selectWall?.(click.id);
+      }
+    }
     if (this.spaceClick) {
       const click = this.spaceClick;
       this.spaceClick = null;
@@ -4944,11 +4954,14 @@ export class PlannerScene {
   }
 
   private onPointerCancel = (event: PointerEvent) => {
+    this.wallClick = null;
+    this.spaceClick = null;
     if (this.openingDragging?.pointerId === event.pointerId) this.finishOpeningDrag();
     if (this.dragging) this.onPointerUp(event);
   };
 
   private onWindowBlur = () => {
+    this.wallClick = null;
     this.spaceClick = null;
     this.finishOpeningDrag();
     if (this.dragging) {

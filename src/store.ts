@@ -445,7 +445,7 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
 
   addObject: (productId) => {
     const before = snapshotOf(get());
-    const id = `${productId}-${crypto.randomUUID().slice(0, 8)}`;
+    const id = `${productId}-${createId()}`;
     const pos = findSpawnPosition(productId, before);
     if (!pos) {
       set((state) => ({ unplacedObjects: [...state.unplacedObjects, { id, productId }] }));
@@ -490,7 +490,7 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
     const source = get().objects.find((o) => o.id === id);
     if (!source) return;
     const before = snapshotOf(get());
-    const copy: PlacedObject = { ...source, id: `${source.productId}-${crypto.randomUUID().slice(0, 8)}` };
+    const copy: PlacedObject = { ...source, id: `${source.productId}-${createId()}` };
     const resolved = resolvePlacement(copy, source.x + 0.28, source.z + 0.28, architectureRoom(get()), get().objects, { enterSnapDistance: 0.06 });
     copy.x = resolved.x;
     copy.z = resolved.z;
@@ -600,7 +600,7 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
     const wall = getWall(room, id);
     if (!wall) return false;
     const before = snapshotOf(get());
-    const newVertexId = `v-${crypto.randomUUID().slice(0, 8)}`;
+    const newVertexId = `v-${createId()}`;
     const vertices = splitWall(room, id, newVertexId);
     if (!vertices) return false;
     const nextRoom = syncRoomBounds({ ...room, shapeKind: 'custom' }, vertices);
@@ -636,7 +636,7 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
   addDivider: (kind, start, end) => {
     if (!FEATURES.interiorWalls) return false;
     const before = snapshotOf(get());
-    const divider: InteriorDivider = { id: `divider-${crypto.randomUUID().slice(0, 8)}`, kind, start, end };
+    const divider: InteriorDivider = { id: `divider-${createId()}`, kind, start, end };
     const dividers = [...get().dividers, divider];
     if (!validateDividers(get().room, dividers) || deriveSpaces({ ...before, dividers }).length <= deriveSpaces(before).length) return false;
     if (!validInteriorArchitecture({ ...before, dividers })) return false;
@@ -694,7 +694,7 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
       while (usedNames.has(`Space ${nextName}`)) nextName++;
       const name = isNew ? `Space ${nextName++}` : space.name;
       usedNames.add(name);
-      return { id: isNew ? `space-${crypto.randomUUID().slice(0, 8)}` : space.id,
+      return { id: isNew ? `space-${createId()}` : space.id,
         name, seed: space.seed, boundaryKey: space.boundaryKey,
         floorFinish: parent?.floorFinish ?? space.floorFinish, wallColor: parent?.wallColor ?? space.wallColor };
     });
@@ -757,20 +757,29 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
     const preset = openingPreset(type, variant, get().room);
     if (type === 'opening' && wall.id.startsWith('divider-')) { preset.height = Math.min(get().room.height, 2.1); preset.sillHeight = 0; }
     const opening: RoomOpening = normalizeOpening({
-      id: `${type}-${crypto.randomUUID().slice(0, 8)}`,
+      id: `${type}-${createId()}`,
       type,
       variant,
       wallId: wall.id,
       offset: wall.length / 2,
       ...preset
     }, get().room, get().dividers);
-    if (wall.id.startsWith('divider-')) {
-      const possible = Array.from({ length: Math.ceil(wall.length / 0.05) + 1 }, (_, index) => index * 0.05)
-        .sort((a, b) => Math.abs(a - wall!.length / 2) - Math.abs(b - wall!.length / 2));
-      const offset = possible.find((value) => validateInteriorOpenings(get().room, get().dividers, [...get().openings, { ...opening, offset: value }]));
-      if (offset == null) return;
-      opening.offset = offset;
-    }
+    // Give each new aperture a free spot instead of hiding it behind the
+    // opening already at the wall's centre. Leave a strip between frames.
+    const halfWidth = opening.width / 2;
+    const min = halfWidth + 0.05, max = wall.length - halfWidth - 0.05;
+    const existing = get().openings.filter((candidate) => candidate.wallId === wall!.id);
+    const possible = [wall.length / 2, min, max,
+      ...existing.flatMap((candidate) => [candidate.offset - candidate.width / 2 - halfWidth - 0.06,
+        candidate.offset + candidate.width / 2 + halfWidth + 0.06]),
+      ...Array.from({ length: Math.ceil(wall.length / 0.05) + 1 }, (_, index) => index * 0.05)]
+      .filter((value) => value >= min && value <= max)
+      .sort((a, b) => Math.abs(a - wall!.length / 2) - Math.abs(b - wall!.length / 2));
+    const offset = possible.find((value) => existing.every((candidate) =>
+      Math.abs(value - candidate.offset) >= halfWidth + candidate.width / 2 + 0.05)
+      && validateInteriorOpenings(get().room, get().dividers, [...get().openings, { ...opening, offset: value }]));
+    if (offset == null) return;
+    opening.offset = offset;
     set((state) => ({ openings: [...state.openings, opening], selectedOpeningId: opening.id, selectedWallId: wall!.id, selectedId: null }));
     history.push(before);
   },

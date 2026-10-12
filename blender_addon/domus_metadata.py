@@ -1,13 +1,17 @@
 """Collection-based product metadata for Blender's built-in GLB exporter."""
 
 bl_info = {
-    "name": "Domus Product Metadata", "author": "Domus", "version": (0, 3, 0),
+    "name": "Domus Product Metadata", "author": "Domus", "version": (0, 4, 0),
     "blender": (4, 2, 0), "location": "View3D > Sidebar > Domus",
     "description": "Prepare a complete product collection for the Domus catalogue", "category": "Object",
 }
 
 import json
 import math
+import ast
+import hashlib
+import importlib
+import sys
 from pathlib import Path
 
 import bpy
@@ -387,23 +391,102 @@ class DOMUS_PT_metadata(Panel):
 CLASSES = (DomusMetadata, DomusProductSource, DOMUS_OT_use_collection, DOMUS_OT_read_model,
            DOMUS_OT_load_metadata, DOMUS_OT_save_metadata, DOMUS_OT_export_product, DOMUS_PT_metadata)
 
+PROPERTIES = ((bpy.types.Scene, "domus_product_source"), (bpy.types.Collection, "domus_model_root"),
+              (bpy.types.Collection, "domus_metadata"), (bpy.types.Object, "domus_metadata"))
+REGISTRATION_KEY = "_domus_metadata_registration"
+
+
+def installed_signature():
+    return hashlib.sha256(Path(__file__).read_bytes() + Path(__file__).with_name("catalogue_schema.json").read_bytes()).digest()
+
+
+def check_for_update():
+    """Install from Disk replaces files without reloading an enabled add-on."""
+    try:
+        if installed_signature() != _installed_signature:
+            ast.parse(Path(__file__).read_text(encoding="utf-8"))
+            json.loads(Path(__file__).with_name("catalogue_schema.json").read_text(encoding="utf-8"))
+            module = sys.modules[__name__]
+            saved = capture_metadata()
+            unregister()
+            importlib.invalidate_caches()
+            importlib.reload(module)
+            module.register()
+            module.restore_metadata(saved)
+            return None
+    except (OSError, SyntaxError, json.JSONDecodeError):
+        # The installer can be between removal and extraction; retry shortly.
+        return 1.0
+    except Exception as error:
+        print("Domus add-on update failed:", error)
+        return None
+    return 1.0
+
+
+def capture_metadata():
+    saved = []
+    for target in [*bpy.data.objects, *bpy.data.collections]:
+        if hasattr(target, "domus_metadata"):
+            props = target.domus_metadata
+            values = {key: getattr(props, key) for key in DomusMetadata.__annotations__ if hasattr(props, key)}
+            category = values.get("category", "UNSET")
+            values["category"] = SCHEMA["legacyCategoryAliases"].get(category, category)
+            saved.append((target, values))
+    return saved
+
+
+def restore_metadata(saved):
+    for target, values in saved:
+        for key, value in values.items():
+            setattr(target.domus_metadata, key, value)
+
+
+def clear_registration():
+    previous = bpy.app.driver_namespace.pop(REGISTRATION_KEY, None)
+    if previous:
+        timer, classes = previous
+        if bpy.app.timers.is_registered(timer):
+            bpy.app.timers.unregister(timer)
+    else:
+        # Earlier versions didn't retain their registered Python classes.
+        classes = []
+        for name, base in [(cls.__name__, cls.__bases__[0]) for cls in CLASSES] + [
+                ("DOMUS_OT_refresh_geometry", Operator), ("DOMUS_OT_select_product", Operator)]:
+            registered = base.bl_rna_get_subclass_py(name, None)
+            if registered:
+                classes.append(registered)
+    for owner, name in PROPERTIES:
+        if hasattr(owner, name):
+            delattr(owner, name)
+    for cls in reversed(classes):
+        if cls.is_registered:
+            bpy.utils.unregister_class(cls)
+
 
 def register():
+    saved = capture_metadata()
+    # Migrate the legacy module automatically when this stable package is enabled.
+    if __name__ == "domus_product_metadata":
+        import addon_utils
+        legacy = sys.modules.get("domus_metadata")
+        if legacy and getattr(legacy, "__addon_enabled__", False):
+            addon_utils.disable("domus_metadata", default_set=True)
+    clear_registration()
     for cls in CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.Object.domus_metadata = PointerProperty(type=DomusMetadata)
     bpy.types.Collection.domus_metadata = PointerProperty(type=DomusMetadata)
     bpy.types.Collection.domus_model_root = PointerProperty(type=bpy.types.Object)
     bpy.types.Scene.domus_product_source = PointerProperty(type=DomusProductSource)
+    restore_metadata(saved)
+    global _installed_signature
+    _installed_signature = installed_signature()
+    bpy.app.driver_namespace[REGISTRATION_KEY] = (check_for_update, CLASSES)
+    bpy.app.timers.register(check_for_update, first_interval=1.0, persistent=True)
 
 
 def unregister():
-    del bpy.types.Scene.domus_product_source
-    del bpy.types.Collection.domus_model_root
-    del bpy.types.Collection.domus_metadata
-    del bpy.types.Object.domus_metadata
-    for cls in reversed(CLASSES):
-        bpy.utils.unregister_class(cls)
+    clear_registration()
 
 
 if __name__ == "__main__":
