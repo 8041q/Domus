@@ -10,7 +10,7 @@ import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
-import { PRODUCTS } from '../core/products';
+import { PRODUCTS, PRODUCT_LIST } from '../core/products';
 import { floorFinishDefinition, type FloorFinishDefinition } from '../core/roomFinishes';
 import { clearanceRegions, resolvePlacement, spacingMeasurements, type SpacingMeasurement } from '../core/placement';
 import { BASEBOARD_STYLES, DOOR_LEAF_COLOR, glazingAreas, isSunGlazedOpening } from '../core/architecturalStyles';
@@ -24,6 +24,7 @@ import { interiorWallProfile, profileHeight } from '../core/interiorWallView';
 import { cutWallGeometry } from './interiorWallGeometry';
 import { createFloorSurfaceGeometry } from './floorGeometry';
 import { createFrameQueue } from '../core/frameQueue';
+import { ProductModelLibrary } from './productModels';
 
 export interface SceneSnapshot extends PlannerSnapshot {
   selectedId?: string | null;
@@ -58,6 +59,7 @@ interface SceneOptions {
   interactiveArchitecture: boolean;
   sunRays: boolean;
   onError?: (error: unknown) => void;
+  onModelStatus?: (status: { loading: boolean; error: string | null }) => void;
 }
 
 const DIMENSION_COLOR = themeHex('dimension-line');
@@ -148,6 +150,10 @@ export class PlannerScene {
   private objectGroup = new THREE.Group();
   private helperGroup = new THREE.Group();
   private objectModels = new Map<string, THREE.Group>();
+  private productModels = new ProductModelLibrary();
+  private productModelRequests = new Map<string, Promise<void>>();
+  private productModelTemplates = new Map<string, THREE.Group>();
+  private productModelErrors = new Set<string>();
   private contactShadows = new Map<string, THREE.Group>();
   private dragging: {
     id: string;
@@ -348,6 +354,7 @@ export class PlannerScene {
     this.disposeSunsetRig();
     this.disposeGroup(this.contactShadowGroup);
     this.disposeGroup(this.objectGroup);
+    this.productModels?.dispose();
     this.disposeGroup(this.helperGroup);
     for (const texture of this.floorMapAssets) texture.dispose();
     this.floorMapAssets.clear();
@@ -647,6 +654,11 @@ export class PlannerScene {
     // Give the active finish maps a chance to arrive before GLTFExporter serialises
     // the floor material. Failed requests resolve too, so export never hangs offline.
     await Promise.all([this.floorTextureReady, ...this.spaceFloorReady]);
+    while (this.productModelRequests.size) await Promise.all(this.productModelRequests.values());
+    if (this.disposed) throw new Error('The 3D view closed while preparing the export.');
+    if (this.bridge.getSnapshot().objects.some((object) => this.productModelErrors.has(PRODUCTS[object.productId].model?.url ?? ''))) {
+      throw new Error('A furniture model could not load. Retry loading it before exporting.');
+    }
     // Export semantic data, not the current Cutaway view. Camera cutaways,
     // dimensions, selection outlines and other helper/UI state are never part of
     // this export tree.
@@ -925,6 +937,7 @@ export class PlannerScene {
     };
 
     group.traverse((obj) => {
+      if (obj.userData.sharedProductAsset) return;
       const renderable = obj as THREE.Object3D & {
         geometry?: THREE.BufferGeometry;
         material?: THREE.Material | THREE.Material[];
@@ -2922,16 +2935,29 @@ export class PlannerScene {
     let outlined: THREE.Group | null = null;
     for (const object of snapshot.objects) {
       let group = this.objectModels.get(object.id);
+      const product = PRODUCTS[object.productId];
+      const modelKey = product.model ? JSON.stringify([product.model.url, product.available, product.width, product.depth, product.height]) : '';
+      if (group && group.userData.productModelKey !== modelKey) {
+        if (product.model && product.available !== false && this.productModelErrors.delete(product.model.url)) this.productModels.retry(product.model.url);
+        this.disposeObject(group);
+        this.objectGroup.remove(group);
+        this.objectModels.delete(object.id);
+        const contact = this.contactShadows.get(object.id);
+        if (contact) { this.disposeGroup(contact); this.contactShadowGroup.remove(contact); this.contactShadows.delete(object.id); }
+        group = undefined;
+      }
       if (!group) {
         group = this.createPlaceholderModel(object.productId);
-        const product = PRODUCTS[object.productId];
         group.name = product.name;
         group.userData.objectId = object.id;
         group.userData.productId = object.productId;
+        group.userData.productModelKey = modelKey;
+        group.userData.productModelUrl = product.model?.url;
         this.tagExportRoot(group, 'Furniture', object.id, product.name);
         group.traverse((node) => { node.userData.objectId = object.id; });
         this.objectModels.set(object.id, group);
         this.objectGroup.add(group);
+        if (product.model) this.syncProductModel(object.productId, group);
         const contact = this.createContactShadow(object.productId);
         this.contactShadows.set(object.id, contact);
         this.contactShadowGroup.add(contact);
@@ -2946,15 +2972,86 @@ export class PlannerScene {
       if (object.id === snapshot.selectedId) outlined = group;
     }
     this.outlinePass.selectedObjects = outlined ? [outlined] : [];
+    // A fresh Blender export changes the asset URL. Release obsolete versions
+    // after their instances are replaced so repeated edits do not retain huge GLBs.
+    const catalogueUrls = new Set(PRODUCT_LIST.flatMap((product) => product.model ? [product.model.url] : []));
+    for (const url of new Set([...this.productModelTemplates.keys(), ...this.productModelRequests.keys()])) {
+      if (catalogueUrls.has(url)) continue;
+      this.productModelTemplates.delete(url);
+      this.productModelRequests.delete(url);
+      this.productModelErrors.delete(url);
+      this.productModels.releaseModel(url);
+    }
+    this.notifyProductModelStatus();
   }
 
   private disposeObject(group: THREE.Group) {
-    group.traverse((obj) => {
-      if (!(obj instanceof THREE.Mesh)) return;
-      obj.geometry.dispose();
-      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-      mats.forEach((m) => m.dispose());
+    this.disposeGroup(group);
+  }
+
+  private attachProductModel(group: THREE.Group, template: THREE.Group) {
+    this.disposeGroup(group);
+    const model = this.productModels.instantiate(template);
+    model.traverse((node) => { node.userData.objectId = group.userData.objectId; });
+    group.add(model);
+    group.userData.productModelLoaded = true;
+  }
+
+  private syncProductModel(id: keyof typeof PRODUCTS, group: THREE.Group) {
+    const asset = PRODUCTS[id].model;
+    if (!asset) return;
+    const url = asset.url;
+    if (PRODUCTS[id].available === false) { this.productModelErrors.add(url); return; }
+    const template = this.productModelTemplates.get(url);
+    if (template) {
+      this.attachProductModel(group, template);
+      return;
+    }
+    if (this.productModelRequests.has(url) || this.productModelErrors.has(url)) return;
+    const request = this.productModels.loadModel(url).then((loaded) => {
+      if (this.disposed || this.productModelRequests.get(url) !== request) return;
+      this.productModelTemplates.set(url, loaded);
+      // Resolve against current instances: objects may be moved, removed, duplicated
+      // or replaced by a different room while this large asset is downloading.
+      for (const current of this.objectModels.values()) {
+        if (current.userData.productModelUrl === url && PRODUCTS[current.userData.productId]?.available !== false && PRODUCTS[current.userData.productId] && !current.userData.productModelLoaded) this.attachProductModel(current, loaded);
+      }
+      this.requestRender();
+    }).catch((error) => {
+      if (this.disposed || this.productModelRequests.get(url) !== request) return;
+      console.error(`Could not load ${PRODUCTS[id]?.name ?? id}`, error);
+      this.productModelErrors.add(url);
+    }).finally(() => {
+      if (this.productModelRequests.get(url) === request) this.productModelRequests.delete(url);
+      if (!this.disposed) this.notifyProductModelStatus();
     });
+    this.productModelRequests.set(url, request);
+  }
+
+  private notifyProductModelStatus() {
+    const live = this.bridge.getSnapshot().objects.map((object) => PRODUCTS[object.productId]);
+    const urls = new Set(live.map((product) => product.model?.url));
+    const failed = live.filter((product) => product.model && this.productModelErrors.has(product.model.url));
+    this.options.onModelStatus?.({
+      loading: [...this.productModelRequests.keys()].some((url) => urls.has(url)),
+      error: failed.length ? `Could not load ${[...new Set(failed.map((product) => product.name))].join(', ')}. Check the model file or retry.` : null
+    });
+  }
+
+  retryProductModels() {
+    for (const url of this.productModelErrors) this.productModels.retry(url);
+    this.productModelErrors.clear();
+    for (const group of this.objectModels.values()) {
+      if (!group.userData.productModelLoaded) this.syncProductModel(group.userData.productId, group);
+    }
+    this.notifyProductModelStatus();
+  }
+
+  refreshProductCatalogue() {
+    this.lastHelperKey = '';
+    this.lastSpacingHelperKey = '';
+    this.lastSnapHelperKey = '';
+    this.renderFromState();
   }
 
   /** Soft floor occlusion follows the actual support points, independently of
@@ -3020,6 +3117,8 @@ export class PlannerScene {
       patch(p.width, p.depth, 0, 0, 0.03, 0.10);
     } else if (id === 'plant') {
       patch(0.31, 0.31, 0, 0, 0.03, 0.34, true);
+    } else if (p.model) {
+      patch(p.width * 0.85, p.depth * 0.85, 0, 0, 0.05, 0.18);
     }
     return group;
   }
@@ -3046,6 +3145,13 @@ export class PlannerScene {
   private createPlaceholderModel(id: keyof typeof PRODUCTS) {
     const p = PRODUCTS[id];
     const group = new THREE.Group();
+    if (p.model) {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(p.width, p.height, p.depth),
+        new THREE.MeshStandardMaterial({ color: p.swatch, transparent: true, opacity: 0.35 }));
+      mesh.position.y = p.height / 2;
+      group.add(mesh);
+      return group;
+    }
     // Model colour remains independent of the room rig; contact AO belongs on
     // the floor underneath it, while castShadow preserves the projected shadow.
     const baseMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(p.swatch), vertexColors: true });

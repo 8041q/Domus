@@ -1,44 +1,140 @@
-# Preparing a product in Blender
+# Preparing and importing furniture models
 
-The [Domus Product Metadata add-on](../blender_addon/domus_metadata.py) writes catalogue and placement data to a model root object. It has **Save Metadata** but no export control. Use Blender's normal glTF exporter for the model file.
+## Install the Blender add-on
 
-## Install and use
+In Blender 4.2 or newer, disable the previous Domus add-on, then open
+**Edit → Preferences → Add-ons → Install from Disk** and select
+[`blender_addon/domus_metadata_addon.zip`](../blender_addon/domus_metadata_addon.zip).
+Enable **Domus Product Metadata**. The ZIP contains the Python add-on and its
+shared category schema; install the ZIP rather than the individual Python file.
 
-1. In Blender 4.2 or newer, open **Edit → Preferences → Add-ons → Install from Disk** and choose `blender_addon/domus_metadata.py`. Enable **Domus Product Metadata**.
-2. Put all parts of one product under a single root object (an Empty or a mesh), then select that root. Open **3D View → Sidebar → Domus**.
-3. Choose **Fill Empty Fields**. The add-on reads the root name, a material colour, and the evaluated bounds of all mesh descendants. It uses the scene unit scale to express dimensions in metres. Fill in the category and any other fields that need your input. **Refresh Dimensions** deliberately replaces dimensions and collider values after geometry changes.
-4. Choose **Save Metadata**. The add-on checks the product ID, name, category, dimensions, collision footprint and swatch, then writes custom properties onto the root object. Save the `.blend` file with Blender's normal **File → Save**.
-5. Use **File → Export → glTF 2.0** and choose **glTF Binary (.glb)**. Under **Include**, enable **Custom Properties**. Export the root *and* its mesh descendants (for example, export the containing collection). If the root is omitted, its metadata is omitted too.
-
-The panel's **Load Saved Metadata** button reads the root's Domus custom properties back into its controls. This is useful after importing a GLB that already contains them.
-
-## Orientation and placement
-
-The product's local **X** is width, local **Y** is depth, and local **Z** is height. The front faces Blender **−Y**, which becomes Domus **+Z** after glTF axis conversion. The add-on measures mesh descendants in the root's axes, including their transforms and modifiers. The saved bounds centre and base height describe an off-centre or elevated root origin; a future Domus model loader can use these to align the geometry with its placement footprint. Clearances and collision offsets use the same local axes and metres.
-
-Choose a stable, unique lowercase product ID such as `oak-coffee-table`. Categories currently match Domus's catalogue: Seating, Tables, Storage, and Decor. Price label is optional; it can be filled later. Tags and overlap rules match the semantic placement fields in `src/core/types.ts`.
-
-## Saved fields
-
-All properties are stored on the root object and, with **Custom Properties** enabled, appear as glTF node `extras`. `domus_schema_version` is currently `1`. Other keys have the `domus_` prefix:
-
-| Keys | Meaning |
-| --- | --- |
-| `product_id`, `name`, `category`, `price_label`, `swatch` | Catalogue identity and display fields. Swatch is `#RRGGBB`. |
-| `width_m`, `depth_m`, `height_m` | Product dimensions in metres. |
-| `bounds_center_x_m`, `bounds_center_y_m`, `bounds_min_z_m` | Geometry position relative to the root origin. |
-| `collision`, `collision_width_m`, `collision_depth_m`, `collision_offset_x_m`, `collision_offset_y_m` | Collision footprint and local offset. |
-| `clearance_front_m`, `clearance_back_m`, `clearance_sides_m`, `wall_affinity` | Placement rules. |
-| `interaction_tags`, `allow_overlap_with`, `can_rest_on` | Comma-separated semantic tags. |
-
-The add-on prepares GLBs with the metadata Domus needs. The current Domus catalogue still uses procedural placeholder furniture; loading external product GLBs into the app is a separate integration step.
-
-## Blender integration check
-
-From the repository root, with Blender on your path:
+To rebuild the ZIP after editing its sources:
 
 ```bash
-blender -b --factory-startup --python blender_addon/test_domus_metadata.py
+python blender_addon/package_addon.py
 ```
 
-The check builds a small model, verifies required fields and geometry, exports it through Blender's built-in glTF exporter, and checks the GLB node extras.
+## Prepare a product collection
+
+1. Put all parts of one product in a collection. Child collections are included,
+   so a bed can contain separate frame, mattress, pillow and hardware collections.
+   Keep reference planes and unrelated objects outside it.
+2. Open **3D View → Sidebar → Domus**, choose **Collection**, and select the
+   **Product collection**. **Use Active Collection** uses the active Outliner
+   collection. **Object hierarchy** remains available for a root and its children.
+3. Enter a **Name** and **Category**. Under **Model External Dimensions**, choose **Use Measured Size** to fill
+   the display size from the complete product, or enter its manufacturer size
+   directly. Width, depth and height are required, positive values **in metres**:
+   enter `0.995`, not `995`, for a 995 mm width.
+4. Set **Prefer walls**, **Blocks other furniture**, and front/back/side use-space
+   clearance if needed. **Price** is optional. Hover a field or button for an
+   explanation, including measurement axes and clearance directions.
+5. Choose **Save Metadata**, then save the `.blend` file. Every save remeasures
+   evaluated geometry, including nested parts, transforms and modifiers. It
+   preserves the display size you entered.
+6. Choose **Export Product GLB** and save the file. This saves metadata again,
+   uses Blender's built-in glTF exporter in GLB mode with **Custom Properties**
+   enabled, exporting only the chosen product with evaluated
+   modifiers, and converts the scene unit scale to metres. All parts must be
+   visible and selectable. The source assembly, transforms and previous selection are preserved.
+
+Blender collections do not directly export their custom properties to glTF.
+The add-on creates a small **Domus Metadata** Empty inside the chosen collection
+to carry them; it does not reparent the product parts. The export includes this
+Empty automatically. Selection is prepared internally by **Export Product GLB**;
+there is no separate Select Product for Export button.
+
+## Display size and actual size
+
+The size entered in the panel is catalogue/display information. It appears on
+the furniture card and in the selection panel. It never stretches a model or
+changes its collision footprint.
+
+The actual size is measured internally on every save and measured again from
+the exported GLB on import. Placement, collision, 2D footprints, 3D measurements
+and AI layout checks use the actual geometry. Domus centres it horizontally and
+places its lowest point on the floor. Blender X is width, Y is depth and Z is
+height; a product's front faces Blender −Y, which becomes Domus +Z.
+
+There are no Product ID, manual collider, Interaction or Swatch inputs. IDs
+belong to the import server. Collision bounds come from geometry. The former
+Interaction controls described advanced tag-based overlap exceptions, which
+remain internal to procedural catalogue products. Swatch meant a catalogue
+preview colour; imported products now derive it from their materials. Neither
+field needs to be entered in Blender.
+
+Categories come from the shared
+[`catalogue_schema.json`](../blender_addon/catalogue_schema.json): Hospital Bed,
+Homecare Bed, Children Bed, Baby Crib, Spinal Therapy Bed, Examination Table,
+Operating Table, Gynaecological Table, Bedside Table, Medical Chair, IV Stand,
+Stretcher, Patient Trolley, Medical trolley, Decoration and Others. Bedside Table
+appears once. These same categories are used by the project catalogue. Older
+broad categories migrate to Others, except Decor/Rugs, which migrate to Decoration.
+Choose a more specific category when re-exporting an old model. Rebuild/reinstall
+the add-on ZIP after changing the shared schema.
+
+## Automatic import into Domus
+
+Copy the exported `.glb` into **`public/models/` in the repository root**.
+Subfolders are supported. Keep one product per GLB. With **`npm run dev`**
+running, additions, edits, renames and removals update the catalogue automatically
+without editing source code or reloading the current room. **`npm run preview`**
+also scans the source folder through its catalogue API and updates open pages
+every two seconds. Models load when placed; duplicates share their loaded asset.
+
+For a missed change, run **`npm run models:rescan`** in a second terminal.
+This forces a fresh read of every GLB, including files whose size and timestamp
+have not changed. It uses the running server's import queue and ID registry and
+updates open planners. Pass a different server URL when needed, for example
+**`npm run models:rescan -- http://localhost:4173`** for preview. The command reports
+unavailable models and import issues and exits with an error if any file fails.
+
+The server assigns a UUID to each new file and stores it in the generated
+**`model-catalogue.json`** at the project root. Copies receive different IDs,
+including copies with identical old Blender IDs. Updating the same file keeps
+its ID while it remains at the same path. A renamed file is a new import with a
+new ID. Keep this registry with
+project backups and source control so saved rooms continue to resolve products.
+
+Removed files are cleaned from the catalogue and registry, including their
+aliases and metadata. Open planners remove their placed/unplaced instances,
+release loaded assets and remove their references from undo/redo history. Saved
+rooms discard missing-model instances when opened; their room geometry and
+remaining furniture are preserved. Stored room files are updated when saved.
+Only retired UUIDs remain in the registry, preventing those IDs from being used
+again. Re-adding the same file gets a new ID and does not restore old placements.
+Invalid or incomplete files that still exist show an import issue and retain
+their identity, allowing a corrected export to replace them.
+
+Plain GLBs without metadata also import automatically, using the filename as
+their name, **Others** as the category, and measured geometry for display size.
+Older v1 metadata is supported, but its manually entered dimensions and collider
+values are not trusted. The original C8c file still contains its extra reference
+plane; it is preserved until re-exported with only the product collection.
+
+A static deployment includes the catalogue/models present at build time. It
+must be rebuilt to include changes; live scanning requires the Vite dev or
+preview server. Edit `public/models/`, not the generated `dist/` folder.
+
+## Metadata schema and checks
+
+Schema v2 stores custom properties on exactly one exported metadata carrier:
+
+| Fields | Meaning |
+| --- | --- |
+| `domus_name`, `domus_category`, `domus_price_label` | Display fields; price is optional. |
+| `domus_display_width_m`, `domus_display_depth_m`, `domus_display_height_m` | Required catalogue size in metres. |
+| `domus_width_m`, `domus_depth_m`, `domus_height_m` | Actual measured geometry size. |
+| `domus_collision_width_m`, `domus_collision_depth_m`, offsets and bounds fields | Automatically generated internal placement data. |
+| `domus_collision`, `domus_wall_affinity`, clearance fields | Simple placement preferences. |
+
+Run the Blender integration check with:
+
+```bash
+blender -b --factory-startup --python-exit-code 1 --python blender_addon/test_domus_metadata.py
+```
+
+The check covers multipart and nested collections, required fields, display-size
+preservation, automatic geometry/colliders, modifiers, selected-only exports,
+non-default scene units, and restoration of source transforms. It has been run
+successfully with Blender 4.5 and 5.2.

@@ -1,6 +1,7 @@
 import { FEATURES } from './config/features';
-import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from 'react';
-import { PRODUCT_LIST, PRODUCTS } from './core/products';
+import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ChangeEvent } from 'react';
+import { PRODUCT_LIST, PRODUCTS, displayProductDimensions, getProductCatalogueIssues, getProductCatalogueVersion, subscribeProductCatalogue } from './core/products';
+import { PRODUCT_CATEGORIES } from './core/productSchema';
 import { clearanceIssues } from './core/placement';
 import { polygonArea } from './core/roomGeometry';
 import { architectureRoom } from './core/spaces';
@@ -18,7 +19,7 @@ import { EditingSpaceSelector } from './EditingSpaceSelector';
 const Viewport3D = lazy(() => import('./Viewport3D').then((module) => ({ default: module.Viewport3D })));
 const AIExperimentPanel = lazy(() => import('./ai/AIExperimentPanel').then((module) => ({ default: module.AIExperimentPanel })));
 
-const CATEGORIES: Array<'All' | ProductCategory> = ['All', 'Seating', 'Tables', 'Storage', 'Decor'];
+const CATEGORIES: Array<'All' | ProductCategory> = ['All', ...PRODUCT_CATEGORIES];
 const VIEW_PRESETS: Array<{ id: PlanCameraView; label: string }> = [
   { id: 'free', label: 'Free cam' },
   { id: 'top', label: 'Top' },
@@ -28,6 +29,7 @@ const VIEW_PRESETS: Array<{ id: PlanCameraView; label: string }> = [
   { id: 'left', label: 'Left' }
 ];
 function ProductGlyph({ productId }: { productId: string }) {
+  if (PRODUCTS[productId as keyof typeof PRODUCTS]?.model) return <Icon name="cube" className="product-model-glyph" />;
   return <div className={`product-glyph glyph-${productId}`} aria-hidden="true"><span /><i /></div>;
 }
 
@@ -45,6 +47,7 @@ function magnetizeRightAngles(degrees: number) {
 }
 
 function SelectionPanel() {
+  useSyncExternalStore(subscribeProductCatalogue, getProductCatalogueVersion, getProductCatalogueVersion);
   const selectedId = usePlannerStore((s) => s.selectedId);
   const measurementSystem = usePlannerStore((s) => s.measurementSystem);
   const objects = usePlannerStore((s) => s.objects);
@@ -60,6 +63,7 @@ function SelectionPanel() {
   const selected = objects.find((o) => o.id === selectedId);
   if (!selected) return null;
   const product = PRODUCTS[selected.productId];
+  const displaySize = displayProductDimensions(product);
   const issues = clearanceIssues(selected, architectureRoom(getSnapshot()), objects.filter((o) => o.id !== selected.id));
   const degrees = angleDegrees(selected.rotationY);
 
@@ -75,9 +79,9 @@ function SelectionPanel() {
         <strong>{product.priceLabel}</strong>
       </div>
       <div className="dimension-summary">
-        <span>{formatLength(product.width, measurementSystem)} W</span>
-        <span>{formatLength(product.depth, measurementSystem)} D</span>
-        <span>{formatLength(product.height, measurementSystem)} H</span>
+        <span>{formatLength(displaySize.width, measurementSystem)} W</span>
+        <span>{formatLength(displaySize.depth, measurementSystem)} D</span>
+        <span>{formatLength(displaySize.height, measurementSystem)} H</span>
       </div>
 
       <div className="rotation-control">
@@ -309,6 +313,8 @@ function InteractionStatus() {
 }
 
 const ProductCatalog = memo(function ProductCatalog() {
+  const catalogueVersion = useSyncExternalStore(subscribeProductCatalogue, getProductCatalogueVersion, getProductCatalogueVersion);
+  const catalogueIssues = getProductCatalogueIssues();
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState<'All' | ProductCategory>('All');
   const objects = usePlannerStore((s) => s.objects);
@@ -327,7 +333,7 @@ const ProductCatalog = memo(function ProductCatalog() {
     const matchesCategory = category === 'All' || p.category === category;
     const matchesSearch = p.name.toLowerCase().includes(search.trim().toLowerCase());
     return matchesCategory && matchesSearch;
-  }), [category, search]);
+  }), [category, search, catalogueVersion]);
 
   return (
     <aside className="catalog-panel">
@@ -347,6 +353,7 @@ const ProductCatalog = memo(function ProductCatalog() {
                 <div className="used-furniture-details">
                   <strong>{PRODUCTS[item.productId].name}</strong>
                   {!item.placed && <small>Not placed</small>}
+                  {PRODUCTS[item.productId].available === false && <small>Model file unavailable</small>}
                 </div>
                 <button type="button" className="used-furniture-action" onClick={() => item.placed ? select(item.id) : placeUnplacedObject(item.id)}>
                   {item.placed ? 'Select' : 'Place'}
@@ -363,20 +370,26 @@ const ProductCatalog = memo(function ProductCatalog() {
         <span><Icon name="search" /></span>
         <input value={search} onChange={(e: ChangeEvent<HTMLInputElement>) => setSearch(e.target.value)} placeholder="Search furniture" />
       </label>
-      <div className="category-tabs" role="tablist" aria-label="Product categories">
-        {CATEGORIES.map((item) => <button key={item} className={category === item ? 'active' : ''} onClick={() => setCategory(item)}>{item}</button>)}
-      </div>
+      <label className="catalog-category">Category
+        <select aria-label="Product category" value={category} onChange={(event) => setCategory(event.target.value)}>
+          {CATEGORIES.map((item) => <option key={item} value={item}>{item}</option>)}
+        </select>
+      </label>
+      {catalogueIssues.length > 0 && <div className="catalog-import-issues" role="alert">
+        <strong>Some models could not be imported</strong>
+        {catalogueIssues.map((issue) => <p key={issue.file}>{issue.file}: {issue.message}</p>)}
+      </div>}
       <div className="product-grid">
         {filtered.map((product) => (
           <button className="product-card" key={product.id} type="button" onClick={() => addObject(product.id)}>
             <div className="product-visual"><ProductGlyph productId={product.id} /></div>
             <strong>{product.name}</strong>
-            <small>{Math.round(product.width * 100)} × {Math.round(product.depth * 100)} cm</small>
+            <small>{Math.round(displayProductDimensions(product).width * 100)} × {Math.round(displayProductDimensions(product).depth * 100)} cm</small>
             <span>{product.priceLabel}</span>
           </button>
         ))}
       </div>
-      {!filtered.length && <p className="empty-state">No placeholder products match that search.</p>}
+      {!filtered.length && <p className="empty-state">No products match that search.</p>}
     </aside>
   );
 });
@@ -459,9 +472,9 @@ export function PlanRoom({ onExportReady }: { onExportReady?: (handler: (() => P
                 title="Room finishes"
                 aria-expanded={showFinishes}
               ><Icon name="palette" /></button>
+              <button className="designer-reset-view" type="button" onClick={() => setResetViewRequest((value) => value + 1)}><Icon name="rotateLeft" />Reset view</button>
             </div>
           </div>
-          <button className="floating-reset-view" type="button" onClick={() => setResetViewRequest((value) => value + 1)}><Icon name="rotateLeft" />Reset view</button>
 
           <Suspense fallback={<div className="viewport-loading">Loading 3D room…</div>}>
             <Viewport3D furniture interactive sunRays={sunRaysEnabled} view={planView} resetViewRequest={resetViewRequest} onExportReady={onExportReady} />

@@ -29,6 +29,13 @@ export class SnapshotHistory {
 
   clear() { this.past = []; this.future = []; }
 
+  filterProducts(known: (productId: string) => boolean) {
+    for (const snapshot of [...this.past, ...this.future]) {
+      snapshot.objects = snapshot.objects.filter((object) => known(object.productId));
+      snapshot.unplacedObjects = snapshot.unplacedObjects.filter((object) => known(object.productId));
+    }
+  }
+
   get canUndo() { return this.past.length > 0; }
   get canRedo() { return this.future.length > 0; }
 }

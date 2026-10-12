@@ -48,12 +48,12 @@ export default function App() {
         </div>
 
         <nav className="mode-stepper" aria-label="Planning workflow">
-          <button type="button" className={mode === 'build' ? 'active' : ''} onClick={() => setMode('build')}>
+          <button type="button" className={mode === 'build' ? 'active' : ''} aria-current={mode === 'build' ? 'step' : undefined} onClick={() => setMode('build')}>
             <span className="step-number">1</span>
             <div><strong>Build room</strong><small>Shape & architecture</small></div>
           </button>
           <span className="step-line" aria-hidden="true" />
-          <button type="button" className={mode === 'plan' ? 'active' : ''} onClick={() => setMode('plan')}>
+          <button type="button" className={mode === 'plan' ? 'active' : ''} aria-current={mode === 'plan' ? 'step' : undefined} onClick={() => setMode('plan')}>
             <span className="step-number">2</span>
             <div><strong>Plan room</strong><small>Products & layout</small></div>
           </button>

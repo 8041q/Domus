@@ -1,7 +1,7 @@
 import { FEATURES } from './config/features';
 import { activeArchitecture } from './core/activeArchitecture';
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { PRODUCTS, rotatedFootprint } from './core/products';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent } from 'react';
+import { PRODUCTS, rotatedFootprint, getProductCatalogueVersion, subscribeProductCatalogue } from './core/products';
 import { floorFinishDefinition } from './core/roomFinishes';
 import { DOOR_LEAF_COLOR } from './core/architecturalStyles';
 import { architectureRoom, closestBoundaryAnchor, deriveSpaces, getPhysicalWalls, interiorDoorHasThreshold, resolveDividers, spaceAtPoint } from './core/spaces';
@@ -178,6 +178,7 @@ function pointSegmentDistance(px: number, py: number, x1: number, y1: number, x2
 }
 
 export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpose: Purpose; dividerTool?: 'wall' | 'open' | null; onDividerAdded?: () => void }) {
+  const catalogueVersion = useSyncExternalStore(subscribeProductCatalogue, getProductCatalogueVersion, getProductCatalogueVersion);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const room = usePlannerStore((s) => s.room);
   const measurementSystem = usePlannerStore((s) => s.measurementSystem);
@@ -978,7 +979,7 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
         ctx.restore();
       }
     }
-  }, [activeSnap, drag, hover, measurementSystem, objects, openings, dividers, spaces, purpose, resizeTick, room, selected, selectedId, selectedOpeningId, selectedWallId, selectedDividerId, selectedSpaceId, showClearance, drawStart, drawHover, dividerTool]);
+  }, [activeSnap, drag, hover, measurementSystem, objects, openings, dividers, spaces, purpose, resizeTick, room, selected, selectedId, selectedOpeningId, selectedWallId, selectedDividerId, selectedSpaceId, showClearance, drawStart, drawHover, dividerTool, catalogueVersion]);
 
   const hitWallLabel = (px: number, py: number) => {
     for (const [wallId, rect] of wallLabelRectsRef.current) {

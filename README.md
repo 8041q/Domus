@@ -24,7 +24,7 @@ runs with Vite during local development and preview.
 
 ### Plan Room
 
-- Place, move, rotate, duplicate, and remove procedural furniture.
+- Place, move, rotate, duplicate, and remove furniture, including registered GLB models.
 - Use wall, object, and room-centre snapping with deterministic collision and
   clearance checks.
 - Switch between Free cam, Top, Front, Right, Back, and Left views, with interior walls up or down.
@@ -142,11 +142,30 @@ furniture are grouped by semantic category. Cameras, selection outlines,
 measurements, and other editing helpers are excluded.
 
 To prepare your own furniture models, use the [Blender product metadata add-on](docs/BLENDER_METADATA.md).
-It saves catalogue and placement fields on a model root for Blender's built-in GLB export.
+It works with complete product collections, saves measured geometry separately
+from the size shown in the catalogue, and exports GLBs in metres. Copy a GLB into
+`public/models/` (subfolders work); the dev/preview server imports it automatically
+and assigns a persistent unique ID. Folder changes update the catalogue without
+source edits. Keep the generated `model-catalogue.json` with project backups.
+Removing a GLB cleans its catalogue/registry entry and instances in open rooms.
+Re-adding or renaming it assigns a new ID; retired IDs are never reused. The
+Blender add-on and project share the hospital product categories.
+
+If a folder change is missed, run this in another terminal while Domus is running:
+
+```bash
+npm run models:rescan
+```
+
+It rereads every GLB, preserves existing IDs, reports import problems, and updates
+open planners. For preview or a different port, pass the server URL:
+`npm run models:rescan -- http://localhost:4173`.
 
 ## Current limitations
 
-- The furniture catalogue uses procedural placeholder models and sample prices.
+- Most catalogue furniture uses procedural placeholder models and sample prices.
+  GLBs in `public/models/` are imported automatically. Static deployments include
+  the models present at build time and require a rebuild for later folder changes.
 - Saved rooms are local to one browser origin; portable room files are the backup and transfer mechanism.
 - The renderer requires a browser with WebGL support.
 - AI assistance is experimental, furniture-only, non-streaming, and intended

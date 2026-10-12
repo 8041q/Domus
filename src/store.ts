@@ -2,7 +2,7 @@ import { FEATURES } from './config/features';
 import { createHotStore } from './core/hotStore';
 import type { AiApplyResult, AiProposal } from './ai/types';
 import { applyAiProposal as executeAiProposal, snapshotRevision } from './core/aiProposal';
-import { PRODUCTS, rotatedFootprint } from './core/products';
+import { PRODUCTS, rotatedFootprint, subscribeProductCatalogue } from './core/products';
 import { isPlacementValid, objectsOverlap, overlapsInteriorWall, resolvePlacement, resolveRotationPlacement } from './core/placement';
 import { SnapshotHistory } from './core/history';
 import { architectureRoom, deriveSpaces, resolveDividers, spaceAtPoint, validateDividers, validateInteriorOpenings } from './core/spaces';
@@ -275,14 +275,14 @@ function normalizeSnapshot(snapshot: Omit<PlannerSnapshot, 'dividers' | 'spaces'
   const wallIds = new Set([...getRoomWalls(room).map((wall) => wall.id), ...dividers.filter((divider) => divider.kind === 'wall').map((divider) => divider.id)]);
   const openings = snapshot.openings.filter((opening) => (wallIds.has(opening.wallId) || (!opening.wallId && (opening as RoomOpening & { wall?: RoomWall }).wall)) && (opening.type !== 'window' || !opening.wallId?.startsWith('divider-')))
     .map((o) => normalizeOpening(o as RoomOpening & { wall?: RoomWall }, room, dividers));
-  const objects = snapshot.objects.map((o) => {
+  const objects = snapshot.objects.filter((object) => Object.hasOwn(PRODUCTS, object.productId)).map((o) => {
     const product = PRODUCTS[o.productId];
     if (!product) return o;
     const size = rotatedFootprint(product, o.rotationY);
     const nearest = findNearestValidPosition(room, size.width, size.depth, { x: o.x, z: o.z });
     return nearest ? { ...o, ...nearest } : o;
   });
-  return { room, openings, dividers, spaces, objects, unplacedObjects: snapshot.unplacedObjects };
+  return { room, openings, dividers, spaces, objects, unplacedObjects: snapshot.unplacedObjects.filter((object) => Object.hasOwn(PRODUCTS, object.productId)) };
 }
 
 function validInteriorArchitecture(snapshot: PlannerSnapshot) {
@@ -354,13 +354,14 @@ export function parseProjectSnapshot(value: unknown): PlannerSnapshot | null {
     const migratedObjects = parsed.objects
       .map((object) => {
         const legacyId = String(object.productId);
-        const productId = (legacyId === 'table' ? 'dining-table' : legacyId) as ProductKind;
+        const alias = legacyId === 'table' ? 'dining-table' : legacyId;
+        const productId = Object.hasOwn(PRODUCTS, alias) ? PRODUCTS[alias].id : alias;
         return { ...object, productId };
       })
-      .filter((object) => object.productId in PRODUCTS);
+      .filter((object) => Object.hasOwn(PRODUCTS, object.productId));
     const unplacedObjects = Array.isArray(parsed.unplacedObjects)
-      ? parsed.unplacedObjects.filter((object): object is UnplacedObject =>
-        typeof object?.id === 'string' && typeof object?.productId === 'string' && object.productId in PRODUCTS
+        ? parsed.unplacedObjects.map((object) => ({ ...object, productId: Object.hasOwn(PRODUCTS, object?.productId) ? PRODUCTS[object.productId].id : object?.productId })).filter((object): object is UnplacedObject =>
+        typeof object?.id === 'string' && typeof object?.productId === 'string' && Object.hasOwn(PRODUCTS, object.productId)
           && !migratedObjects.some((placed) => placed.id === object.id))
       : [];
     const room = ensureRoom(parsed.room);
@@ -877,11 +878,28 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
   }
 }), import.meta.hot?.data.store);
 
+// Remove deleted imports before catalogue subscribers redraw. Keep unrelated
+// architecture/furniture history, but never resurrect a retired product on undo.
+const pruneDeletedProducts = () => {
+  const known = (id: string) => Object.hasOwn(PRODUCTS, id);
+  history.filterProducts(known);
+  const state = usePlannerStore.getState();
+  const objects = state.objects.filter((object) => known(object.productId));
+  const unplacedObjects = state.unplacedObjects.filter((object) => known(object.productId));
+  if (objects.length === state.objects.length && unplacedObjects.length === state.unplacedObjects.length) return;
+  usePlannerStore.setState({ objects, unplacedObjects,
+    selectedId: objects.some((object) => object.id === state.selectedId) ? state.selectedId : null,
+    activeSnap: { kind: 'none' }, collisionId: null, collisionPush: false });
+};
+pruneDeletedProducts();
+const unsubscribeCatalogue = subscribeProductCatalogue(pruneDeletedProducts, true);
+
 // Self-accept this data module so Vite does not invalidate lazy view boundaries
 // and fall back to a page reload. All views retain the hook above; refreshed
 // actions notify their existing subscriptions.
 import.meta.hot?.accept();
 import.meta.hot?.dispose((data) => {
+  unsubscribeCatalogue();
   data.store = usePlannerStore;
   data.history = history;
 });

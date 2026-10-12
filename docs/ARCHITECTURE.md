@@ -15,6 +15,22 @@ There is no standalone production server, database, authentication layer,
 physics engine, runtime-validation library, or provider SDK. The AI gateway uses
 native `fetch` and fixed provider endpoints.
 
+The model catalogue plugin scans `public/models/` and its subfolders. It reads
+GLB metadata and transformed geometry, assigns persistent UUIDs in
+`model-catalogue.json`, and exposes the result as `virtual:domus-models` for builds
+and `/api/model-catalogue` for dev/preview. Development file-watcher events update
+the shared catalogue store without replacing room state; preview refreshes via
+the API. `npm run models:rescan -- [server-url]` calls
+`POST /api/model-catalogue/rescan`, bypasses file timestamp caching, and publishes
+the result through the same serialized importer. Missing files lose their
+definitions and aliases; only retired UUIDs remain to prevent reuse. Client
+cleanup runs before view subscribers: deleted-model instances are removed from
+live rooms and history, and renderer asset caches are released. Saved-room
+imports filter missing references. A re-added or renamed file receives a new ID.
+Physical dimensions
+come from geometry; optional display dimensions are confined to catalogue and
+selection UI. The Blender add-on and server share `blender_addon/catalogue_schema.json`.
+
 ```text
 React workspaces
       │ commands and selectors

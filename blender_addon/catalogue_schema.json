@@ -1,0 +1,23 @@
+{
+  "version": 2,
+  "categories": ["Hospital Bed", "Homecare Bed", "Children Bed", "Baby Crib", "Spinal Therapy Bed", "Examination Table", "Operating Table", "Gynaecological Table", "Bedside Table", "Medical Chair", "IV Stand", "Stretcher", "Patient Trolley", "Medical trolley", "Decoration", "Others"],
+  "legacyCategoryAliases": {"Seating": "Others", "Tables": "Others", "Beds": "Others", "Storage": "Others", "Lighting": "Others", "Rugs": "Decoration", "Decor": "Decoration", "Kitchen": "Others", "Appliances": "Others", "Bathroom": "Others", "Office": "Others", "Outdoor": "Others", "Medical": "Others", "Other": "Others"},
+  "categoryDescriptions": {
+    "Hospital Bed": "Beds for patients receiving hospital care",
+    "Homecare Bed": "Beds for nursing or care at home",
+    "Children Bed": "Paediatric beds for children",
+    "Baby Crib": "Cribs and bassinets for babies",
+    "Spinal Therapy Bed": "Beds for spinal treatment and therapy",
+    "Examination Table": "Tables for medical examinations",
+    "Operating Table": "Tables for surgical procedures",
+    "Gynaecological Table": "Tables for gynaecological examinations and procedures",
+    "Bedside Table": "Tables and cabinets placed beside patient beds",
+    "Medical Chair": "Chairs for medical treatment, examinations or patient care",
+    "IV Stand": "Stands supporting intravenous fluids and equipment",
+    "Stretcher": "Equipment for carrying and transferring patients",
+    "Patient Trolley": "Wheeled trolleys for transporting patients",
+    "Medical trolley": "Trolleys carrying medical supplies or equipment",
+    "Decoration": "Decorative objects and room accessories",
+    "Others": "Products that do not belong to another category"
+  }
+}

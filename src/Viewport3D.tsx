@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { PlannerScene } from './renderer/PlannerScene';
 import type { PlanCameraView } from './core/types';
 import { usePlannerStore } from './store';
+import { subscribeProductCatalogue } from './core/products';
 
 export function Viewport3D({
   furniture = true,
@@ -23,6 +24,7 @@ export function Viewport3D({
 }) {
   const [failure, setFailure] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const [modelStatus, setModelStatus] = useState<{ loading: boolean; error: string | null }>({ loading: false, error: null });
   const ref = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<PlannerScene | null>(null);
   const internallyChangedViewRef = useRef<PlanCameraView | null>(null);
@@ -51,12 +53,14 @@ export function Viewport3D({
     let scene: PlannerScene | null = null;
     let syncFrame = 0;
     let unsubscribe = () => {};
+    let unsubscribeCatalogue = () => {};
     let stopped = false;
     const fail = (error: unknown) => {
       if (stopped) return;
       stopped = true;
       console.error('Could not render 3D view', error);
       unsubscribe();
+      unsubscribeCatalogue();
       if (syncFrame) cancelAnimationFrame(syncFrame);
       scene?.dispose();
       sceneRef.current = null;
@@ -110,9 +114,14 @@ export function Viewport3D({
         interactiveFurniture: interactive,
         interactiveArchitecture: architectureInteractive,
         sunRays,
+        onModelStatus: setModelStatus,
         onError: fail
       });
       sceneRef.current = scene;
+      unsubscribeCatalogue = subscribeProductCatalogue(() => {
+        if (stopped) return;
+        try { scene?.refreshProductCatalogue(); } catch (error) { fail(error); }
+      });
       if (view) scene.setCameraView(view);
       unsubscribe = usePlannerStore.subscribe((state, previous) => {
         const sceneStateChanged = state.room !== previous.room
@@ -140,6 +149,7 @@ export function Viewport3D({
     return () => {
       stopped = true;
       unsubscribe();
+      unsubscribeCatalogue();
       if (syncFrame) cancelAnimationFrame(syncFrame);
       scene?.dispose();
       sceneRef.current = null;
@@ -168,6 +178,10 @@ export function Viewport3D({
   return (
     <div className="viewport-stage">
       <div className="viewport" ref={ref} hidden={failure} />
+      {!failure && (modelStatus.loading || modelStatus.error) && <div className="model-load-status" role={modelStatus.error ? 'alert' : 'status'}>
+        {modelStatus.error ? <>{modelStatus.error} <button type="button" onClick={() => sceneRef.current?.retryProductModels()}>Retry model</button></>
+          : 'Loading furniture model…'}
+      </div>}
       {failure && <div className="view-error" role="alert">
         <h2>Could not open 3D</h2>
         <p>Your layout is still available. Try again or continue in 2D.</p>

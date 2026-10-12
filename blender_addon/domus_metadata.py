@@ -1,216 +1,179 @@
-"""Domus product metadata editor for Blender. Export with Blender's glTF exporter."""
+"""Collection-based product metadata for Blender's built-in GLB exporter."""
 
 bl_info = {
-    "name": "Domus Product Metadata",
-    "author": "Domus",
-    "version": (0, 1, 0),
-    "blender": (4, 2, 0),
-    "location": "View3D > Sidebar > Domus",
-    "description": "Prepare product metadata for Blender's built-in glTF/GLB export",
-    "category": "Object",
+    "name": "Domus Product Metadata", "author": "Domus", "version": (0, 3, 0),
+    "blender": (4, 2, 0), "location": "View3D > Sidebar > Domus",
+    "description": "Prepare a complete product collection for the Domus catalogue", "category": "Object",
 }
 
-import re
-import unicodedata
+import json
+import math
+from pathlib import Path
 
 import bpy
+import numpy as np
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, PointerProperty, StringProperty
 from bpy.types import Operator, Panel, PropertyGroup
-from mathutils import Vector
+from bpy_extras.io_utils import ExportHelper
+
+SCHEMA = json.loads(Path(__file__).with_name("catalogue_schema.json").read_text(encoding="utf-8"))
+SCHEMA_VERSION = SCHEMA["version"]
+CATEGORIES = [("UNSET", "Choose category", "Required: choose the group used to find this model in Domus")] + [(name, name, SCHEMA["categoryDescriptions"][name]) for name in SCHEMA["categories"]]
+DISPLAY_KEYS = {"width": "domus_display_width_m", "depth": "domus_display_depth_m", "height": "domus_display_height_m"}
+EDITABLE_KEYS = {"name": "domus_name", "category": "domus_category", "price_label": "domus_price_label",
+                 "collision": "domus_collision", "wall_affinity": "domus_wall_affinity",
+                 "clearance_front": "domus_clearance_front_m", "clearance_back": "domus_clearance_back_m", "clearance_sides": "domus_clearance_sides_m"}
+RETIRED_KEYS = ("domus_product_id", "domus_interaction_tags", "domus_allow_overlap_with", "domus_can_rest_on", "domus_swatch")
+GEOMETRY_TYPES = {"MESH", "CURVE", "SURFACE", "FONT", "META"}
 
 
-SCHEMA_VERSION = 1
-KEYS = {
-    "product_id": "domus_product_id",
-    "name": "domus_name",
-    "category": "domus_category",
-    "width": "domus_width_m",
-    "depth": "domus_depth_m",
-    "height": "domus_height_m",
-    "bounds_center_x": "domus_bounds_center_x_m",
-    "bounds_center_y": "domus_bounds_center_y_m",
-    "bounds_min_z": "domus_bounds_min_z_m",
-    "collision_width": "domus_collision_width_m",
-    "collision_depth": "domus_collision_depth_m",
-    "collision_offset_x": "domus_collision_offset_x_m",
-    "collision_offset_y": "domus_collision_offset_y_m",
-    "clearance_front": "domus_clearance_front_m",
-    "clearance_back": "domus_clearance_back_m",
-    "clearance_sides": "domus_clearance_sides_m",
-    "wall_affinity": "domus_wall_affinity",
-    "collision": "domus_collision",
-    "price_label": "domus_price_label",
-    "swatch": "domus_swatch",
-    "tags": "domus_interaction_tags",
-    "allow_overlap_with": "domus_allow_overlap_with",
-    "can_rest_on": "domus_can_rest_on",
-}
-
-CATEGORIES = [("UNSET", "Choose category", "Required for the Domus catalogue"),
-              ("Seating", "Seating", ""), ("Tables", "Tables", ""),
-              ("Storage", "Storage", ""), ("Decor", "Decor", "")]
-TAGS = [
-    ("floor-covering", "Floor covering", "Rugs and similar floor items"),
-    ("support-surface", "Support surface", "Can support future surface items"),
-    ("tuckable-table", "Tuckable table", "Allows compatible seating to overlap"),
-    ("tuckable-seating", "Tuckable seating", "Can tuck under a compatible table"),
-    ("surface-item", "Surface item", "Decor that can rest on a surface"),
-]
-TAG_IDS = tuple(item[0] for item in TAGS)
+def product_target(context):
+    source = context.scene.domus_product_source
+    return source.collection if source.mode == "COLLECTION" else source.object or context.active_object
 
 
-def slugify(value):
-    ascii_name = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
-    return re.sub(r"^-|-$", "", re.sub(r"[^a-z0-9]+", "-", ascii_name.lower()))
-
-
-def model_meshes(root):
-    stack = [root]
+def product_objects(target):
+    if isinstance(target, bpy.types.Collection):
+        return list(target.all_objects)
+    objects, stack = [], [target]
     while stack:
         obj = stack.pop()
-        if obj.type == "MESH":
-            yield obj
+        objects.append(obj)
         stack.extend(obj.children)
+    return objects
 
 
-def measured_bounds(context, root):
-    """Evaluated mesh bounds in root axes, using the scene's metres-per-unit."""
-    depsgraph = context.evaluated_depsgraph_get()
-    origin = root.matrix_world.translation
-    rotation_inverse = root.matrix_world.to_quaternion().inverted()
-    metres_per_unit = context.scene.unit_settings.scale_length or 1.0
-    points = []
-    for obj in model_meshes(root):
-        evaluated = obj.evaluated_get(depsgraph)
-        if not evaluated.data or not len(evaluated.data.vertices):
-            continue
-        for corner in evaluated.bound_box:
-            world = evaluated.matrix_world @ Vector(corner)
-            points.append((rotation_inverse @ (world - origin)) * metres_per_unit)
-    if not points:
+def metadata_root(target, create=False):
+    if not isinstance(target, bpy.types.Collection):
+        return target
+    root = target.domus_model_root
+    if root and root in list(target.all_objects):
+        return root
+    if not create:
         return None
-    lower = [min(point[axis] for point in points) for axis in range(3)]
-    upper = [max(point[axis] for point in points) for axis in range(3)]
+    # glTF does not export collection custom properties. A lightweight Empty
+    # carries them, with no reparenting or changes to the product's assembly.
+    root = bpy.data.objects.new("Domus Metadata - " + target.name, None)
+    root.empty_display_type = "PLAIN_AXES"
+    root.empty_display_size = 0.15
+    target.objects.link(root)
+    target.domus_model_root = root
+    return root
+
+
+def measured_bounds(context, target):
+    """True evaluated vertices, including transforms, modifiers and instances."""
+    graph = context.evaluated_depsgraph_get()
+    members = set(product_objects(target))
+    metres_per_unit = context.scene.unit_settings.scale_length or 1.0
+    lower, upper = [math.inf] * 3, [-math.inf] * 3
+    count = 0
+    for instance in graph.object_instances:
+        original = instance.object.original
+        # Instance parents belong to the product even when their source
+        # geometry lives in a separate reusable collection.
+        parent = instance.parent.original if instance.parent else None
+        if original not in members and parent not in members:
+            continue
+        evaluated = instance.object
+        if evaluated.type not in GEOMETRY_TYPES:
+            continue
+        mesh = evaluated.to_mesh()
+        if mesh is None:
+            continue
+        try:
+            if len(mesh.vertices):
+                # Blender bundles NumPy. Bulk reads avoid millions of Python
+                # vertex/matrix calls for detailed multipart products such as C8c.
+                coordinates = np.empty((len(mesh.vertices), 3), dtype=np.float32)
+                mesh.vertices.foreach_get("co", coordinates.ravel())
+                matrix = np.asarray(instance.matrix_world, dtype=np.float64)
+                points = (coordinates @ matrix[:3, :3].T + matrix[:3, 3]) * metres_per_unit
+                if not np.isfinite(points).all():
+                    return None
+                minimum, maximum = points.min(axis=0), points.max(axis=0)
+                for axis in range(3):
+                    lower[axis] = min(lower[axis], float(minimum[axis]))
+                    upper[axis] = max(upper[axis], float(maximum[axis]))
+                count += len(mesh.vertices)
+        finally:
+            evaluated.to_mesh_clear()
+    if not count or not all(math.isfinite(value) for value in lower + upper):
+        return None
     return lower, upper
-
-
-def material_swatch(root):
-    for obj in model_meshes(root):
-        for material in obj.data.materials:
-            if material is None:
-                continue
-            color = material.diffuse_color
-            if material.use_nodes and material.node_tree:
-                principled = next((node for node in material.node_tree.nodes
-                                   if node.type == "BSDF_PRINCIPLED"), None)
-                if principled:
-                    color = principled.inputs["Base Color"].default_value
-            # Blender's colours are linear; CSS swatches are sRGB.
-            def srgb(component):
-                component = max(0.0, min(1.0, component))
-                return component * 12.92 if component <= 0.0031308 else 1.055 * component ** (1 / 2.4) - 0.055
-            return "#" + "".join(f"{round(srgb(component) * 255):02x}" for component in color[:3])
-    return ""
-
-
-def fill_from_model(context, root, overwrite_geometry=False):
-    props = root.domus_metadata
-    if not props.product_id:
-        props.product_id = slugify(root.name)
-    if not props.name:
-        props.name = root.name
-    if not props.swatch:
-        props.swatch = material_swatch(root) or "#999999"
-    bounds = measured_bounds(context, root)
-    if bounds:
-        lower, upper = bounds
-        dimensions = [upper[index] - lower[index] for index in range(3)]
-        for field, value in zip(("width", "depth", "height"), dimensions):
-            if overwrite_geometry or getattr(props, field) <= 0:
-                setattr(props, field, value)
-        new_collider = props.collision_width <= 0 or props.collision_depth <= 0
-        if overwrite_geometry or props.collision_width <= 0:
-            props.collision_width = dimensions[0]
-        if overwrite_geometry or props.collision_depth <= 0:
-            props.collision_depth = dimensions[1]
-        props.bounds_center_x = (lower[0] + upper[0]) / 2
-        props.bounds_center_y = (lower[1] + upper[1]) / 2
-        props.bounds_min_z = lower[2]
-        if overwrite_geometry or new_collider:
-            props.collision_offset_x = props.bounds_center_x
-            props.collision_offset_y = props.bounds_center_y
-    return bounds
 
 
 def invalid_fields(props):
     missing = []
-    if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", props.product_id):
-        missing.append("Product ID (lowercase letters, digits and hyphens)")
     if not props.name.strip():
         missing.append("Name")
     if props.category == "UNSET":
         missing.append("Category")
-    for field in ("width", "depth", "height"):
-        if getattr(props, field) <= 0:
-            missing.append(field.title())
-    if props.collision and (props.collision_width <= 0 or props.collision_depth <= 0):
-        missing.append("Collision footprint")
-    if not re.fullmatch(r"#[0-9a-fA-F]{6}", props.swatch):
-        missing.append("Swatch (#RRGGBB)")
+    for field in DISPLAY_KEYS:
+        if not math.isfinite(getattr(props, field)) or getattr(props, field) <= 0:
+            missing.append(field.title() + " in metres")
     return missing
 
 
+def use_measured_size(context, target):
+    bounds = measured_bounds(context, target)
+    if bounds:
+        lower, upper = bounds
+        props = target.domus_metadata
+        if not props.name.strip():
+            props.name = target.name
+        for field, axis in (("width", 0), ("depth", 1), ("height", 2)):
+            setattr(props, field, max(upper[axis] - lower[axis], 0.001))
+    return bounds
+
+
 class DomusMetadata(PropertyGroup):
-    product_id: StringProperty(name="Product ID", description="Stable catalogue ID", default="")
-    name: StringProperty(name="Name", default="")
-    category: EnumProperty(name="Category", items=CATEGORIES, default="UNSET")
-    width: FloatProperty(name="Width", min=0, precision=4, default=0, description="Metres, along local X")
-    depth: FloatProperty(name="Depth", min=0, precision=4, default=0, description="Metres, along local Y")
-    height: FloatProperty(name="Height", min=0, precision=4, default=0, description="Metres, along local Z")
-    bounds_center_x: FloatProperty(name="Bounds centre X", precision=4)
-    bounds_center_y: FloatProperty(name="Bounds centre Y", precision=4)
-    bounds_min_z: FloatProperty(name="Bounds base Z", precision=4)
-    collision_width: FloatProperty(name="Collider width", min=0, precision=4)
-    collision_depth: FloatProperty(name="Collider depth", min=0, precision=4)
-    collision_offset_x: FloatProperty(name="Collider offset X", precision=4)
-    collision_offset_y: FloatProperty(name="Collider offset Y", precision=4)
-    clearance_front: FloatProperty(name="Front", min=0, precision=3, default=0)
-    clearance_back: FloatProperty(name="Back", min=0, precision=3, default=0)
-    clearance_sides: FloatProperty(name="Sides", min=0, precision=3, default=0)
-    wall_affinity: BoolProperty(name="Prefer walls", default=False)
-    collision: BoolProperty(name="Blocks other furniture", default=True)
-    price_label: StringProperty(name="Price label", description="Optional display text, e.g. €299", default="")
-    swatch: StringProperty(name="Swatch", description="CSS colour in #RRGGBB format", default="")
-    tags: EnumProperty(name="Tags", items=TAGS, options={"ENUM_FLAG"})
-    allow_overlap_with: EnumProperty(name="May overlap", items=TAGS, options={"ENUM_FLAG"})
-    can_rest_on: EnumProperty(name="Can rest on", items=TAGS, options={"ENUM_FLAG"})
+    name: StringProperty(name="Name", default="", description="Required: the name shown for this model in the Domus catalogue")
+    category: EnumProperty(name="Category", items=CATEGORIES, default="UNSET", description="Required: the hospital product group used by the catalogue filter")
+    width: FloatProperty(name="Width (m)", min=0, precision=4, default=0, description="Required external width along Blender X, in metres (995 mm = 0.995 m). Shown in the catalogue; does not scale geometry")
+    depth: FloatProperty(name="Depth (m)", min=0, precision=4, default=0, description="Required external depth along Blender Y, in metres. Shown in the catalogue; placement uses the measured geometry")
+    height: FloatProperty(name="Height (m)", min=0, precision=4, default=0, description="Required external height along Blender Z, in metres. Shown in the catalogue; actual height is measured on save")
+    collision: BoolProperty(name="Blocks other furniture", default=True, description="Prevent other furniture from overlapping this product during normal placement. Its footprint is measured automatically")
+    wall_affinity: BoolProperty(name="Prefer walls", default=False, description="Snap the back of this product to nearby walls when placing it in Domus")
+    clearance_front: FloatProperty(name="Front (m)", min=0, precision=3, default=0, description="Recommended free space for access in front of the model, facing Blender -Y, in metres. Zero means no clearance guide")
+    clearance_back: FloatProperty(name="Back (m)", min=0, precision=3, default=0, description="Recommended free space behind the model, facing Blender +Y, in metres. Zero means no clearance guide")
+    clearance_sides: FloatProperty(name="Sides (m)", min=0, precision=3, default=0, description="Recommended free space on each side of the model along Blender X, in metres. Zero means no clearance guide")
+    price_label: StringProperty(name="Price", description="Optional price text shown in Domus, including currency if desired, for example €299", default="")
+
+
+class DomusProductSource(PropertyGroup):
+    mode: EnumProperty(name="Source", items=[("COLLECTION", "Collection", "All parts in this collection and its child collections"),
+                                             ("OBJECT", "Object hierarchy", "A root object and all its descendants")], default="COLLECTION", description="Choose which complete model is measured and exported")
+    collection: PointerProperty(name="Product collection", type=bpy.types.Collection, description="The collection containing every model part; includes child collections and excludes unrelated scene objects")
+    object: PointerProperty(name="Root object", type=bpy.types.Object, description="The model's root and all its children. If empty, use the active object and its children")
+
+
+class DOMUS_OT_use_collection(Operator):
+    bl_idname = "domus.use_collection"
+    bl_label = "Use Active Collection"
+    bl_description = "Use the collection currently active in the Outliner"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        collection = context.view_layer.active_layer_collection.collection
+        if collection == context.scene.collection:
+            self.report({"ERROR"}, "Choose a product collection, not the entire scene")
+            return {"CANCELLED"}
+        context.scene.domus_product_source.collection = collection
+        context.scene.domus_product_source.mode = "COLLECTION"
+        return {"FINISHED"}
 
 
 class DOMUS_OT_read_model(Operator):
     bl_idname = "domus.read_model"
-    bl_label = "Fill Empty Fields"
-    bl_description = "Read name, material colour and evaluated mesh bounds; preserve entered values"
+    bl_label = "Use Measured Size"
+    bl_description = "Fill the display size from the complete model, including transforms and modifiers"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        root = context.active_object
-        if not root:
-            return {"CANCELLED"}
-        if not fill_from_model(context, root):
-            self.report({"WARNING"}, "No mesh found under the selected root")
-        return {"FINISHED"}
-
-
-class DOMUS_OT_refresh_geometry(Operator):
-    bl_idname = "domus.refresh_geometry"
-    bl_label = "Refresh Dimensions"
-    bl_description = "Recalculate bounds and collider from the model after geometry changes"
-    bl_options = {"REGISTER", "UNDO"}
-
-    def execute(self, context):
-        root = context.active_object
-        if not root or not fill_from_model(context, root, overwrite_geometry=True):
-            self.report({"ERROR"}, "Select a model root containing at least one mesh")
+        target = product_target(context)
+        if not target or not use_measured_size(context, target):
+            self.report({"ERROR"}, "Choose a product collection or hierarchy containing geometry")
             return {"CANCELLED"}
         return {"FINISHED"}
 
@@ -218,51 +181,159 @@ class DOMUS_OT_refresh_geometry(Operator):
 class DOMUS_OT_load_metadata(Operator):
     bl_idname = "domus.load_metadata"
     bl_label = "Load Saved Metadata"
-    bl_description = "Read Domus custom properties from this object, including a reimported GLB"
+    bl_description = "Restore the product's display and placement settings"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        root = context.active_object
-        if not root or root.get("domus_schema_version") != SCHEMA_VERSION:
-            self.report({"ERROR"}, "Selected object has no supported Domus metadata")
+        target = product_target(context)
+        root = metadata_root(target) if target else None
+        # Reimported GLBs may keep their metadata on a descendant rather than
+        # the collection's generated Empty. Find one unambiguous product.
+        if target and (not root or not root.get("domus_schema_version")):
+            candidates = [obj for obj in product_objects(target) if obj.get("domus_schema_version")]
+            root = candidates[0] if len(candidates) == 1 else None
+        if not root or root.get("domus_schema_version") not in (1, SCHEMA_VERSION):
+            self.report({"ERROR"}, "This product has no supported saved Domus metadata")
             return {"CANCELLED"}
-        props = root.domus_metadata
-        for field, key in KEYS.items():
-            if key not in root:
-                continue
-            value = root[key]
-            if field in ("tags", "allow_overlap_with", "can_rest_on"):
-                setattr(props, field, set(filter(None, str(value).split(","))) & set(TAG_IDS))
-            else:
+        props = target.domus_metadata
+        for field, key in EDITABLE_KEYS.items():
+            if key in root:
+                value = root[key]
+                if field == "category":
+                    value = SCHEMA["legacyCategoryAliases"].get(value, value)
+                    if value not in SCHEMA["categories"]:
+                        value = "UNSET"
                 setattr(props, field, value)
+        for field, key in DISPLAY_KEYS.items():
+            # Legacy dimensions may contain millimetres in metre fields.
+            # A v1 import starts from measured geometry instead.
+            if root.get("domus_schema_version") >= 2 and key in root:
+                setattr(props, field, root[key])
+        if root.get("domus_schema_version") == 1:
+            use_measured_size(context, target)
         return {"FINISHED"}
 
 
 class DOMUS_OT_save_metadata(Operator):
     bl_idname = "domus.save_metadata"
     bl_label = "Save Metadata"
-    bl_description = "Store Domus fields as exportable custom properties on the selected root"
+    bl_description = "Measure the complete model and save its required display settings and automatic collision bounds"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        root = context.active_object
-        if not root:
+        target = product_target(context)
+        if not target:
+            self.report({"ERROR"}, "Choose a product collection or root object")
             return {"CANCELLED"}
-        if not fill_from_model(context, root):
-            self.report({"ERROR"}, "Selected root must contain at least one mesh")
-            return {"CANCELLED"}
-        props = root.domus_metadata
+        props = target.domus_metadata
         missing = invalid_fields(props)
         if missing:
             self.report({"ERROR"}, "Complete: " + ", ".join(missing))
             return {"CANCELLED"}
+        bounds = measured_bounds(context, target)
+        if not bounds:
+            self.report({"ERROR"}, "The product must contain usable geometry")
+            return {"CANCELLED"}
+        lower, upper = bounds
+        dimensions = [upper[axis] - lower[axis] for axis in range(3)]
+        if dimensions[0] <= 0 or dimensions[1] <= 0:
+            self.report({"ERROR"}, "The model needs a non-zero width and depth")
+            return {"CANCELLED"}
+        root = metadata_root(target, create=True)
+        # A collection imported from an older GLB must export only one metadata
+        # carrier. Strip old product extras from its parts, preserving geometry.
+        for obj in product_objects(target):
+            if obj != root:
+                for key in list(obj.keys()):
+                    if key.startswith("domus_") and key != "domus_metadata":
+                        del obj[key]
+        for key in RETIRED_KEYS:
+            if key in root:
+                del root[key]
         root["domus_schema_version"] = SCHEMA_VERSION
-        for field, key in KEYS.items():
+        for field, key in {**EDITABLE_KEYS, **DISPLAY_KEYS}.items():
             value = getattr(props, field)
-            if field in ("tags", "allow_overlap_with", "can_rest_on"):
-                value = ",".join(tag for tag in TAG_IDS if tag in value)
-            root[key] = value
-        self.report({"INFO"}, "Metadata saved on " + root.name + "; save the .blend file to keep it")
+            root[key] = value.strip() if isinstance(value, str) else value
+        for key, axis in (("width", 0), ("depth", 1), ("height", 2)):
+            root["domus_" + key + "_m"] = max(dimensions[axis], 0.001)
+        # Internal fields are recomputed on every save, never entered manually.
+        root["domus_collision_width_m"] = dimensions[0]
+        root["domus_collision_depth_m"] = dimensions[1]
+        root["domus_collision_offset_x_m"] = 0.0
+        root["domus_collision_offset_y_m"] = 0.0
+        root["domus_bounds_center_x_m"] = (lower[0] + upper[0]) / 2
+        root["domus_bounds_center_y_m"] = (lower[1] + upper[1]) / 2
+        root["domus_bounds_min_z_m"] = lower[2]
+        self.report({"INFO"}, "Measured geometry and metadata saved; save the .blend file, then export this product")
+        return {"FINISHED"}
+
+
+def select_export_objects(context, target):
+    """Internal preparation for Blender's native selected-object GLB export."""
+    objects = product_objects(target)
+    if any(obj.name not in context.view_layer.objects or obj.hide_get() or obj.hide_viewport or obj.hide_select for obj in objects):
+        raise ValueError("Make all product parts visible and selectable before exporting")
+    bpy.ops.object.select_all(action="DESELECT")
+    for obj in objects:
+        obj.select_set(True)
+    context.view_layer.objects.active = metadata_root(target)
+
+
+class DOMUS_OT_export_product(Operator, ExportHelper):
+    bl_idname = "domus.export_product"
+    bl_label = "Export Product GLB"
+    bl_description = "Save metadata and export this complete model through Blender's built-in glTF exporter as GLB, with Custom Properties enabled"
+    filename_ext = ".glb"
+    filter_glob: StringProperty(default="*.glb", options={"HIDDEN"})
+
+    def execute(self, context):
+        previous_selection = list(context.selected_objects)
+        previous_active = context.view_layer.objects.active
+        try:
+            if bpy.ops.domus.save_metadata() != {"FINISHED"}:
+                return {"CANCELLED"}
+            select_export_objects(context, product_target(context))
+        except (RuntimeError, ValueError) as error:
+            self.report({"ERROR"}, str(error))
+            return {"CANCELLED"}
+        target = product_target(context)
+        objects = product_objects(target)
+        members = set(objects)
+        roots = [obj for obj in objects if obj.parent not in members]
+        saved = [(obj, obj.parent, obj.matrix_parent_inverse.copy(), obj.matrix_basis.copy(), obj.matrix_world.copy()) for obj in roots]
+        wrapper = bpy.data.objects.new("Domus Export Metres", None)
+        context.scene.collection.objects.link(wrapper)
+        try:
+            # Blender's glTF exporter writes Blender units as glTF metres. Use a
+            # temporary selected parent to convert the scene's unit scale without
+            # applying transforms or changing the source meshes/assembly.
+            for obj, _, _, _, world in saved:
+                obj.parent = wrapper
+                obj.matrix_world = world
+            factor = context.scene.unit_settings.scale_length or 1.0
+            wrapper.scale = (factor, factor, factor)
+            wrapper.select_set(True)
+            context.view_layer.update()
+            result = bpy.ops.export_scene.gltf(filepath=self.filepath, export_format="GLB", export_extras=True,
+                                               use_selection=True, export_apply=True, export_cameras=False, export_lights=False)
+            if result != {"FINISHED"}:
+                return {"CANCELLED"}
+        except Exception as error:
+            self.report({"ERROR"}, "Could not export product: " + str(error))
+            return {"CANCELLED"}
+        finally:
+            for obj, parent, inverse, basis, _ in saved:
+                obj.parent = parent
+                obj.matrix_parent_inverse = inverse
+                obj.matrix_basis = basis
+            bpy.data.objects.remove(wrapper, do_unlink=True)
+            context.view_layer.update()
+            bpy.ops.object.select_all(action="DESELECT")
+            for obj in previous_selection:
+                if obj.name in context.view_layer.objects:
+                    obj.select_set(True)
+            context.view_layer.objects.active = previous_active
+        self.report({"INFO"}, "Product exported in metres; copy the GLB into Domus public/models")
         return {"FINISHED"}
 
 
@@ -274,59 +345,62 @@ class DOMUS_PT_metadata(Panel):
     bl_category = "Domus"
 
     def draw(self, context):
-        layout = self.layout
-        root = context.active_object
-        if not root:
-            layout.label(text="Select the model root object", icon="INFO")
+        layout, source = self.layout, context.scene.domus_product_source
+        layout.prop(source, "mode")
+        if source.mode == "COLLECTION":
+            layout.prop(source, "collection")
+            layout.operator("domus.use_collection", icon="OUTLINER_COLLECTION")
+        else:
+            layout.prop(source, "object")
+        target = product_target(context)
+        if not target:
+            layout.label(text="Choose the collection containing all product parts", icon="INFO")
             return
-        props = root.domus_metadata
-        layout.label(text="Root: " + root.name)
-        layout.operator("domus.read_model", icon="EYEDROPPER")
-        layout.prop(props, "product_id")
+        props = target.domus_metadata
         layout.prop(props, "name")
         layout.prop(props, "category")
         box = layout.box()
-        box.label(text="Size in metres (X / Y / Z)")
-        for field in ("width", "depth", "height"):
+        box.label(text="Model External Dimensions")
+        for field in DISPLAY_KEYS:
             box.prop(props, field)
-        box.operator("domus.refresh_geometry", icon="FILE_REFRESH")
+        box.operator("domus.read_model", icon="FILE_REFRESH")
+        root = metadata_root(target)
+        if root and root.get("domus_schema_version"):
+            box.label(text="Last measured: %.3f × %.3f × %.3f m" % (root.get("domus_width_m", 0), root.get("domus_depth_m", 0), root.get("domus_height_m", 0)))
         box = layout.box()
         box.label(text="Placement")
         box.prop(props, "wall_affinity")
         box.prop(props, "collision")
-        if props.collision:
-            for field in ("collision_width", "collision_depth", "collision_offset_x", "collision_offset_y"):
-                box.prop(props, field)
-        box.label(text="Clearance in metres; front is Blender -Y")
+        box.label(text="Collision bounds are automatic")
         for field in ("clearance_front", "clearance_back", "clearance_sides"):
             box.prop(props, field)
-        box = layout.box()
-        box.label(text="Interaction")
-        for field in ("tags", "allow_overlap_with", "can_rest_on"):
-            box.prop(props, field)
         layout.prop(props, "price_label")
-        layout.prop(props, "swatch")
         missing = invalid_fields(props)
         if missing:
             layout.label(text="Required: " + ", ".join(missing[:2]), icon="ERROR")
         layout.operator("domus.save_metadata", icon="CHECKMARK")
-        if root.get("domus_schema_version") == SCHEMA_VERSION:
-            layout.operator("domus.load_metadata", icon="IMPORT")
-        layout.label(text="Then save .blend and export GLB")
-        layout.label(text="Enable Include > Custom Properties")
+        layout.operator("domus.load_metadata", icon="IMPORT")
+        layout.operator("domus.export_product", icon="EXPORT")
+        layout.label(text="Domus assigns the catalogue ID on import")
 
 
-CLASSES = (DomusMetadata, DOMUS_OT_read_model, DOMUS_OT_refresh_geometry,
-           DOMUS_OT_load_metadata, DOMUS_OT_save_metadata, DOMUS_PT_metadata)
+CLASSES = (DomusMetadata, DomusProductSource, DOMUS_OT_use_collection, DOMUS_OT_read_model,
+           DOMUS_OT_load_metadata, DOMUS_OT_save_metadata, DOMUS_OT_export_product, DOMUS_PT_metadata)
 
 
 def register():
     for cls in CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.Object.domus_metadata = PointerProperty(type=DomusMetadata)
+    bpy.types.Collection.domus_metadata = PointerProperty(type=DomusMetadata)
+    bpy.types.Collection.domus_model_root = PointerProperty(type=bpy.types.Object)
+    bpy.types.Scene.domus_product_source = PointerProperty(type=DomusProductSource)
 
 
 def unregister():
+    del bpy.types.Scene.domus_product_source
+    del bpy.types.Collection.domus_model_root
+    del bpy.types.Collection.domus_metadata
     del bpy.types.Object.domus_metadata
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)

@@ -9,6 +9,9 @@ let disposers = [];
 let version = 0;
 globalThis.__domusViewSyncHot = { data: {}, accept: () => {}, dispose: (callback) => disposers.push(callback) };
 const vite = await createServer({
+  // This suite adds a plugin, so it must not invalidate the cache used by
+  // concurrent suites or the running development server on Windows.
+  cacheDir: 'node_modules/.vite/view-sync-tests',
   server: { middlewareMode: true, hmr: false }, appType: 'custom', logLevel: 'silent',
   plugins: [{ name: 'store-reload-test', enforce: 'pre', transform(code, id, options) {
     if (options?.ssr && /\/src\/store\.ts(?:\?|$)/.test(id)) return code.replaceAll('import.meta.hot', 'globalThis.__domusViewSyncHot');

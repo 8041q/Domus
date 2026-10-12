@@ -21,9 +21,11 @@ export function FloatingPanel({ id, title, side = 'left', className = '', onClos
   const move = (next: Position, save = false) => {
     const panel = panelRef.current, parent = panel?.parentElement;
     if (!panel || !parent) return;
+    const toolbar = parent.querySelector<HTMLElement>('.designer-topbar');
+    const minimumTop = toolbar ? toolbar.offsetTop + toolbar.offsetHeight + 8 : 12;
     const clamped = {
       x: Math.max(12, Math.min(next.x, parent.clientWidth - panel.offsetWidth - 12)),
-      y: Math.max(12, Math.min(next.y, parent.clientHeight - panel.offsetHeight - 12))
+      y: Math.max(minimumTop, Math.min(next.y, parent.clientHeight - panel.offsetHeight - 12))
     };
     positionRef.current = clamped;
     setPosition(clamped);
@@ -57,7 +59,7 @@ export function FloatingPanel({ id, title, side = 'left', className = '', onClos
   };
 
   return <aside ref={panelRef} className={`floating-panel ${className}`} aria-label={title}
-    style={position ? { left: position.x, top: position.y } : { top: 58, [side]: 12 }}>
+    style={{ ...(position ? { left: position.x, top: position.y } : { top: 58, [side]: 12 }), maxHeight: `calc(100% - ${position?.y ?? 58}px - 12px)` }}>
     <div className="floating-panel-heading">
       <button type="button" className="floating-panel-handle" aria-label={`Move ${title} panel`}
         onPointerDown={(event) => {

@@ -120,18 +120,9 @@ export interface NamedSpace {
   wallColor: string;
 }
 
-export type ProductKind =
-  | 'sofa'
-  | 'armchair'
-  | 'dining-table'
-  | 'coffee-table'
-  | 'chair'
-  | 'cabinet'
-  | 'bookcase'
-  | 'rug'
-  | 'plant';
-
-export type ProductCategory = 'Seating' | 'Tables' | 'Storage' | 'Decor';
+/** Imported products receive persistent server UUIDs. */
+export type ProductKind = string;
+export type ProductCategory = string;
 
 /**
  * Semantic interaction tags are intentionally separate from visual categories.
@@ -176,6 +167,10 @@ export interface ProductDefinition {
   width: number;
   depth: number;
   height: number;
+  /** Optional manufacturer/catalogue size. Rendering and placement use measured dimensions above. */
+  displayDimensions?: { width: number; depth: number; height: number };
+  /** Missing/deleted assets stay known so saved rooms retain their objects. */
+  available?: boolean;
   wallAffinity?: boolean;
   collision?: boolean;
   /**
@@ -188,6 +183,8 @@ export interface ProductDefinition {
   clearance: ClearanceRule;
   priceLabel: string;
   swatch: string;
+  /** Public GLB asset; geometry is centred horizontally and grounded on load. */
+  model?: { url: string };
 }
 
 export interface PlacedObject {
