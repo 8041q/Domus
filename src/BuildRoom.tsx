@@ -42,6 +42,7 @@ function openingKindLabel(type: RoomOpening['type']) {
 
 const SHAPES: Array<{ id: Exclude<RoomShapeKind, 'custom'>; name: string; description: string }> = [
   { id: 'rectangle', name: 'Rectangle', description: 'Simple four-wall room' },
+  { id: 'circle', name: 'Circle', description: 'Round room with an adjustable diameter' },
   { id: 'angled-corner', name: 'Angled corner', description: 'Five walls with one diagonal corner' },
   { id: 'l-shape', name: 'L-shape', description: 'Connected spaces or alcoves' },
   { id: 'recess', name: 'Recess', description: 'Room with a built-in notch' }
@@ -173,6 +174,22 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
   const walls = useMemo(() => getPhysicalWalls(room, FEATURES.interiorWalls ? dividers : []).filter((segment) => opening.type !== 'window' || !!getWall(room, segment.id)), [room, dividers, opening.type]);
   const wall = walls.find((candidate) => candidate.id === opening.wallId);
   const maxOffset = wall?.length ?? 1;
+  const curved = room.shapeKind === 'circle' && !opening.wallId.startsWith('divider-');
+  const perimeterWalls = getRoomWalls(room);
+  const perimeter = perimeterWalls.reduce((sum, wall) => sum + wall.length, 0);
+  const position = curved ? perimeterWalls.slice(0, wall?.index ?? 0).reduce((sum, wall) => sum + wall.length, 0) + opening.offset : opening.offset;
+  const positionPatch = (offset: number): Partial<RoomOpening> => {
+    if (!curved) return { offset };
+    let remaining = ((offset % perimeter) + perimeter) % perimeter;
+    for (const wall of perimeterWalls) {
+      if (remaining <= wall.length) return { wallId: wall.id, offset: remaining };
+      remaining -= wall.length;
+    }
+    return { wallId: perimeterWalls[0].id, offset: 0 };
+  };
+  const minOffset = curved ? 0 : opening.width / 2 + 0.05;
+  const endOffset = curved ? perimeter : Math.max(minOffset, maxOffset - opening.width / 2 - 0.05);
+  const maxWidth = curved ? perimeter / 4 - 0.2 : maxOffset - 0.2;
   const minOpeningWidth = opening.type === 'opening' ? 0.10 : 0.45;
   const minOpeningHeight = opening.type === 'opening' ? 0.10 : 0.40;
 
@@ -183,7 +200,7 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
     if (sliderRaf.current != null) return;
     sliderRaf.current = requestAnimationFrame(() => {
       sliderRaf.current = null;
-      updateOpening(opening.id, { offset: pendingOffset.current }, false);
+      updateOpening(opening.id, positionPatch(pendingOffset.current), false);
     });
   };
 
@@ -191,7 +208,7 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
     if (sliderRaf.current != null) {
       cancelAnimationFrame(sliderRaf.current);
       sliderRaf.current = null;
-      updateOpening(opening.id, { offset: pendingOffset.current }, false);
+      updateOpening(opening.id, positionPatch(pendingOffset.current), false);
     }
     if (sliderBefore.current) commitSnapshot(sliderBefore.current);
     sliderBefore.current = null;
@@ -208,7 +225,7 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
       <div className="opening-editor-title">
         <div>
           <strong>{openingDisplayName(opening, openings)}</strong>
-          <span>{wall ? `${wall.id.startsWith('divider-') ? 'Interior wall' : `Wall ${wall.index + 1}`} · ${formatLength(wall.length, system)}` : 'Selected opening'}</span>
+          <span>{curved ? `Circular wall · ${formatLength(perimeter, system)}` : wall ? `${wall.id.startsWith('divider-') ? 'Interior wall' : `Wall ${wall.index + 1}`} · ${formatLength(wall.length, system)}` : 'Selected opening'}</span>
         </div>
         <div className="opening-editor-actions">
           {opening.type === 'door' && opening.variant !== 'door-frame' && <button type="button" className="small-button"
@@ -223,7 +240,7 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
             value={opening.type}
             onChange={(e: ChangeEvent<HTMLSelectElement>) => updateOpening(opening.id, { type: e.target.value as RoomOpening['type'] })}
           >
-            <option value="window" disabled={opening.wallId.startsWith('divider-')}>Window</option>
+            {room.shapeKind !== 'circle' && <option value="window" disabled={opening.wallId.startsWith('divider-')}>Window</option>}
             <option value="door">Door</option>
             <option value="opening">Wall opening</option>
           </select>
@@ -237,7 +254,7 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
           </select>
         </label>
       </div>
-      <label className="field-label">Wall
+      {!curved && <label className="field-label">Wall
         <select
           value={opening.wallId}
           onChange={(e: ChangeEvent<HTMLSelectElement>) => {
@@ -249,23 +266,23 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
             <option key={segment.id} value={segment.id}>{segment.id.startsWith('divider-') ? 'Interior wall' : `Wall ${segment.index + 1}`} · {formatLength(segment.length, system)}</option>
           ))}
         </select>
-      </label>
+      </label>}
       <label className="field-label range-field">
         <EditableRangeValue
-          label="Horizontal Position"
-          value={opening.offset}
-          min={opening.width / 2 + 0.05}
-          max={Math.max(opening.width / 2 + 0.05, maxOffset - opening.width / 2 - 0.05)}
+          label={curved ? 'Position around room' : 'Horizontal Position'}
+          value={position}
+          min={minOffset}
+          max={endOffset}
           system={system}
-          onCommit={(offset) => updateOpening(opening.id, { offset })}
+          onCommit={(offset) => updateOpening(opening.id, positionPatch(offset))}
         />
         <input
           className="range"
           type="range"
-          min={opening.width / 2 + 0.05}
-          max={Math.max(opening.width / 2 + 0.05, maxOffset - opening.width / 2 - 0.05)}
+          min={minOffset}
+          max={endOffset}
           step={system === 'metric' ? 0.01 : 0.0254}
-          value={opening.offset}
+          value={position}
           onFocus={() => { if (!sliderBefore.current) sliderBefore.current = getSnapshot(); }}
           onPointerDown={() => { if (!sliderBefore.current) sliderBefore.current = getSnapshot(); }}
           onChange={(e: ChangeEvent<HTMLInputElement>) => previewOffset(Number(e.target.value))}
@@ -275,8 +292,8 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
       </label>
       <div className="opening-size-sliders">
         <label className="field-label range-field">
-          <EditableRangeValue label="Width" value={opening.width} min={minOpeningWidth} max={Math.max(minOpeningWidth, maxOffset - 0.2)} system={system} onCommit={(width) => updateOpening(opening.id, { width })} />
-          <input className="range" type="range" min={minOpeningWidth} max={Math.max(minOpeningWidth, maxOffset - 0.2)} step={system === 'metric' ? 0.01 : 0.0127} value={opening.width}
+          <EditableRangeValue label="Width" value={opening.width} min={minOpeningWidth} max={Math.max(minOpeningWidth, maxWidth)} system={system} onCommit={(width) => updateOpening(opening.id, { width })} />
+          <input className="range" type="range" min={minOpeningWidth} max={Math.max(minOpeningWidth, maxWidth)} step={system === 'metric' ? 0.01 : 0.0127} value={opening.width}
             onPointerDown={beginSize} onFocus={beginSize}
             onChange={(e) => updateOpening(opening.id, { width: Number(e.target.value) }, false)}
             onPointerUp={finishSize} onBlur={finishSize} />
@@ -359,6 +376,12 @@ export function BuildRoom() {
   const [resetViewRequest, setResetViewRequest] = useState(0);
   const [dividerTool, setDividerTool] = useState<'wall' | 'open' | null>(null);
   const [openingWarning, setOpeningWarning] = useState('');
+  const diameterBefore = useRef<ReturnType<typeof getSnapshot> | null>(null);
+  const beginDiameter = () => { if (!diameterBefore.current) diameterBefore.current = getSnapshot(); };
+  const finishDiameter = () => {
+    if (diameterBefore.current) usePlannerStore.getState().commitSnapshot(diameterBefore.current);
+    diameterBefore.current = null;
+  };
   const room = usePlannerStore((s) => s.room);
   const savedOpenings = usePlannerStore((s) => s.openings);
   const openings = useMemo(() => FEATURES.interiorWalls ? savedOpenings : savedOpenings.filter((opening) => !opening.wallId.startsWith('divider-')), [savedOpenings]);
@@ -395,7 +418,7 @@ export function BuildRoom() {
     if (shape === room.shapeKind) return;
     if (openings.length || placedFurnitureCount || dividers.length) {
       const effects = [
-        openings.length ? 'clear the current doors and windows' : '',
+        openings.length ? `replace the current openings with a preset door and ${shape === 'circle' ? 'opening' : 'window'}` : '',
         placedFurnitureCount ? 'remove placed furniture from the room (it will remain in Used furniture)' : '',
         dividers.length ? 'remove interior divisions and their named spaces' : ''
       ].filter(Boolean).join(' and ');
@@ -411,7 +434,7 @@ export function BuildRoom() {
         <div className="panel-intro">
           <span className="eyebrow">Step 1</span>
           <h1>Build your room</h1>
-          <p>{buildView === 'plan' ? (FEATURES.interiorWalls ? 'Arrange outer walls and interior divisions in 2D.' : 'Arrange outer walls in 2D.') : 'Add and adjust doors, windows and openings in 3D.'}</p>
+          <p>{buildView === 'plan' ? (FEATURES.interiorWalls ? 'Arrange outer walls and interior divisions in 2D.' : 'Arrange outer walls in 2D.') : room.shapeKind === 'circle' ? 'Add and adjust doors and openings in 3D.' : 'Add and adjust doors, windows and openings in 3D.'}</p>
         </div>
 
         {buildView === 'plan' && <><section className="tool-section">
@@ -427,7 +450,7 @@ export function BuildRoom() {
               </button>
             ))}
           </div>
-          <p className="hint">Choose a starting shape, then drag any wall or corner. Corners move freely, so adjacent walls can become angled.</p>
+          <p className="hint">{room.shapeKind === 'circle' ? 'Use Diameter in the size panel to resize the whole circular room.' : 'Choose a starting shape, then drag any wall or corner. Corners move freely, so adjacent walls can become angled.'}</p>
         </section>
 
         {FEATURES.interiorWalls && <section className="tool-section">
@@ -445,11 +468,11 @@ export function BuildRoom() {
         </>}
 
         {buildView === '3d' && <section className="tool-section opening-section">
-          <div className="section-title-row"><div><span className="section-step">1</span><h2>Doors, windows & openings</h2></div></div>
-          <div className="opening-quick-add" aria-label="Add an opening">
+          <div className="section-title-row"><div><span className="section-step">1</span><h2>{room.shapeKind === 'circle' ? 'Doors & openings' : 'Doors, windows & openings'}</h2></div></div>
+          <div className={`opening-quick-add ${room.shapeKind === 'circle' ? 'circle-openings' : ''}`} aria-label="Add an opening">
             <button type="button" disabled={selectedDivider?.kind === 'open'} onClick={() => insertOpening('door')}><span className="opening-add-mark" aria-hidden="true">+</span><span>Door</span></button>
-            <button type="button" disabled={!!selectedDivider} title={selectedDivider ? 'Windows belong on exterior walls' : undefined}
-              onClick={() => insertOpening('window')}><span className="opening-add-mark" aria-hidden="true">+</span><span>Window</span></button>
+            {room.shapeKind !== 'circle' && <button type="button" disabled={!!selectedDivider} title={selectedDivider ? 'Windows belong on exterior walls' : undefined}
+              onClick={() => insertOpening('window')}><span className="opening-add-mark" aria-hidden="true">+</span><span>Window</span></button>}
             <button type="button" disabled={selectedDivider?.kind === 'open'} onClick={() => insertOpening('opening')}><span className="opening-add-mark" aria-hidden="true">+</span><span>Opening</span></button>
           </div>
           <p className="hint compact-hint">Select a wall first to place the opening there.</p>
@@ -467,7 +490,7 @@ export function BuildRoom() {
                   const openingWall = getWall(room, opening.wallId);
                   return (
                     <option key={opening.id} value={opening.id}>
-                      {openingDisplayName(opening, openings)}{openingWall ? ` — Wall ${openingWall.index + 1}` : ''}
+                      {openingDisplayName(opening, openings)}{openingWall ? room.shapeKind === 'circle' ? ' — Circular wall' : ` — Wall ${openingWall.index + 1}` : ''}
                     </option>
                   );
                 })}
@@ -484,7 +507,7 @@ export function BuildRoom() {
                 <button type="button" className={system === 'metric' ? 'active' : ''} onClick={() => setMeasurementSystem('metric')}>Metric</button>
                 <button type="button" className={system === 'imperial' ? 'active' : ''} onClick={() => setMeasurementSystem('imperial')}>Imperial</button>
               </div>
-              <span className="quiet-pill">{room.vertices.length} walls</span>
+              <span className="quiet-pill">{room.shapeKind === 'circle' ? 'Circular' : `${room.vertices.length} walls`}</span>
             </div>
           </div>
           <div className="dimension-grid">
@@ -492,12 +515,25 @@ export function BuildRoom() {
           </div>
         </section>}
 
-        {buildView === 'plan' && <p className="hint">Switch to 3D to add or edit doors, windows and openings.</p>}
+        {buildView === 'plan' && <p className="hint">{room.shapeKind === 'circle' ? 'Switch to 3D to add or edit doors and openings.' : 'Switch to 3D to add or edit doors, windows and openings.'}</p>}
         </div>
 
         <div className="builder-inspector-dock" aria-live="polite">
           {selectedOpening && buildView === '3d' ? (
             <OpeningEditor key={selectedOpening.id} opening={selectedOpening} />
+          ) : room.shapeKind === 'circle' && buildView === 'plan' && !selectedDivider ? (
+            <div className="wall-editor">
+              <div className="opening-editor-title"><strong>Circular room size</strong></div>
+              <div className="circle-diameter-control">
+                <DimensionField label="Diameter" value={room.width} min={2.2} max={20} system={system} onCommit={(width) => updateRoom({ width })} />
+                <input aria-label="Room diameter" className="range" type="range" min={2.2} max={20} step={0.1} value={room.width}
+                  title="Resize the whole circular room while keeping it round" aria-valuetext={formatLength(room.width, system)}
+                  onPointerDown={beginDiameter} onFocus={beginDiameter}
+                  onChange={(event) => { beginDiameter(); updateRoom({ width: Number(event.target.value) }, false); }}
+                  onPointerUp={finishDiameter} onPointerCancel={finishDiameter} onBlur={finishDiameter} onKeyUp={finishDiameter} />
+              </div>
+              <p className="hint">Change the diameter to enlarge or shrink the circle. Doors and openings keep their size.</p>
+            </div>
           ) : selectedDivider && buildView === 'plan' ? (
             <div className="wall-editor">
               <div className="opening-editor-title"><strong>{selectedDivider.kind === 'wall' ? 'Interior wall' : 'Open boundary'}</strong><button className="text-danger" type="button" onClick={() => removeDivider(selectedDivider.id)}>Remove</button></div>
@@ -520,14 +556,14 @@ export function BuildRoom() {
               <span className="eyebrow">{selectedDivider ? 'Interior wall' : 'Exterior wall'}</span>
               <strong>Add an opening to this wall</strong>
               <p>{selectedDivider?.kind === 'open' ? 'This is an invisible boundary. Change it to a physical wall in 2D to add a door.'
-                : selectedDivider ? 'Use Door or Opening above. Windows belong on exterior walls.' : 'Use Door, Window or Opening above.'}</p>
+                : room.shapeKind === 'circle' ? 'Use Door or Opening above.' : selectedDivider ? 'Use Door or Opening above. Windows belong on exterior walls.' : 'Use Door, Window or Opening above.'}</p>
             </div>
           ) : selectedWallId ? (
             <WallEditor wallId={selectedWallId} />
           ) : (
             <div className="builder-inspector-empty">
               <span className="eyebrow">Selection settings</span>
-              <strong>{buildView === 'plan' ? (FEATURES.interiorWalls ? 'Select a wall, corner or division' : 'Select a wall or corner') : 'Select a wall, door, window or opening'}</strong>
+              <strong>{buildView === 'plan' ? (FEATURES.interiorWalls ? 'Select a wall, corner or division' : 'Select a wall or corner') : room.shapeKind === 'circle' ? 'Select a wall, door or opening' : 'Select a wall, door, window or opening'}</strong>
             </div>
           )}
         </div>

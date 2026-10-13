@@ -14,7 +14,7 @@ import { PRODUCTS, PRODUCT_LIST } from '../core/products';
 import { floorFinishDefinition, type FloorFinishDefinition } from '../core/roomFinishes';
 import { clearanceRegions, resolvePlacement, spacingMeasurements, type SpacingMeasurement } from '../core/placement';
 import { BASEBOARD_STYLES, DOOR_LEAF_COLOR, glazingAreas, isSunGlazedOpening } from '../core/architecturalStyles';
-import { getRoomWalls, pointInRoom, roomBounds, wallPoint, wallProjectionDistance } from '../core/roomGeometry';
+import { getRoomWalls, openingsOnWall, pointInRoom, roomBounds, wallPoint, wallProjectionDistance } from '../core/roomGeometry';
 import { architectureRoom, deriveSpaces, dividerJunctionDistances, getPhysicalWalls, interiorDoorHasThreshold, resolveDividers, wallAdjacentSpaces } from '../core/spaces';
 import { effectiveSunAzimuth } from '../core/sun';
 import { formatLength } from '../core/units';
@@ -25,6 +25,9 @@ import { cutWallGeometry } from './interiorWallGeometry';
 import { createFloorSurfaceGeometry } from './floorGeometry';
 import { createFrameQueue } from '../core/frameQueue';
 import { ProductModelLibrary } from './productModels';
+import { renderRoomReport, roomReportData } from '../core/roomReport';
+import { buildRoomPdf, jpegBytes, ROOM_PDF_VIEWS, type PdfSnapshot } from '../core/roomPdf';
+import { wallCornerShading } from '../core/wallShading';
 
 export interface SceneSnapshot extends PlannerSnapshot {
   selectedId?: string | null;
@@ -713,6 +716,77 @@ export class PlannerScene {
     anchor.remove();
     // Keep the blob alive until the browser has started consuming the download.
     window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  }
+
+  async exportPDF(roomName: string) {
+    await Promise.all([this.floorTextureReady, ...this.spaceFloorReady]);
+    while (this.productModelRequests.size) await Promise.all(this.productModelRequests.values());
+    if (this.disposed) throw new Error('The 3D view closed while preparing the PDF.');
+    if (this.bridge.getSnapshot().objects.some((object) => this.productModelErrors.has(PRODUCTS[object.productId]?.model?.url ?? ''))) {
+      throw new Error('Retry the failed furniture models before exporting.');
+    }
+    const size = this.renderer.getSize(new THREE.Vector2());
+    const saved = { position: this.camera.position.clone(), quaternion: this.camera.quaternion.clone(), target: this.controls.target.clone(),
+      fov: this.camera.fov, aspect: this.camera.aspect, near: this.camera.near, far: this.camera.far,
+      view: this.currentCameraView, ratio: this.renderer.getPixelRatio(), maxDistance: this.controls.maxDistance,
+      damping: this.controls.enableDamping, enabled: this.controls.enabled, helpers: this.helperGroup.visible };
+    const report = roomReportData(this.sceneSnapshot(), PRODUCTS);
+    const date = new Date().toLocaleString();
+    const reportPages = renderRoomReport(report, roomName, date);
+    const snapshots: PdfSnapshot[] = [];
+    try {
+      this.controls.enabled = false;
+      this.controls.enableDamping = false;
+      this.controls.update(); // Drain pending orbit damping before fixed snapshot views.
+      this.helperGroup.visible = false;
+      this.renderer.setPixelRatio(1);
+      this.renderer.setSize(1600, 950, false);
+      this.camera.aspect = 1600 / 950;
+      for (const [index, view] of ROOM_PDF_VIEWS.entries()) {
+        this.setCameraView(view);
+        // Fit both tall rooms and long/narrow rooms into the fixed export aspect.
+        const bounds = roomBounds(this.sceneSnapshot().room.vertices);
+        const spanX = view === 'left' || view === 'right' ? bounds.depth : bounds.width;
+        const spanY = view === 'top' ? bounds.depth : this.sceneSnapshot().room.height;
+        const distance = Math.max(spanY / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2))),
+          spanX / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * this.camera.aspect)) * 1.18;
+        const direction = this.camera.position.clone().sub(this.controls.target).normalize();
+        const halfDepth = view === 'top' ? this.sceneSnapshot().room.height / 2 :
+          (view === 'left' || view === 'right' ? bounds.width : bounds.depth) / 2;
+        this.camera.position.copy(this.controls.target).addScaledVector(direction, distance + halfDepth);
+        this.controls.update();
+        this.updateCameraClipping(); this.updateCeilingVisibility(true); this.updateCutawayWalls(true);
+        this.camera.layers.set(SCENE_LAYER);
+        this.renderer.render(this.scene, this.camera);
+        const page = document.createElement('canvas');
+        page.width = 1800; page.height = 1273;
+        const ctx = page.getContext('2d')!;
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, page.width, page.height);
+        ctx.fillStyle = '#18181b'; ctx.font = '600 34px system-ui';
+        let title = roomName;
+        while (title.length && ctx.measureText(title).width > 1450) title = title.slice(0, -1);
+        ctx.fillText(title !== roomName ? `${title}…` : title, 70, 70);
+        ctx.fillStyle = '#52525b'; ctx.font = '24px system-ui';
+        ctx.fillText(`${view[0].toUpperCase()}${view.slice(1)} view \u00b7 ${report.dimensions} \u00b7 ${report.area.toFixed(2)} m\u00b2`, 70, 115);
+        ctx.drawImage(this.renderer.domElement, 70, 165, 1660, 986);
+        ctx.font = '20px system-ui'; ctx.fillText(`Domus \u00b7 Exported ${date}`, 70, 1210);
+        ctx.textAlign = 'right'; ctx.fillText(`${reportPages.length + index + 1} / ${reportPages.length + ROOM_PDF_VIEWS.length}`, 1730, 1210);
+        snapshots.push({ jpeg: jpegBytes(page), width: page.width, height: page.height });
+      }
+    } finally {
+      this.renderer.setPixelRatio(saved.ratio); this.renderer.setSize(size.x, size.y, false);
+      this.camera.position.copy(saved.position); this.camera.quaternion.copy(saved.quaternion);
+      this.camera.fov = saved.fov; this.camera.aspect = saved.aspect; this.camera.near = saved.near; this.camera.far = saved.far;
+      this.camera.updateProjectionMatrix(); this.controls.target.copy(saved.target); this.controls.maxDistance = saved.maxDistance;
+      this.currentCameraView = saved.view; this.controls.update();
+      this.controls.enableDamping = saved.damping; this.controls.enabled = saved.enabled; this.helperGroup.visible = saved.helpers;
+      this.updateCeilingVisibility(true); this.updateCutawayWalls(true); this.requestRender();
+    }
+    const bytes = buildRoomPdf(snapshots, reportPages);
+    const url = URL.createObjectURL(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'application/pdf' }));
+    const link = document.createElement('a'); link.href = url;
+    link.download = `${roomName.replace(/[^\p{L}\p{N} _-]/gu, '').trim() || 'room'}.pdf`;
+    link.click(); window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
   }
 
   setCameraView(view: PlanCameraView) {
@@ -1516,7 +1590,8 @@ export class PlannerScene {
         0, 0, wall.length, 0, wall.length, 1, 0, 1
       ], 2));
       const material = new THREE.ShaderMaterial({
-        uniforms: { wallLength: { value: wall.length } },
+        uniforms: { wallLength: { value: wall.length },
+          cornerStart: { value: wallCornerShading(snapshot.room, wall).start }, cornerEnd: { value: wallCornerShading(snapshot.room, wall).end } },
         vertexShader: `
           varying vec2 vCeilingPosition;
           void main() {
@@ -1526,12 +1601,13 @@ export class PlannerScene {
         `,
         fragmentShader: `
           uniform float wallLength;
+          uniform float cornerStart; uniform float cornerEnd;
           varying vec2 vCeilingPosition;
           void main() {
             float fromWall = 1.0 - smoothstep(0.0, 1.0, vCeilingPosition.y);
             float nearCorner = max(
-              1.0 - smoothstep(0.0, 0.7, vCeilingPosition.x),
-              1.0 - smoothstep(0.0, 0.7, wallLength - vCeilingPosition.x)
+              (1.0 - smoothstep(0.0, 0.7, vCeilingPosition.x)) * cornerStart,
+              (1.0 - smoothstep(0.0, 0.7, wallLength - vCeilingPosition.x)) * cornerEnd
             );
             float contact = 1.0 - smoothstep(0.0, 0.15, vCeilingPosition.y);
             float opacity = fromWall * (0.04 + 0.015 * nearCorner) + 0.015 * contact;
@@ -2069,6 +2145,7 @@ export class PlannerScene {
   }
 
   private rebuildWalls(snapshot: PlannerSnapshot, affected?: Set<string>) {
+    if (snapshot.room.shapeKind === 'circle') affected = undefined;
     this.wallSpaces = deriveSpaces(snapshot);
     if (!affected || [...affected].some((id) => id.startsWith('divider-'))) {
       this.disposeGroup(this.interiorViewGroup);
@@ -2088,7 +2165,7 @@ export class PlannerScene {
 
     for (const wall of getRoomWalls(snapshot.room)) {
       if (affected && !affected.has(wall.id)) continue;
-      const wallOpenings = snapshot.openings.filter((o) => o.wallId === wall.id).sort((a, b) => a.offset - b.offset);
+      const wallOpenings = openingsOnWall(snapshot.room, snapshot.openings, wall.id).sort((a, b) => a.offset - b.offset);
       const anchorCuts = snapshot.dividers.flatMap((divider) => [divider.start, divider.end])
         .filter((anchor) => anchor.kind === 'perimeter' && anchor.id === wall.id).map((anchor) => anchor.t * wall.length);
       const cuts = [...new Set([0, wall.length, ...anchorCuts,
@@ -2108,7 +2185,7 @@ export class PlannerScene {
           if (openingTop < height - 0.01) this.addWallSegmentBox(wall, start, end, openingTop, height, thickness, faceColor, height, snapshot);
         }
       }
-      for (const opening of wallOpenings) this.addOpeningFrame(opening, snapshot, thickness);
+      for (const opening of snapshot.openings.filter((opening) => opening.wallId === wall.id)) this.addOpeningFrame(opening, snapshot, thickness);
 
       // Keep the normal footer requested earlier, but give the footer itself a
       // proper miter at room corners so it never sticks through a cutaway wall.
@@ -2207,8 +2284,8 @@ export class PlannerScene {
   }
 
   private addBaseboardRuns(wall: ReturnType<typeof getRoomWalls>[number], snapshot: PlannerSnapshot) {
-    const blocked = snapshot.openings
-      .filter((opening) => opening.wallId === wall.id && opening.sillHeight <= 0.025)
+    const blocked = openingsOnWall(snapshot.room, snapshot.openings, wall.id)
+      .filter((opening) => opening.sillHeight <= 0.025)
       .map((opening) => ({
         // Stop at the outside of the casing, not the raw opening. The old run
         // continued underneath half of the door frame, producing the little split
@@ -2321,6 +2398,8 @@ export class PlannerScene {
     inner: { start: Vec2; end: Vec2 },
     snapshot: PlannerSnapshot
   ) {
+    const corners = wallCornerShading(snapshot.room, wall);
+    if (!corners.start && !corners.end) return;
     // Room-space corner occlusion remains stable across camera cutaways. One
     // transparent quad per solid wall segment also respects doors and windows.
     const inset = 0.0015;
@@ -2337,7 +2416,9 @@ export class PlannerScene {
     const material = new THREE.ShaderMaterial({
       uniforms: {
         wallLength: { value: wall.length },
-        roomHeight: { value: snapshot.room.height }
+        roomHeight: { value: snapshot.room.height },
+        cornerStart: { value: corners.start },
+        cornerEnd: { value: corners.end }
       },
       vertexShader: `
         varying vec2 vWallPosition;
@@ -2349,17 +2430,19 @@ export class PlannerScene {
       fragmentShader: `
         uniform float wallLength;
         uniform float roomHeight;
+        uniform float cornerStart;
+        uniform float cornerEnd;
         varying vec2 vWallPosition;
         void main() {
           float floorEdge = 1.0 - smoothstep(0.0, 1.35, vWallPosition.y);
           float ceilingEdge = 1.0 - smoothstep(0.0, 0.28, roomHeight - vWallPosition.y);
           float cornerWidth = mix(0.75, 1.3, floorEdge);
-          float startCorner = 1.0 - smoothstep(0.0, cornerWidth, vWallPosition.x);
-          float endCorner = 1.0 - smoothstep(0.0, cornerWidth, wallLength - vWallPosition.x);
+          float startCorner = cornerStart * (1.0 - smoothstep(0.0, cornerWidth, vWallPosition.x));
+          float endCorner = cornerEnd * (1.0 - smoothstep(0.0, cornerWidth, wallLength - vWallPosition.x));
           float corner = max(startCorner, endCorner);
           float seam = max(
-            1.0 - smoothstep(0.0, 0.24, vWallPosition.x),
-            1.0 - smoothstep(0.0, 0.24, wallLength - vWallPosition.x)
+            cornerStart * (1.0 - smoothstep(0.0, 0.24, vWallPosition.x)),
+            cornerEnd * (1.0 - smoothstep(0.0, 0.24, wallLength - vWallPosition.x))
           );
           float opacity = corner * (0.09 + 0.02 * floorEdge + 0.008 * ceilingEdge)
             + 0.030 * seam
@@ -2397,7 +2480,8 @@ export class PlannerScene {
         0, 0, wall.length, 0, wall.length, 1, 0, 1
       ], 2));
       const material = new THREE.ShaderMaterial({
-        uniforms: { wallLength: { value: wall.length } },
+        uniforms: { wallLength: { value: wall.length },
+          cornerStart: { value: wallCornerShading(snapshot.room, wall).start }, cornerEnd: { value: wallCornerShading(snapshot.room, wall).end } },
         vertexShader: `
           varying vec2 vEdgePosition;
           void main() {
@@ -2407,13 +2491,14 @@ export class PlannerScene {
         `,
         fragmentShader: `
           uniform float wallLength;
+          uniform float cornerStart; uniform float cornerEnd;
           varying vec2 vEdgePosition;
           void main() {
             float fromWall = 1.0 - smoothstep(0.0, 1.0, vEdgePosition.y);
             float contact = 1.0 - smoothstep(0.0, 0.12, vEdgePosition.y);
             float nearCorner = max(
-              1.0 - smoothstep(0.0, 0.8, vEdgePosition.x),
-              1.0 - smoothstep(0.0, 0.8, wallLength - vEdgePosition.x)
+              (1.0 - smoothstep(0.0, 0.8, vEdgePosition.x)) * cornerStart,
+              (1.0 - smoothstep(0.0, 0.8, wallLength - vEdgePosition.x)) * cornerEnd
             );
             float opacity = fromWall * (0.17 + 0.08 * nearCorner) + 0.08 * contact;
             gl_FragColor = vec4(0.045, 0.045, 0.055, opacity);
@@ -2800,14 +2885,16 @@ export class PlannerScene {
     // Only the explicit Top preset shows the complete wall outline. In Free cam,
     // foreground walls must stay hidden even as the camera approaches top-down.
     const showAllWalls = this.currentCameraView === 'top';
-    const editingWall = this.options.interactiveArchitecture
-      ? snapshot.openings.find((opening) => opening.id === snapshot.selectedOpeningId)?.wallId : null;
+    const editingOpening = this.options.interactiveArchitecture
+      ? snapshot.openings.find((opening) => opening.id === snapshot.selectedOpeningId) : undefined;
+    const editingWalls = new Set(editingOpening ? getRoomWalls(snapshot.room)
+      .filter((wall) => openingsOnWall(snapshot.room, [editingOpening], wall.id).length).map((wall) => wall.id) : []);
     const nextState = new Map<string, boolean>();
 
     for (const wall of getRoomWalls(snapshot.room)) {
       // Reveal the selected aperture even when its wall faces the camera and
       // would normally be cut away. This makes a newly inserted door visible.
-      if (showAllWalls || wall.id === editingWall) {
+      if (showAllWalls || editingWalls.has(wall.id)) {
         nextState.set(wall.id, false);
         continue;
       }
@@ -4945,7 +5032,44 @@ export class PlannerScene {
     if (!opening) return;
     const along = this.openingAlongUnderRay(snapshot, opening);
     if (along == null) return;
-    this.bridge.updateOpening(opening.id, { offset: along + this.openingDragging.grabOffset }, false);
+    let offset = along + this.openingDragging.grabOffset;
+    let wallId = opening.wallId;
+    const walls = getRoomWalls(snapshot.room);
+    let index = walls.findIndex((wall) => wall.id === wallId);
+    if (index >= 0) {
+      const perimeter = walls.reduce((sum, wall) => sum + wall.length, 0);
+      offset = Math.max(-perimeter, Math.min(offset, perimeter + walls[index].length));
+      for (let count = 0; count <= walls.length && (offset < 0 || offset > walls[index].length); count++) {
+        if (offset < 0) { index = (index - 1 + walls.length) % walls.length; offset += walls[index].length; }
+        else { offset -= walls[index].length; index = (index + 1) % walls.length; }
+      }
+      wallId = walls[index].id;
+      if (snapshot.room.shapeKind !== 'circle' && wallId !== opening.wallId && walls[index].length < opening.width + 0.2) return;
+    } else {
+      const physical = getPhysicalWalls(snapshot.room, snapshot.dividers);
+      const current = physical.find((wall) => wall.id === wallId);
+      if (current && (offset < 0 || offset > current.length)) {
+        const junction = offset < 0 ? current.start : current.end;
+        const overshoot = offset < 0 ? -offset : offset - current.length;
+        const joined = physical.filter((wall) => wall.id !== current.id && wall.length >= opening.width + 0.2
+          && (opening.type !== 'window' || !wall.id.startsWith('divider-')))
+          .map((wall) => {
+            const along = wallProjectionDistance(wall, junction);
+            const point = wallPoint(wall, along);
+            return { wall, along, distance: Math.hypot(point.x - junction.x, point.z - junction.z) };
+          }).filter((candidate) => candidate.along >= -0.001 && candidate.along <= candidate.wall.length + 0.001 && candidate.distance < 0.001)
+          .sort((a, b) => Number(b.wall.id.startsWith('divider-')) - Number(a.wall.id.startsWith('divider-')));
+        const next = joined[0];
+        if (next) {
+          wallId = next.wall.id;
+          const projected = this.openingAlongUnderRay(snapshot, { ...opening, wallId });
+          const forward = next.along < next.wall.length / 2;
+          offset = projected != null && Math.abs(projected - next.along) > 0.05
+            ? projected + this.openingDragging.grabOffset : next.along + (forward ? overshoot : -overshoot);
+        }
+      }
+    }
+    this.bridge.updateOpening(opening.id, { wallId, offset }, false);
     // This handler already runs once per frame. Apply the geometry here rather
     // than waiting for the store subscription to schedule another sync frame.
     this.renderFromState();

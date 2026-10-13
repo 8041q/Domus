@@ -1,5 +1,5 @@
 import { createId } from './id';
-import type { RoomShapeKind, RoomState, RoomVertex, RoomWallSegment, Vec2 } from './types';
+import type { RoomOpening, RoomShapeKind, RoomState, RoomVertex, RoomWallSegment, Vec2 } from './types';
 
 const EPS = 1e-6;
 export const MIN_WALL_LENGTH = 0.20;
@@ -11,6 +11,12 @@ export function wallId(start: RoomVertex, end: RoomVertex) {
 export function roomTemplate(kind: Exclude<RoomShapeKind, 'custom'>, width: number, depth: number): RoomVertex[] {
   const w = Math.max(2.2, width);
   const d = Math.max(2.2, depth);
+  if (kind === 'circle') {
+    return Array.from({ length: 32 }, (_, index) => {
+      const angle = index * Math.PI / 16 - Math.PI / 2;
+      return { id: `v${index}`, x: w / 2 + Math.cos(angle) * w / 2, z: w / 2 + Math.sin(angle) * w / 2 };
+    });
+  }
   if (kind === 'angled-corner') {
     const cut = Math.min(w, d) * 0.22;
     return [
@@ -105,6 +111,29 @@ export function scaleRoom(room: RoomState, width: number, depth: number): RoomSt
     x: cx + (v.x - cx) * sx,
     z: cz + (v.z - cz) * sz
   })));
+}
+
+/** Curved apertures span short wall segments, but retain one frame and ID. */
+export function openingsOnWall(room: RoomState, openings: RoomOpening[], wallId: string): RoomOpening[] {
+  if (room.shapeKind !== 'circle' || wallId.startsWith('divider-')) return openings.filter((opening) => opening.wallId === wallId);
+  const walls = getRoomWalls(room);
+  const perimeter = walls.reduce((sum, wall) => sum + wall.length, 0);
+  const starts = new Map<string, number>();
+  let cursor = 0;
+  for (const wall of walls) { starts.set(wall.id, cursor); cursor += wall.length; }
+  const wall = walls.find((wall) => wall.id === wallId);
+  if (!wall) return [];
+  const start = starts.get(wallId)!;
+  return openings.flatMap((opening) => {
+    const anchor = starts.get(opening.wallId);
+    if (anchor == null) return [];
+    const centre = anchor + opening.offset;
+    return [-perimeter, 0, perimeter].flatMap((shift) => {
+      const left = Math.max(start, centre - opening.width / 2 + shift);
+      const right = Math.min(start + wall.length, centre + opening.width / 2 + shift);
+      return right - left > 1e-6 ? [{ ...opening, wallId, offset: (left + right) / 2 - start, width: right - left }] : [];
+    });
+  });
 }
 
 export function getRoomWalls(room: RoomState): RoomWallSegment[] {

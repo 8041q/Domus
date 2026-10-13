@@ -17,6 +17,8 @@ export default function App() {
   const redo = usePlannerStore((s) => s.redo);
   const [canExport, setCanExport] = useState(false);
   const exportAction = useRef<(() => Promise<void>) | null>(null);
+  const pdfAction = useRef<(() => Promise<void>) | null>(null);
+  const registerPdfExport = useCallback((handler: (() => Promise<void>) | null) => { pdfAction.current = handler; }, []);
 
   const registerExport = useCallback((handler: (() => Promise<void>) | null) => {
     exportAction.current = handler;
@@ -64,7 +66,8 @@ export default function App() {
             <Button variant="ghost" size="icon" title="Undo (Ctrl/Cmd+Z)" aria-label="Undo" onClick={undo}><Icon name="undo" /></Button>
             <Button variant="ghost" size="icon" title="Redo (Ctrl/Cmd+Y)" aria-label="Redo" onClick={redo}><Icon name="redo" /></Button>
           </div>
-          <ProjectControls canExport={canExport} onExport={mode === 'plan' ? () => { void exportAction.current?.(); } : undefined} />
+          <ProjectControls canExport={canExport} onExport={mode === 'plan' ? () => { void exportAction.current?.(); } : undefined}
+            onExportPdf={mode === 'plan' ? () => { void pdfAction.current?.(); } : undefined} />
         </div>
       </header>
 
@@ -72,7 +75,7 @@ export default function App() {
         <ViewErrorBoundary key={`${mode}-${buildView}`}>
           {mode === 'build' ? <BuildRoom /> : (
             <Suspense fallback={<div className="mode-loading">Loading room planner…</div>}>
-              <PlanRoom onExportReady={registerExport} />
+              <PlanRoom onExportReady={registerExport} onPdfExportReady={registerPdfExport} />
             </Suspense>
           )}
         </ViewErrorBoundary>

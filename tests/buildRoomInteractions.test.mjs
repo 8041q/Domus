@@ -8,9 +8,71 @@ after(() => vite.close());
 const { FEATURES } = await vite.ssrLoadModule('/src/config/features.ts');
 FEATURES.interiorWalls = true;
 const { createFrameQueue } = await vite.ssrLoadModule('/src/core/frameQueue.ts');
-const { usePlannerStore, getSnapshot } = await vite.ssrLoadModule('/src/store.ts');
+const { usePlannerStore, getSnapshot, parseProjectSnapshot } = await vite.ssrLoadModule('/src/store.ts');
 const { PlannerScene } = await vite.ssrLoadModule('/src/renderer/PlannerScene.ts');
 const { getPhysicalWalls } = await vite.ssrLoadModule('/src/core/spaces.ts');
+const { getRoomWalls, roomBounds, isValidRoom, openingsOnWall } = await vite.ssrLoadModule('/src/core/roomGeometry.ts');
+const { buildRoomPdf, ROOM_PDF_VIEWS } = await vite.ssrLoadModule('/src/core/roomPdf.ts');
+const { wallCornerShading } = await vite.ssrLoadModule('/src/core/wallShading.ts');
+const { roomReportData } = await vite.ssrLoadModule('/src/core/roomReport.ts');
+const { PRODUCTS } = await vite.ssrLoadModule('/src/core/products.ts');
+
+test('circular rooms reject windows and migrate old windows without losing their size or position', () => {
+  usePlannerStore.getState().resetProject(); usePlannerStore.getState().setRoomTemplate('circle');
+  assert.equal(usePlannerStore.getState().addOpening('window'), false);
+  const opening = getSnapshot().openings.find((item) => item.type === 'opening');
+  usePlannerStore.getState().updateOpening(opening.id, { type: 'window', variant: 'single-window' });
+  assert.deepEqual(getSnapshot().openings.find((item) => item.id === opening.id), opening);
+  const legacy = getSnapshot(); legacy.openings.find((item) => item.id === opening.id).type = 'window';
+  legacy.openings.find((item) => item.id === opening.id).variant = 'single-window';
+  assert.deepEqual(parseProjectSnapshot(legacy).openings.find((item) => item.id === opening.id), opening);
+  usePlannerStore.getState().resetProject(); assert.equal(usePlannerStore.getState().addOpening('window'), true);
+});
+
+test('corner shades preserve long rectangular corners and suppress short, circular and straight split seams', () => {
+  usePlannerStore.getState().resetProject();
+  const room = getSnapshot().room;
+  for (const wall of getRoomWalls(room)) assert.deepEqual(wallCornerShading(room, wall), { start: 1, end: 1 });
+  const split = structuredClone(room), a = split.vertices[0], b = split.vertices[1];
+  split.vertices.splice(1, 0, { id: 'split', x: (a.x + b.x) / 2, z: (a.z + b.z) / 2 });
+  const walls = getRoomWalls(split);
+  assert.deepEqual(wallCornerShading(split, walls[0]), { start: 1, end: 0 });
+  assert.deepEqual(wallCornerShading(split, walls[1]), { start: 0, end: 1 });
+  split.vertices[1] = { id: 'split', x: a.x + (b.x - a.x) * 0.1, z: a.z + (b.z - a.z) * 0.1 };
+  assert.deepEqual(wallCornerShading(split, getRoomWalls(split)[0]), { start: 0, end: 0 });
+  usePlannerStore.getState().setRoomTemplate('circle');
+  for (const diameter of [2.2, 6, 20]) {
+    usePlannerStore.getState().updateRoom({ width: diameter });
+    const circular = getSnapshot().room;
+    for (const wall of getRoomWalls(circular)) assert.deepEqual(wallCornerShading(circular, wall), { start: 0, end: 0 });
+  }
+});
+
+test('report groups quantities and separates unplaced furniture using measured model dimensions', () => {
+  usePlannerStore.getState().resetProject(); const snapshot = getSnapshot();
+  snapshot.objects = [{ id: 'a', productId: 'chair', x: 1, z: 1, rotationY: 0 }, { id: 'b', productId: 'chair', x: 2, z: 2, rotationY: 0 }];
+  snapshot.unplacedObjects = [{ id: 'c', productId: 'chair' }];
+  const data = roomReportData(snapshot, PRODUCTS);
+  assert.deepEqual(data.furniture.map((row) => [row.quantity, row.status]), [[2, 'In room'], [1, 'Not placed']]);
+  assert.equal(data.furniture[0].dimensions, '0.50 × 0.56 × 0.83');
+  assert.equal(data.area, snapshot.room.width * snapshot.room.depth);
+  const jpeg = { jpeg: Uint8Array.from([0xff, 0xd8, 0xff, 0xd9]), width: 10, height: 10 };
+  const pdf = buildRoomPdf(Array(5).fill(jpeg), Array(3).fill(jpeg));
+  assert.match(new TextDecoder().decode(pdf), /\/Count 8 /);
+});
+
+test('project details update and undo even when furniture overlaps, and survive shape changes', () => {
+  usePlannerStore.getState().resetProject();
+  const objects = ['a', 'b'].map((id) => ({ id, productId: 'sofa', x: 1.7, z: 1.7, rotationY: 0 }));
+  usePlannerStore.setState({ objects });
+  const details = { company: 'Example Medical', companyContact: '', client: 'Sample Client', clientContact: '', reference: '', preparedBy: '', notes: '' };
+  usePlannerStore.getState().updateProjectDetails(details);
+  assert.deepEqual(getSnapshot().room.projectDetails, details);
+  assert.deepEqual(getSnapshot().objects, objects);
+  usePlannerStore.getState().undo(); assert.equal(getSnapshot().room.projectDetails, undefined);
+  usePlannerStore.getState().redo(); assert.deepEqual(getSnapshot().room.projectDetails, details);
+  usePlannerStore.getState().setRoomTemplate('circle'); assert.deepEqual(getSnapshot().room.projectDetails, details);
+});
 
 function fakeFrames(apply) {
   const callbacks = new Map();
@@ -18,6 +80,92 @@ function fakeFrames(apply) {
   const queue = createFrameQueue(apply, (callback) => { callbacks.set(++id, callback); return id; }, (id) => callbacks.delete(id));
   return { queue, callbacks, tick: () => { const batch = [...callbacks.values()]; callbacks.clear(); batch.forEach((callback) => callback(0)); } };
 }
+
+test('circle presets resize uniformly, retain real-size apertures across short sections and undo a size gesture once', () => {
+  const store = usePlannerStore;
+  store.getState().resetProject();
+  store.getState().setRoomTemplate('circle');
+  const before = getSnapshot();
+  const sizes = before.openings.map((opening) => opening.width);
+  for (const diameter of [2.2, 3, 8, 20]) {
+    store.getState().updateRoom({ width: diameter }, false);
+    const snapshot = getSnapshot();
+    assert.ok(Math.abs(snapshot.room.width - diameter) < 1e-8);
+    assert.ok(Math.abs(snapshot.room.depth - diameter) < 1e-8);
+    assert.equal(snapshot.room.shapeKind, 'circle');
+    assert.equal(isValidRoom(snapshot.room.vertices), true);
+    const bounds = roomBounds(snapshot.room.vertices);
+    for (const vertex of snapshot.room.vertices) assert.ok(Math.abs(Math.hypot(vertex.x - (bounds.minX + bounds.maxX) / 2,
+      vertex.z - (bounds.minZ + bounds.maxZ) / 2) - diameter / 2) < 1e-7);
+    assert.deepEqual(snapshot.openings.map((opening) => opening.width), sizes);
+    for (const opening of snapshot.openings) {
+      const pieces = getRoomWalls(snapshot.room).flatMap((wall) => openingsOnWall(snapshot.room, [opening], wall.id));
+      assert.ok(Math.abs(pieces.reduce((sum, piece) => sum + piece.width, 0) - opening.width) < 1e-7);
+    }
+  }
+  store.getState().commitSnapshot(before);
+  store.getState().undo(); assert.deepEqual(JSON.parse(JSON.stringify(getSnapshot())), JSON.parse(JSON.stringify(before)));
+  store.getState().redo(); assert.ok(Math.abs(store.getState().room.width - 20) < 1e-7);
+});
+
+test('dragging an aperture across either end transfers it to the adjacent wall with a single undo', () => {
+  for (const direction of [-1, 1]) {
+    usePlannerStore.getState().resetProject();
+    const before = getSnapshot(), opening = before.openings[0];
+    const walls = getRoomWalls(before.room), wall = walls.find((wall) => wall.id === opening.wallId);
+    const along = direction > 0 ? wall.length + 0.5 : -0.5;
+    const point = { x: wall.start.x + wall.tangent.x * along, z: wall.start.z + wall.tangent.z * along };
+    const scene = Object.create(PlannerScene.prototype);
+    Object.assign(scene, { bridge: { getSnapshot: () => getSnapshot(), updateOpening: (id, patch) => usePlannerStore.getState().updateOpening(id, patch, false),
+      commitDrag: (saved) => usePlannerStore.getState().commitSnapshot(saved) },
+      openingDragging: { id: opening.id, before, grabOffset: 0, pointerId: 7 }, controls: { enabled: false },
+      renderer: { domElement: { style: {}, hasPointerCapture: () => false } },
+      raycaster: new THREE.Raycaster(new THREE.Vector3(point.x + wall.inward.x, 1.2, point.z + wall.inward.z),
+        new THREE.Vector3(-wall.inward.x, 0, -wall.inward.z)), setPointer: () => {}, renderFromState: () => {} });
+    scene.openingMoves = fakeFrames((event) => scene.moveOpening(event)).queue;
+    scene.moveOpening({ pointerId: 7 }); scene.finishOpeningDrag();
+    const moved = getSnapshot().openings.find((candidate) => candidate.id === opening.id);
+    assert.equal(moved.wallId, walls[(wall.index + direction + walls.length) % walls.length].id);
+    for (const field of ['width', 'height', 'sillHeight', 'variant']) assert.equal(moved[field], opening[field]);
+    usePlannerStore.getState().undo(); assert.deepEqual(JSON.parse(JSON.stringify(getSnapshot())), JSON.parse(JSON.stringify(before)));
+  }
+});
+
+test('PDF embeds five pages with byte-accurate cross references and rejects incomplete exports', () => {
+  assert.deepEqual(ROOM_PDF_VIEWS, ['top', 'front', 'right', 'back', 'left']);
+  const images = ROOM_PDF_VIEWS.map(() => ({ jpeg: new Uint8Array([255, 216, 255, 217]), width: 1800, height: 1273 }));
+  const pdf = buildRoomPdf(images), text = Buffer.from(pdf).toString('latin1');
+  assert.equal((text.match(/\/Type \/Page\b/g) ?? []).length, 5);
+  const start = Number(text.match(/startxref\n(\d+)/)[1]);
+  assert.equal(text.slice(start, start + 4), 'xref');
+  const entries = text.slice(start).split('\n').slice(3, 20);
+  entries.forEach((entry, index) => assert.ok(text.slice(Number(entry.slice(0, 10))).startsWith(`${index + 1} 0 obj`)));
+  assert.throws(() => buildRoomPdf(images.slice(1)), /five/);
+});
+
+test('a door can continue from an interior-wall endpoint onto its joined interior wall', () => {
+  const store = usePlannerStore;
+  store.getState().resetProject();
+  assert.equal(store.getState().addDivider('wall', { kind: 'perimeter', id: 'wall-v0-v1', t: 0.5 },
+    { kind: 'perimeter', id: 'wall-v2-v3', t: 0.5 }), true);
+  const first = store.getState().dividers[0];
+  assert.equal(store.getState().addDivider('wall', { kind: 'perimeter', id: 'wall-v3-v0', t: 0.5 },
+    { kind: 'divider', id: first.id, t: 0.5 }), true);
+  const second = store.getState().dividers[1];
+  store.getState().selectDivider(second.id); assert.equal(store.getState().addOpening('door'), true);
+  const opening = store.getState().openings.find((opening) => opening.id === store.getState().selectedOpeningId);
+  const snapshot = getSnapshot(), wall = getPhysicalWalls(snapshot.room, snapshot.dividers).find((wall) => wall.id === second.id);
+  const point = { x: wall.end.x + wall.tangent.x * 0.6, z: wall.end.z + wall.tangent.z * 0.6 };
+  const scene = Object.create(PlannerScene.prototype);
+  Object.assign(scene, { bridge: { getSnapshot: () => getSnapshot(), updateOpening: (id, patch) => store.getState().updateOpening(id, patch, false) },
+    openingDragging: { id: opening.id, before: snapshot, grabOffset: 0, pointerId: 7 },
+    raycaster: new THREE.Raycaster(new THREE.Vector3(point.x + wall.inward.x, 1.2, point.z + wall.inward.z),
+      new THREE.Vector3(-wall.inward.x, 0, -wall.inward.z)), setPointer: () => {}, renderFromState: () => {} });
+  scene.moveOpening({ pointerId: 7 });
+  const moved = store.getState().openings.find((candidate) => candidate.id === opening.id);
+  assert.equal(moved.wallId, first.id);
+  assert.equal(moved.width, opening.width);
+});
 
 test('corner pointer bursts apply once per frame and flush the final position before history', () => {
   const store = usePlannerStore;

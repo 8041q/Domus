@@ -4,6 +4,7 @@ import { PlannerScene } from './renderer/PlannerScene';
 import type { PlanCameraView } from './core/types';
 import { usePlannerStore } from './store';
 import { subscribeProductCatalogue } from './core/products';
+import { roomProjects } from './roomProjects';
 
 export function Viewport3D({
   furniture = true,
@@ -12,7 +13,8 @@ export function Viewport3D({
   sunRays = true,
   view,
   resetViewRequest = 0,
-  onExportReady
+  onExportReady,
+  onPdfExportReady
 }: {
   furniture?: boolean;
   interactive?: boolean;
@@ -21,6 +23,7 @@ export function Viewport3D({
   view?: PlanCameraView;
   resetViewRequest?: number;
   onExportReady?: (handler: (() => Promise<void>) | null) => void;
+  onPdfExportReady?: (handler: (() => Promise<void>) | null) => void;
 }) {
   const [failure, setFailure] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -29,6 +32,14 @@ export function Viewport3D({
   const sceneRef = useRef<PlannerScene | null>(null);
   const internallyChangedViewRef = useRef<PlanCameraView | null>(null);
   const exportingRef = useRef(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
+  const exportPDF = async () => {
+    if (!sceneRef.current || exportingRef.current) return;
+    exportingRef.current = true; setExportingPdf(true);
+    try { await sceneRef.current.exportPDF(roomProjects.getState().name); }
+    catch (error) { window.alert(error instanceof Error ? error.message : 'Could not export the PDF.'); }
+    finally { exportingRef.current = false; setExportingPdf(false); }
+  };
 
   const exportGLB = async () => {
     if (!sceneRef.current || exportingRef.current) return;
@@ -45,8 +56,9 @@ export function Viewport3D({
 
   useEffect(() => {
     onExportReady?.(failure ? null : exportGLB);
-    return () => onExportReady?.(null);
-  }, [onExportReady, failure]);
+    onPdfExportReady?.(failure ? null : exportPDF);
+    return () => { onExportReady?.(null); onPdfExportReady?.(null); };
+  }, [onExportReady, onPdfExportReady, failure]);
 
   useEffect(() => {
     if (!ref.current) return;
@@ -65,6 +77,7 @@ export function Viewport3D({
       scene?.dispose();
       sceneRef.current = null;
       onExportReady?.(null);
+      onPdfExportReady?.(null);
       setFailure(true);
     };
     try {
@@ -177,6 +190,7 @@ export function Viewport3D({
 
   return (
     <div className="viewport-stage">
+      {exportingPdf && <div className="model-load-status" role="status">Preparing five room snapshots…</div>}
       <div className="viewport" ref={ref} hidden={failure} />
       {!failure && (modelStatus.loading || modelStatus.error) && <div className="model-load-status" role={modelStatus.error ? 'alert' : 'status'}>
         {modelStatus.error ? <>{modelStatus.error} <button type="button" onClick={() => sceneRef.current?.retryProductModels()}>Retry model</button></>

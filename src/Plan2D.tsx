@@ -311,7 +311,7 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
       viewRef.current = null;
       setResizeTick((value) => value + 1);
     }
-  }, [room.shapeKind]);
+  }, [room.shapeKind, room.shapeKind === 'circle' ? room.width : null]);
 
   useEffect(() => {
     if (!wallLabelEdit) return;
@@ -595,7 +595,7 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
       ctx.restore();
     }
 
-    if (purpose === 'build') {
+    if (purpose === 'build' && room.shapeKind !== 'circle') {
       // Measurements start outside their wall. Dense areas are solved in screen
       // space: every legal horizontal, vertical and diagonal candidate is scored by
       // travel distance, while label/angle overlap is a hard prohibition. The search
@@ -979,6 +979,16 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
         ctx.restore();
       }
     }
+    if (purpose === 'build' && room.shapeKind === 'circle') {
+      const bounds = roomBounds(room.vertices);
+      const left = toPx(bounds.minX, (bounds.minZ + bounds.maxZ) / 2);
+      const right = toPx(bounds.maxX, (bounds.minZ + bounds.maxZ) / 2);
+      ctx.save(); ctx.strokeStyle = '#71717a'; ctx.lineWidth = 1; ctx.setLineDash([5, 5]);
+      ctx.beginPath(); ctx.moveTo(left.x, left.y); ctx.lineTo(right.x, right.y); ctx.stroke();
+      ctx.setLineDash([]); ctx.fillStyle = '#52525b'; ctx.font = '600 12px system-ui'; ctx.textAlign = 'center';
+      ctx.fillText(`Diameter ${formatLength(room.width, measurementSystem)}`, (left.x + right.x) / 2, left.y - 12);
+      ctx.restore();
+    }
   }, [activeSnap, drag, hover, measurementSystem, objects, openings, dividers, spaces, purpose, resizeTick, room, selected, selectedId, selectedOpeningId, selectedWallId, selectedDividerId, selectedSpaceId, showClearance, drawStart, drawHover, dividerTool, catalogueVersion]);
 
   const hitWallLabel = (px: number, py: number) => {
@@ -1099,6 +1109,11 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
     };
 
     if (purpose === 'build') {
+      if (room.shapeKind === 'circle' && !dividerTool) {
+        setDrag({ type: 'pan', view, lastX: px, lastY: py });
+        e.currentTarget.setPointerCapture(e.pointerId);
+        return;
+      }
       if (FEATURES.interiorWalls && dividerTool) {
         const target = closestBoundaryAnchor(room, dividers, { x: (px - ox) / scale, z: (py - oz) / scale }, 16 / scale);
         if (!target) { setDividerError('Start and end each divider on an existing boundary.'); return; }
@@ -1336,9 +1351,11 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
       )}
       {purpose === 'build' && (
         <div className="plan-help" aria-hidden="true">
-          <span><i className="help-dot corner" /> Drag a corner</span>
-          <span><i className="help-line" /> Drag a wall · corners can angle</span>
-          <span><i className="help-plus">+</i> Split a wall</span>
+          {room.shapeKind === 'circle' ? <span>Use Diameter to resize the circular room</span> : <>
+            <span><i className="help-dot corner" /> Drag a corner</span>
+            <span><i className="help-line" /> Drag a wall · corners can angle</span>
+            <span><i className="help-plus">+</i> Split a wall</span>
+          </>}
           <span>Drag empty space to pan · Use zoom to see more space</span>
           <span>{measurementSystem === 'metric' ? '50 cm guide cells · 5 cm snap · Shift for 1 cm' : '1 ft guide cells · 2 in snap · Shift for ½ in'}</span>
         </div>

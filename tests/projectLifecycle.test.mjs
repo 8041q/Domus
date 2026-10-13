@@ -23,15 +23,31 @@ function harness(values = new Map()) {
   return { session, values, storage, get: () => snapshot, edit: (height = 2.9) => { snapshot.room.height = height; session.changed(); }, block: () => { blocked = true; } };
 }
 
-test('new rooms start empty in every supported shape', () => {
-  for (const shape of ['rectangle', 'angled-corner', 'l-shape', 'recess']) {
+test('new presets include permitted apertures and no furniture or divisions', () => {
+  for (const shape of ['rectangle', 'circle', 'angled-corner', 'l-shape', 'recess']) {
     const h = harness(); h.session.newRoom('  Office  ', shape);
     assert.equal(h.session.getState().name, 'Office');
     assert.equal(h.session.getState().dirty, true);
     assert.equal(h.get().room.shapeKind, shape);
-    for (const key of ['objects', 'openings', 'dividers', 'unplacedObjects']) assert.equal(h.get()[key].length, 0);
+    for (const key of ['objects', 'dividers', 'unplacedObjects']) assert.equal(h.get()[key].length, 0);
+    assert.deepEqual(h.get().openings.map((opening) => opening.type).sort(), shape === 'circle' ? ['door', 'opening'] : ['door', 'window']);
     assert.ok(parseProjectSnapshot(h.get()));
   }
+});
+
+test('project details persist through save, recovery and draft import and are cleared for new rooms', () => {
+  const h = harness();
+  const details = { company: 'Example Medical', companyContact: 'info@example.test', client: 'Sample Client', clientContact: '', reference: 'DEMO-01', preparedBy: 'Sample Designer', notes: 'Review accessibility.' };
+  h.get().room.projectDetails = details; h.session.changed();
+  const saved = h.session.save('Report room');
+  const recovered = harness(h.values); recovered.session.open(saved.id);
+  assert.deepEqual(recovered.get().room.projectDetails, details);
+  const draft = h.session.exportFile();
+  recovered.session.importRoom(recovered.session.readFile(draft, 'Draft'));
+  assert.deepEqual(recovered.get().room.projectDetails, details);
+  const invalid = structuredClone(h.get()); invalid.room.projectDetails.company = { invalid: true };
+  assert.equal(parseProjectSnapshot(invalid), null);
+  recovered.session.newRoom('Fresh', 'circle'); assert.equal(recovered.get().room.projectDetails, undefined);
 });
 
 test('named rooms save independently, updates reuse IDs, and Save as makes a copy', () => {

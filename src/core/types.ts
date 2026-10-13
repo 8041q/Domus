@@ -28,7 +28,7 @@ export type FloorFinish =
   | 'terrazzo-005'
   | 'terrazzo-007'
   | 'wood-floor-020';
-export type RoomShapeKind = 'rectangle' | 'angled-corner' | 'l-shape' | 'recess' | 'custom';
+export type RoomShapeKind = 'rectangle' | 'circle' | 'angled-corner' | 'l-shape' | 'recess' | 'custom';
 export type SunStylePreset = 'paired-suns' | 'cinematic-shadows';
 export type BaseboardStyle = 'flat' | 'flush' | 'rounded' | 'stepped' | 'sculpted' | 'sculpted-tall' | 'floating' | 'flash-coving';
 export type BaseboardMaterial = 'paint' | 'materials';
@@ -47,7 +47,18 @@ export interface RoomVertex extends Vec2 {
   id: string;
 }
 
+export interface ProjectDetails {
+  company: string;
+  companyContact: string;
+  client: string;
+  clientContact: string;
+  reference: string;
+  preparedBy: string;
+  notes: string;
+}
+
 export interface RoomState {
+  projectDetails?: ProjectDetails;
   /** Bounding width in metres. Kept in sync with vertices. */
   width: number;
   /** Bounding depth in metres. Kept in sync with vertices. */

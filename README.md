@@ -19,7 +19,7 @@ runs with Vite during local development and preview.
 - New spaces inherit their containing space’s finishes automatically; place doors in interior walls.
 - Set room height in 2D and work in metric or imperial units.
 - Add, position, resize, and restyle windows, doors, and custom openings.
-- Inspect the architecture in a neutral 3D preview. Direct sun rays are
+- Inspect the architecture in a neutral 3D preview. Direct sun light is
   intentionally disabled in this workspace.
 
 ### Plan Room
@@ -114,13 +114,15 @@ item opens its numeric controls for precise edits.
 
 Use **Project** in the header to manage rooms:
 
-- **New room** creates an empty named room with your chosen starting shape.
-- **Save room** stores the current named room; **Save as** keeps a separate copy.
-  Ctrl/Cmd+S saves, and Ctrl/Cmd+Shift+S opens Save as.
+- **New room** creates a named preset with a door and window. Circle rooms have
+  a diameter input and slider; resizing preserves their circular shape and opening sizes.
+- **Save as** saves the current room under the entered name. Keep its name to
+  update it, or enter a new name to keep a separate copy. Ctrl/Cmd+S opens this dialog;
+  Ctrl/Cmd+Shift+S suggests a copy name.
 - **Open room** lists all rooms saved in this browser, with their last save time.
   Each row has a delete icon with confirmation. Deleting the active saved room
   keeps your working layout open as an unsaved room.
-- **Download room file** and **Import room file** provide portable `.domus.json`
+- **Download draft** and **Import Draft** provide portable `.domus.json`
   backups. Imported rooms open as unsaved copies; legacy snapshot JSON also works.
 
 New, Open and Import ask you to Save, Discard or Cancel when the current room has
@@ -136,10 +138,28 @@ Explicit named saves are separate from recovery. Old single-slot saves migrate t
 Clearing site data removes saved rooms and recovery drafts. Download a room file
 for a lasting backup; cloud backup is not provided.
 
-**Project → Export GLB** is available in Plan Room. It exports the complete room rather
+**Project → Export Room** is available in Plan Room. It downloads a GLB of the complete room rather
 than the current cutaway: walls, floor, baseboards, frames, ceiling, and
 furniture are grouped by semantic category. Cameras, selection outlines,
 measurements, and other editing helpers are excluded.
+
+**Project → Project details** edits optional company/client names and contacts,
+project reference, preparer and notes. These details are kept with saves,
+recovery drafts and draft imports/exports; use Save as to persist changes.
+
+**Project → Export to PDF** starts with a room summary, project details,
+furniture quantities and measured dimensions, opening sizes and notes. Long lists
+continue on extra pages; unplaced furniture is listed separately. It then includes
+five landscape room views: Top, Front, Right, Back and Left, with loaded furniture and
+finishes. Editing helpers and selection outlines are excluded, and the current
+camera view and selection are restored afterward. Openings can be dragged past
+wall ends in Build Room 3D to continue onto adjacent perimeter walls or joined
+interior walls. A complete drag is one undo step.
+
+Circular rooms support doors and openings only. Older circular-room windows
+become openings while retaining their dimensions and position. Corner shading
+fades on short walls (0.9–1.5 m) and shallow turns (20–60°), avoiding circle seams
+and false corners on straight walls with added breakpoints.
 
 To prepare your own furniture models, use the [Blender product metadata add-on](docs/BLENDER_METADATA.md).
 It works with complete product collections, saves measured geometry separately

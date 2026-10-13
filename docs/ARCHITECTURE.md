@@ -251,7 +251,7 @@ Plan Room can additionally project sunlight through glazed openings:
 
 Invisible exterior masks block each sun everywhere except exact glazing areas.
 Their perimeter guards account for soft-shadow filtering while avoiding fins
-that could pre-shadow glazing on an adjacent wall. Disabling sun rays disposes
+that could pre-shadow glazing on an adjacent wall. Disabling sun light disposes
 the complete rig and returns to the fallback lighting path. The selected style,
 angles, and enablement are saved with the room.
 

@@ -266,7 +266,7 @@ function DesignPanel({ onClose }: { onClose: () => void }) {
       </div>
       {hasWindow && <div className="view-options-section sun-angle-section">
         <strong>Window and door sun</strong>
-        <label><input type="checkbox" checked={lighting.sunRaysEnabled} onChange={(e) => setRoomLighting({ sunRaysEnabled: e.target.checked })} /><span>Sun rays</span></label>
+        <label><input type="checkbox" checked={lighting.sunRaysEnabled} onChange={(e) => setRoomLighting({ sunRaysEnabled: e.target.checked })} /><span>Sun Light</span></label>
         <label>
           <span>Sun style</span>
           <select value={lighting.sunStylePreset} disabled={!lighting.sunRaysEnabled} onChange={(e) => setRoomLighting({ sunStylePreset: e.target.value as SunStylePreset })}>
@@ -394,7 +394,10 @@ const ProductCatalog = memo(function ProductCatalog() {
   );
 });
 
-export function PlanRoom({ onExportReady }: { onExportReady?: (handler: (() => Promise<void>) | null) => void }) {
+export function PlanRoom({ onExportReady, onPdfExportReady }: {
+  onExportReady?: (handler: (() => Promise<void>) | null) => void;
+  onPdfExportReady?: (handler: (() => Promise<void>) | null) => void;
+}) {
   const [resetViewRequest, setResetViewRequest] = useState(0);
   const [showFinishes, setShowFinishes] = useState(false);
   const [showViewOptions, setShowViewOptions] = useState(false);
@@ -477,7 +480,7 @@ export function PlanRoom({ onExportReady }: { onExportReady?: (handler: (() => P
           </div>
 
           <Suspense fallback={<div className="viewport-loading">Loading 3D room…</div>}>
-            <Viewport3D furniture interactive sunRays={sunRaysEnabled} view={planView} resetViewRequest={resetViewRequest} onExportReady={onExportReady} />
+            <Viewport3D furniture interactive sunRays={sunRaysEnabled} view={planView} resetViewRequest={resetViewRequest} onExportReady={onExportReady} onPdfExportReady={onPdfExportReady} />
           </Suspense>
           {FEATURES.aiExperiment && showAi && <Suspense fallback={<div className="ai-panel-loading">Loading AI assistant…</div>}><AIExperimentPanel onClose={() => setShowAi(false)} /></Suspense>}
           {showFinishes && <FinishesPanel onClose={() => setShowFinishes(false)} />}
