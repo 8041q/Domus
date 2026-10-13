@@ -6,7 +6,7 @@ In Blender 4.2 or newer, open
 **Edit → Preferences → Add-ons → Install from Disk** and select
 [`blender_addon/domus_metadata_addon.zip`](../blender_addon/domus_metadata_addon.zip).
 Leave **Overwrite** checked and select **Enable on Install**, or enable the new
-**Domus Product Metadata** entry after installation. Version 0.4 automatically
+**Domus Product Metadata** entry after installation. Version 0.4.1 automatically
 disables the legacy single-file/v0.3 package and migrates the existing inputs,
 including category names, without changing your saved metadata or model parts.
 You do not need to disable or uninstall the previous version first.
@@ -54,6 +54,31 @@ The add-on creates a small **Domus Metadata** Empty inside the chosen collection
 to carry them; it does not reparent the product parts. The export includes this
 Empty automatically. Selection is prepared internally by **Export Product GLB**;
 there is no separate Select Product for Export button.
+
+### Materials and transparency
+
+The add-on exports node materials and embeds their image textures in the GLB.
+Ordinary Principled BSDF materials retain their authored colours, roughness,
+metalness and supported material extensions.
+
+Version 0.4.1 also prepares transparent emission decals automatically. It recognises
+an Image Texture whose **Color** drives an **Emission** shader and whose **Alpha**
+drives a **Mix Shader**, with a white **Transparent BSDF** in its first shader input
+and Emission in its second. This includes the icon plane in the original C8c bed.
+Blender's native exporter drops that graph's transparency; the add-on supplies an
+equivalent Principled material only during export, preserving emission strength,
+alpha, UV mapping and sidedness. Source nodes, materials and shared meshes are
+restored even if export fails or is cancelled. Re-export existing GLBs to receive
+the correction; the add-on does not rewrite source `.blend` files.
+
+This is a conversion for that connected shader pattern, not general shader baking.
+It does not assume that every RGBA texture should be transparent. Other shader
+graphs still follow Blender's native glTF support.
+
+Domus adds a subtle neutral reflection environment to imported PBR materials.
+Furniture still responds to the room lights and shadows; the paired-suns preset
+uses its existing environment instead. Blender Material Preview uses its own HDRI
+and colour-management settings, so the room view will not be an exact preview match.
 
 ## Display size and actual size
 
@@ -149,3 +174,12 @@ The check covers multipart and nested collections, required fields, display-size
 preservation, automatic geometry/colliders, modifiers, selected-only exports,
 non-default scene units, and restoration of source transforms. It has been run
 successfully with Blender 4.5 and 5.2.
+
+Material export and restoration checks:
+
+```bash
+blender -b --factory-startup --python-exit-code 1 --python blender_addon/test_material_export.py
+```
+
+Append `-- --source-blend /path/to/C8c.blend` to also check the original C8c decal
+material without changing or saving its source file.

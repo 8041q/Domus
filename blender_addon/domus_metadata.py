@@ -1,7 +1,7 @@
 """Collection-based product metadata for Blender's built-in GLB exporter."""
 
 bl_info = {
-    "name": "Domus Product Metadata", "author": "Domus", "version": (0, 4, 0),
+    "name": "Domus Product Metadata", "author": "Domus", "version": (0, 4, 1),
     "blender": (4, 2, 0), "location": "View3D > Sidebar > Domus",
     "description": "Prepare a complete product collection for the Domus catalogue", "category": "Object",
 }
@@ -12,6 +12,7 @@ import ast
 import hashlib
 import importlib
 import sys
+from contextlib import contextmanager
 from types import ModuleType
 from pathlib import Path
 
@@ -284,6 +285,85 @@ def select_export_objects(context, target):
     context.view_layer.objects.active = metadata_root(target)
 
 
+def transparent_emission_nodes(material):
+    """Recognize the supported image-alpha / transparent / emission graph only."""
+    tree = material.node_tree
+    if not tree:
+        return None
+    output = next((node for node in tree.nodes if node.type == "OUTPUT_MATERIAL" and node.is_active_output), None)
+    if not output or not output.inputs["Surface"].is_linked:
+        return None
+    mix = output.inputs["Surface"].links[0].from_node
+    if mix.type != "MIX_SHADER" or not all(socket.is_linked for socket in mix.inputs[:3]):
+        return None
+    transparent, emission = (mix.inputs[index].links[0].from_node for index in (1, 2))
+    alpha = mix.inputs[0].links[0].from_socket
+    if transparent.type != "BSDF_TRANSPARENT" or emission.type != "EMISSION":
+        return None
+    color = transparent.inputs["Color"]
+    if color.is_linked or any(abs(channel - 1) > 1e-6 for channel in color.default_value):
+        return None
+    if alpha.node.type != "TEX_IMAGE" or alpha.name != "Alpha" or not alpha.node.image:
+        return None
+    emission_color = emission.inputs["Color"]
+    if not emission_color.is_linked or emission_color.links[0].from_socket != alpha.node.outputs["Color"]:
+        return None
+    # Textured/animated strengths require baking or animation support outside this repair.
+    if emission.inputs["Strength"].is_linked or tree.animation_data:
+        return None
+    return output, emission, alpha.node
+
+
+@contextmanager
+def prepared_export_materials(objects):
+    """Use export-only copies; object overrides never alter shared mesh slots."""
+    assignments, copies = [], {}
+    try:
+        for obj in objects:
+            for index, slot in enumerate(obj.material_slots):
+                original = slot.material
+                if not original:
+                    continue
+                nodes = transparent_emission_nodes(original)
+                if nodes is None:
+                    continue
+                if original not in copies:
+                    temporary = original.copy()
+                    copies[original] = temporary
+                    output, emission, texture = (temporary.node_tree.nodes[node.name] for node in nodes)
+                    tree = temporary.node_tree
+                    principled = tree.nodes.new("ShaderNodeBsdfPrincipled")
+                    principled.inputs["Base Color"].default_value = (0, 0, 0, 1)
+                    principled.inputs["Metallic"].default_value = 0
+                    principled.inputs["Roughness"].default_value = 1
+                    principled.inputs["Specular IOR Level"].default_value = 0
+                    principled.inputs["Emission Strength"].default_value = emission.inputs["Strength"].default_value
+                    tree.links.new(texture.outputs["Color"], principled.inputs["Emission Color"])
+                    tree.links.new(texture.outputs["Alpha"], principled.inputs["Alpha"])
+                    tree.links.new(principled.outputs["BSDF"], output.inputs["Surface"])
+                    # The old Emission must not remain in the node tree: the native
+                    # exporter also searches nodes by type when gathering emission.
+                    tree.nodes.remove(emission)
+                original_link = slot.link
+                slot.link = "OBJECT"
+                assignments.append((obj, index, original_link, slot.material))
+                slot.material = copies[original]
+        yield
+    finally:
+        for obj, index, link, material in reversed(assignments):
+            slot = obj.material_slots[index]
+            slot.material = material
+            slot.link = link
+        for material in copies.values():
+            bpy.data.materials.remove(material)
+
+
+def export_selected_glb(filepath):
+    return bpy.ops.export_scene.gltf(filepath=filepath, export_format="GLB", export_extras=True,
+                                     export_materials="EXPORT", export_image_format="AUTO",
+                                     use_selection=True, export_apply=True, export_cameras=False, export_lights=False)
+
+
 class DOMUS_OT_export_product(Operator, ExportHelper):
     bl_idname = "domus.export_product"
     bl_label = "Export Product GLB"
@@ -319,8 +399,8 @@ class DOMUS_OT_export_product(Operator, ExportHelper):
             wrapper.scale = (factor, factor, factor)
             wrapper.select_set(True)
             context.view_layer.update()
-            result = bpy.ops.export_scene.gltf(filepath=self.filepath, export_format="GLB", export_extras=True,
-                                               use_selection=True, export_apply=True, export_cameras=False, export_lights=False)
+            with prepared_export_materials(objects):
+                result = export_selected_glb(self.filepath)
             if result != {"FINISHED"}:
                 return {"CANCELLED"}
         except Exception as error:

@@ -56,7 +56,7 @@ with TemporaryDirectory(prefix="domus-addon-upgrade-", dir=directory) as tempora
             # The previous collection-based package used these same classes,
             # with only unconditional register/unregister and no update watcher.
             source = (directory / "domus_metadata.py").read_text().split("PROPERTIES =")[0]
-            source = source.replace('"version": (0, 4, 0)', '"version": (0, 3, 0)')
+            source = source.replace('"version": (0, 4, 1)', '"version": (0, 3, 0)')
             source += '''
 def register():
     for cls in CLASSES: bpy.utils.register_class(cls)
@@ -114,12 +114,12 @@ def unregister():
     update_zip = root / "domus_metadata_addon.zip"
     with ZipFile(update_zip, "w") as archive:
         archive.writestr("domus_product_metadata/", "")
-        source = (directory / "domus_metadata.py").read_text().replace('"version": (0, 4, 0)', '"version": (0, 4, 1)')
+        source = (directory / "domus_metadata.py").read_text().replace('"version": (0, 4, 1)', '"version": (0, 4, 2)')
         archive.writestr("domus_product_metadata/__init__.py", source)
         archive.write(directory / "catalogue_schema.json", "domus_product_metadata/catalogue_schema.json")
     assert bpy.ops.preferences.addon_install(filepath=str(update_zip), overwrite=True) == {"FINISHED"}
     assert module.check_for_update() is None
-    assert module.bl_info["version"] == (0, 4, 1)
+    assert module.bl_info["version"] == (0, 4, 2)
     assert module.__addon_enabled__
     assert bpy.context.scene.domus_product_source.collection == collection
     assert collection.domus_metadata.name == "Collection fields stay"

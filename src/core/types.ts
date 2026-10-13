@@ -54,6 +54,10 @@ export interface ProjectDetails {
   clientContact: string;
   reference: string;
   preparedBy: string;
+  revision?: string;
+  status?: string;
+  roomPurpose?: string;
+  location?: string;
   notes: string;
 }
 

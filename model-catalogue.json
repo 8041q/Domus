@@ -4,31 +4,36 @@
     {
       "id": "model-7f052e07-718c-44f9-baaf-0e06af3439a4",
       "file": "C8c.glb",
-      "fingerprint": "75cd8d447817fbc706263cf9e771c0d71690714999c33bf9b0c78d6d60e0bc52",
-      "stamp": "146057208:1791818649564.4666",
+      "fingerprint": "415758b0bb8034032f6ed225a813e64a811c33da568489ddb9222a2f634fea23",
+      "stamp": "146092008:1791899418272.1064",
       "product": {
         "id": "model-7f052e07-718c-44f9-baaf-0e06af3439a4",
-        "name": "c8c",
-        "category": "Others",
-        "width": 1.1210659509842127,
-        "depth": 2.4801304895863634,
+        "name": "C8c",
+        "category": "Hospital Bed",
+        "width": 1.1210659514009929,
+        "depth": 2.4801304906262542,
         "height": 0.8389721843931622,
         "available": true,
+        "displayDimensions": {
+          "width": 995,
+          "depth": 2180,
+          "height": 850
+        },
         "collision": true,
         "wallAffinity": false,
         "collisionFootprint": {
-          "width": 1.1210659509842127,
-          "depth": 2.4801304895863634
+          "width": 1.1210659514009929,
+          "depth": 2.4801304906262542
         },
         "clearance": {
           "front": 0,
           "back": 0,
           "sides": 0
         },
-        "priceLabel": "1000",
+        "priceLabel": "",
         "swatch": "#000000",
         "model": {
-          "url": "/models/C8c.glb?v=75cd8d447817fbc7"
+          "url": "/models/C8c.glb?v=415758b0bb803403"
         }
       },
       "aliases": [

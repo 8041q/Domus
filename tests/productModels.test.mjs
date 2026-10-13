@@ -57,6 +57,105 @@ test('failed GLBs can be retried and empty GLBs are rejected', async () => {
   empty.dispose();
 });
 
+test('viewport environments follow late loads and mode switches without changing authored PBR values', async () => {
+  const source = asset();
+  const material = source.material;
+  material.roughness = .17;
+  material.metalness = .6;
+  material.envMapIntensity = .9;
+  let resolve;
+  const library = new ProductModelLibrary(() => new Promise(done => { resolve = done; }));
+  const environment = new THREE.Texture();
+  const loading = library.loadModel('/environment.glb');
+  library.setEnvironment(environment);
+  resolve(source.scene);
+  const template = await loading;
+  const instance = library.instantiate(template);
+  assert.equal(instance.children[0].children[0].material, material);
+  assert.equal(material.envMap, environment);
+  assert.equal(material.envMapIntensity, .28);
+  assert.equal(material.roughness, .17);
+  assert.equal(material.metalness, .6);
+  const exported = library.cloneForExport(material);
+  assert.equal(exported.envMap, null);
+  assert.equal(exported.envMapIntensity, .9);
+  assert.equal(material.envMap, environment, 'export must not modify the viewport material');
+  library.setEnvironment(null);
+  assert.equal(material.envMap, null, 'paired suns can use the scene environment');
+  assert.equal(material.envMapIntensity, .9);
+  library.setEnvironment(environment);
+  assert.equal(material.envMap, environment);
+  exported.dispose();
+  library.dispose();
+});
+
+test('releasing or replacing assets never disposes the renderer environment', async () => {
+  const environment = new THREE.Texture();
+  let releases = 0;
+  environment.addEventListener('dispose', () => releases++);
+  const library = new ProductModelLibrary(async () => asset().scene);
+  library.setEnvironment(environment);
+  await library.loadModel('/one.glb');
+  const two = await library.loadModel('/two.glb');
+  library.releaseModel('/one.glb');
+  assert.equal(two.children[0].children[0].material.envMap, environment);
+  await library.loadModel('/one.glb');
+  library.dispose();
+  assert.equal(releases, 0);
+  environment.dispose();
+  assert.equal(releases, 1);
+});
+
+test('an authored environment takes precedence and remains part of asset ownership', async () => {
+  const source = asset();
+  const authored = new THREE.Texture();
+  source.material.envMap = authored;
+  source.material.envMapIntensity = .7;
+  const library = new ProductModelLibrary(async () => source.scene);
+  const fallback = new THREE.Texture();
+  library.setEnvironment(fallback);
+  await library.loadModel('/authored.glb');
+  assert.equal(source.material.envMap, authored);
+  assert.equal(source.material.envMapIntensity, .7);
+  let releases = 0;
+  authored.addEventListener('dispose', () => releases++);
+  library.dispose();
+  assert.equal(releases, 1);
+  fallback.dispose();
+});
+
+test('room lighting uses furniture reflections without changing the architectural environment', async () => {
+  const model = asset();
+  const library = new ProductModelLibrary(async () => model.scene);
+  await library.loadModel('/lighting.glb');
+  const studio = new THREE.Texture(), sunset = new THREE.Texture();
+  const scene = Object.create(PlannerScene.prototype);
+  Object.assign(scene, {
+    scene: new THREE.Scene(), renderer: { toneMappingExposure: 0 },
+    options: { showFurniture: true }, productModels: library,
+    daylightGroup: new THREE.Group(), interiorLightGroup: new THREE.Group(), sunsetLights: null,
+    hemiLight: new THREE.HemisphereLight(), ambientLight: new THREE.AmbientLight(),
+    mainLight: new THREE.DirectionalLight(), fillLight: new THREE.DirectionalLight(),
+    productEnvironment: () => studio, pairedSunsEnvironment: () => sunset
+  });
+  const snapshot = emptyRoomSnapshot();
+  scene.applyRoomLighting(snapshot);
+  assert.equal(model.material.envMap, studio);
+  assert.equal(scene.scene.environment, null, 'normal mode keeps the architectural environment unchanged');
+  scene.sunsetLights = [new THREE.DirectionalLight(), new THREE.DirectionalLight()];
+  snapshot.room.lighting.sunStylePreset = 'paired-suns';
+  scene.applyRoomLighting(snapshot);
+  assert.equal(model.material.envMap, null);
+  assert.equal(scene.scene.environment, sunset);
+  assert.equal(scene.scene.environmentIntensity, .28);
+  scene.sunsetLights = null;
+  scene.applyRoomLighting(snapshot);
+  assert.equal(model.material.envMap, studio);
+  assert.equal(scene.scene.environment, null);
+  library.dispose();
+  studio.dispose(); sunset.dispose();
+});
+
 test('an asset finishing after unmount releases its resources', async () => {
   const source = asset();
   let resolve;
@@ -103,6 +202,8 @@ test('a delayed GLB attaches only to current instances and retains moved/rotated
     disposed: false, requestRender() {}
   });
   scene.syncObjects(snapshot);
+  const environment = new THREE.Texture();
+  scene.productModels.setEnvironment(environment);
   assert.equal(scene.productModelRequests.size, 1);
   snapshot = { ...snapshot, objects: [
     { id: 'kept', productId: 'hospitalbed', x: 3, z: -1, rotationY: Math.PI / 2 },
@@ -124,9 +225,13 @@ test('a delayed GLB attaches only to current instances and retains moved/rotated
   assert.ok(exported, 'loaded furniture remains part of semantic room export');
   const exportBounds = new THREE.Box3().setFromObject(exported, true);
   assert.ok(exportBounds.getSize(new THREE.Vector3()).distanceTo(new THREE.Vector3(2, 0.8, 1)) < 1e-6);
+  exported.traverse(node => {
+    if (node instanceof THREE.Mesh) assert.equal(node.material.envMap, null, 'export strips the runtime environment');
+  });
   scene.disposeGroup(scene.objectGroup);
   scene.disposeGroup(scene.contactShadowGroup);
   scene.productModels.dispose();
+  environment.dispose();
 });
 
 test('the C8c bed is placeable and survives a portable room round trip', () => {

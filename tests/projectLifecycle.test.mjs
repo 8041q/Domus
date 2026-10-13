@@ -37,7 +37,7 @@ test('new presets include permitted apertures and no furniture or divisions', ()
 
 test('project details persist through save, recovery and draft import and are cleared for new rooms', () => {
   const h = harness();
-  const details = { company: 'Example Medical', companyContact: 'info@example.test', client: 'Sample Client', clientContact: '', reference: 'DEMO-01', preparedBy: 'Sample Designer', notes: 'Review accessibility.' };
+  const details = { company: 'Example Medical', companyContact: 'info@example.test', client: 'Sample Client', clientContact: '', reference: 'DEMO-01', preparedBy: 'Sample Designer', revision: 'R2', status: 'In review', roomPurpose: 'Patient room', location: 'North ward', notes: 'Review accessibility.' };
   h.get().room.projectDetails = details; h.session.changed();
   const saved = h.session.save('Report room');
   const recovered = harness(h.values); recovered.session.open(saved.id);

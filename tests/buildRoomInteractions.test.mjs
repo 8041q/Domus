@@ -65,7 +65,7 @@ test('project details update and undo even when furniture overlaps, and survive 
   usePlannerStore.getState().resetProject();
   const objects = ['a', 'b'].map((id) => ({ id, productId: 'sofa', x: 1.7, z: 1.7, rotationY: 0 }));
   usePlannerStore.setState({ objects });
-  const details = { company: 'Example Medical', companyContact: '', client: 'Sample Client', clientContact: '', reference: '', preparedBy: '', notes: '' };
+  const details = { company: 'Example Medical', companyContact: '', client: 'Sample Client', clientContact: '', reference: '', preparedBy: '', revision: '', status: '', roomPurpose: '', location: '', notes: '' };
   usePlannerStore.getState().updateProjectDetails(details);
   assert.deepEqual(getSnapshot().room.projectDetails, details);
   assert.deepEqual(getSnapshot().objects, objects);

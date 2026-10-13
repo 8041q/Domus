@@ -685,6 +685,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .circle-diameter-control { display: grid; gap: 8px; margin-top: 12px; }
 .opening-quick-add.circle-openings { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .project-details-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; }
+.project-details-dialog { width: min(600px, calc(100vw - 32px)); }
+.project-details-dialog .project-field { margin-top: 12px; }
+.project-details-dialog p { margin-bottom: 12px; }
+.project-details-dialog footer { margin-top: 16px; }
 .project-notes { grid-column: 1 / -1; }
 .project-field textarea { width: 100%; resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--background); color: var(--foreground); font: inherit; font-weight: 400; }
 .project-field textarea:focus { outline: 2px solid var(--ring); outline-offset: 2px; }

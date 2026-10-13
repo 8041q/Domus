@@ -4,10 +4,10 @@ import type { RoomShapeKind } from './core/types';
 import { roomProjects, useRoomProjects } from './roomProjects';
 import { Button, Icon, type IconName } from './ui';
 import { usePlannerStore } from './store';
-import { normalizeProjectDetails, PROJECT_DETAIL_FIELDS } from './core/projectDetails';
+import { normalizeProjectDetails, PROJECT_DETAIL_FIELDS, PROJECT_STATUSES } from './core/projectDetails';
 
 type DialogKind = 'new' | 'save' | 'open' | 'guard' | 'delete' | 'details';
-function ProjectDialog({ title, onCancel, children }: { title: string; onCancel: () => void; children: ReactNode }) {
+function ProjectDialog({ title, onCancel, children, className = '' }: { title: string; onCancel: () => void; children: ReactNode; className?: string }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const dialog = ref.current!;
@@ -19,7 +19,7 @@ function ProjectDialog({ title, onCancel, children }: { title: string; onCancel:
     const dialog = ref.current;
     (dialog?.querySelector<HTMLElement>('[data-project-focus]') ?? dialog?.querySelector<HTMLButtonElement>('button'))?.focus();
   }, [title]);
-  return <dialog ref={ref} className="project-dialog" aria-labelledby="project-dialog-title" onCancel={(event) => { event.preventDefault(); onCancel(); }}>
+  return <dialog ref={ref} className={`project-dialog ${className}`} aria-labelledby="project-dialog-title" onCancel={(event) => { event.preventDefault(); onCancel(); }}>
     <header><h2 id="project-dialog-title">{title}</h2><Button variant="ghost" size="icon" aria-label="Close dialog" onClick={onCancel}><Icon name="x" /></Button></header>
     {children}
   </dialog>;
@@ -130,7 +130,7 @@ export function ProjectControls({ canExport, onExport, onExportPdf }: { canExpor
         replace(() => roomProjects.importRoom(imported));
       } catch (failure) { setError(errorMessage(failure)); }
     }} />
-    {dialog && <ProjectDialog title={dialog === 'details' ? 'Project details' : dialog === 'new' ? 'New room' : dialog === 'save' ? 'Save as' : dialog === 'open' ? 'Open room' : dialog === 'delete' ? 'Delete saved room?' : 'Save your changes?'} onCancel={cancel}>
+    {dialog && <ProjectDialog className={dialog === 'details' ? 'project-details-dialog' : ''} title={dialog === 'details' ? 'Project details' : dialog === 'new' ? 'New room' : dialog === 'save' ? 'Save as' : dialog === 'open' ? 'Open room' : dialog === 'delete' ? 'Delete saved room?' : 'Save your changes?'} onCancel={cancel}>
       {dialog === 'details' ? <form onSubmit={(event) => {
         event.preventDefault(); setError('');
         try { usePlannerStore.getState().updateProjectDetails(details);
@@ -140,7 +140,9 @@ export function ProjectControls({ canExport, onExport, onExportPdf }: { canExpor
         <p>Optional details included in the shared PDF and saved with this room.</p>
         <div className="project-details-grid">
           {PROJECT_DETAIL_FIELDS.map((field) => <label key={field.key} className={`project-field ${field.key === 'notes' ? 'project-notes' : ''}`}>{field.label}
-            {field.key === 'notes' ? <textarea rows={4} maxLength={field.maxLength} value={details[field.key]}
+            {field.key === 'status' ? <select value={details.status ?? ''} onChange={(event) => setDetails({ ...details, status: event.target.value })}>
+              {PROJECT_STATUSES.map((status) => <option key={status} value={status}>{status || 'Not set'}</option>)}
+            </select> : field.key === 'notes' ? <textarea rows={3} maxLength={field.maxLength} value={details[field.key]}
               onChange={(event) => setDetails({ ...details, [field.key]: event.target.value })} /> :
               <input data-project-focus={field.key === 'company' ? true : undefined} maxLength={field.maxLength}
                 value={details[field.key]} onChange={(event) => setDetails({ ...details, [field.key]: event.target.value })} />}

@@ -5,6 +5,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { OutlinePass } from 'three/examples/jsm/postprocessing/OutlinePass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
@@ -12,7 +13,7 @@ import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { PRODUCTS, PRODUCT_LIST } from '../core/products';
 import { floorFinishDefinition, type FloorFinishDefinition } from '../core/roomFinishes';
-import { clearanceRegions, resolvePlacement, spacingMeasurements, type SpacingMeasurement } from '../core/placement';
+import { clearanceIssues, clearanceRegions, resolvePlacement, spacingMeasurements, type SpacingMeasurement } from '../core/placement';
 import { BASEBOARD_STYLES, DOOR_LEAF_COLOR, glazingAreas, isSunGlazedOpening } from '../core/architecturalStyles';
 import { getRoomWalls, openingsOnWall, pointInRoom, roomBounds, wallPoint, wallProjectionDistance } from '../core/roomGeometry';
 import { architectureRoom, deriveSpaces, dividerJunctionDistances, getPhysicalWalls, interiorDoorHasThreshold, resolveDividers, wallAdjacentSpaces } from '../core/spaces';
@@ -26,7 +27,9 @@ import { createFloorSurfaceGeometry } from './floorGeometry';
 import { createFrameQueue } from '../core/frameQueue';
 import { ProductModelLibrary } from './productModels';
 import { renderRoomReport, roomReportData } from '../core/roomReport';
-import { buildRoomPdf, jpegBytes, ROOM_PDF_VIEWS, type PdfSnapshot } from '../core/roomPdf';
+import { roomViewSummary } from '../core/roomReportGeometry';
+import { renderRoomViewPages, type ReportViewCapture } from '../core/roomReportViews';
+import { buildRoomPdf, ROOM_PDF_VIEWS } from '../core/roomPdf';
 import { wallCornerShading } from '../core/wallShading';
 
 export interface SceneSnapshot extends PlannerSnapshot {
@@ -148,6 +151,7 @@ export class PlannerScene {
   private sunsetGroup = new THREE.Group();
   private sunsetLights: [THREE.DirectionalLight, THREE.DirectionalLight] | null = null;
   private pairedSunsEnvironmentTarget: THREE.WebGLRenderTarget | null = null;
+  private productEnvironmentTarget: THREE.WebGLRenderTarget | null = null;
   private lastSunAnglesKey = '';
   private contactShadowGroup = new THREE.Group();
   private objectGroup = new THREE.Group();
@@ -370,6 +374,8 @@ export class PlannerScene {
     this.scene.environment = null;
     this.pairedSunsEnvironmentTarget?.dispose();
     this.pairedSunsEnvironmentTarget = null;
+    this.productEnvironmentTarget?.dispose();
+    this.productEnvironmentTarget = null;
     this.floorMaterial = null;
     this.renderer?.dispose();
     this.renderer?.forceContextLoss();
@@ -537,9 +543,10 @@ export class PlannerScene {
       // Object3D.clone() shares geometries/materials. Export clones get independent
       // copies because we re-centre their origins and clear UI highlight materials.
       object.geometry = object.geometry.clone();
+      const exportMaterial = (material: THREE.Material) => this.productModels?.cloneForExport(material) ?? material.clone();
       object.material = Array.isArray(object.material)
-        ? object.material.map((material) => material.clone())
-        : object.material.clone();
+        ? object.material.map(exportMaterial)
+        : exportMaterial(object.material);
 
       if (typeof object.userData.openingId === 'string') {
         const materials = Array.isArray(object.material) ? object.material : [object.material];
@@ -729,11 +736,14 @@ export class PlannerScene {
     const saved = { position: this.camera.position.clone(), quaternion: this.camera.quaternion.clone(), target: this.controls.target.clone(),
       fov: this.camera.fov, aspect: this.camera.aspect, near: this.camera.near, far: this.camera.far,
       view: this.currentCameraView, ratio: this.renderer.getPixelRatio(), maxDistance: this.controls.maxDistance,
-      damping: this.controls.enableDamping, enabled: this.controls.enabled, helpers: this.helperGroup.visible };
-    const report = roomReportData(this.sceneSnapshot(), PRODUCTS);
+      damping: this.controls.enableDamping, enabled: this.controls.enabled, helpers: this.helperGroup.visible, layers: this.camera.layers.mask };
+    const snapshot = structuredClone(this.sceneSnapshot());
+    const warnings = snapshot.objects.filter((object) => PRODUCTS[object.productId]).flatMap((object, index) =>
+      clearanceIssues(object, architectureRoom(snapshot), snapshot.objects.filter((other) => other.id !== object.id && PRODUCTS[other.productId]))
+        .map((issue) => ({ name: `F${index + 1} · ${PRODUCTS[object.productId].name}`, message: issue.message })));
+    const report = roomReportData(snapshot, PRODUCTS, warnings);
     const date = new Date().toLocaleString();
-    const reportPages = renderRoomReport(report, roomName, date);
-    const snapshots: PdfSnapshot[] = [];
+    const captures: ReportViewCapture[] = [];
     try {
       this.controls.enabled = false;
       this.controls.enableDamping = false;
@@ -742,36 +752,26 @@ export class PlannerScene {
       this.renderer.setPixelRatio(1);
       this.renderer.setSize(1600, 950, false);
       this.camera.aspect = 1600 / 950;
-      for (const [index, view] of ROOM_PDF_VIEWS.entries()) {
+      for (const view of ROOM_PDF_VIEWS) {
         this.setCameraView(view);
         // Fit both tall rooms and long/narrow rooms into the fixed export aspect.
-        const bounds = roomBounds(this.sceneSnapshot().room.vertices);
+        const bounds = roomBounds(snapshot.room.vertices);
         const spanX = view === 'left' || view === 'right' ? bounds.depth : bounds.width;
-        const spanY = view === 'top' ? bounds.depth : this.sceneSnapshot().room.height;
+        const spanY = view === 'top' ? bounds.depth : snapshot.room.height;
         const distance = Math.max(spanY / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2))),
           spanX / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * this.camera.aspect)) * 1.18;
         const direction = this.camera.position.clone().sub(this.controls.target).normalize();
-        const halfDepth = view === 'top' ? this.sceneSnapshot().room.height / 2 :
+        const halfDepth = view === 'top' ? snapshot.room.height / 2 :
           (view === 'left' || view === 'right' ? bounds.width : bounds.depth) / 2;
         this.camera.position.copy(this.controls.target).addScaledVector(direction, distance + halfDepth);
         this.controls.update();
         this.updateCameraClipping(); this.updateCeilingVisibility(true); this.updateCutawayWalls(true);
         this.camera.layers.set(SCENE_LAYER);
         this.renderer.render(this.scene, this.camera);
-        const page = document.createElement('canvas');
-        page.width = 1800; page.height = 1273;
-        const ctx = page.getContext('2d')!;
-        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, page.width, page.height);
-        ctx.fillStyle = '#18181b'; ctx.font = '600 34px system-ui';
-        let title = roomName;
-        while (title.length && ctx.measureText(title).width > 1450) title = title.slice(0, -1);
-        ctx.fillText(title !== roomName ? `${title}…` : title, 70, 70);
-        ctx.fillStyle = '#52525b'; ctx.font = '24px system-ui';
-        ctx.fillText(`${view[0].toUpperCase()}${view.slice(1)} view \u00b7 ${report.dimensions} \u00b7 ${report.area.toFixed(2)} m\u00b2`, 70, 115);
-        ctx.drawImage(this.renderer.domElement, 70, 165, 1660, 986);
-        ctx.font = '20px system-ui'; ctx.fillText(`Domus \u00b7 Exported ${date}`, 70, 1210);
-        ctx.textAlign = 'right'; ctx.fillText(`${reportPages.length + index + 1} / ${reportPages.length + ROOM_PDF_VIEWS.length}`, 1730, 1210);
-        snapshots.push({ jpeg: jpegBytes(page), width: page.width, height: page.height });
+        const image = document.createElement('canvas'); image.width = 1600; image.height = 950;
+        image.getContext('2d')!.drawImage(this.renderer.domElement, 0, 0);
+        captures.push({ view, image, ...(view !== 'top' ? { summary: roomViewSummary(snapshot, view,
+          [...this.wallHiddenState].filter(([, hidden]) => hidden).map(([id]) => id)) } : {}) });
       }
     } finally {
       this.renderer.setPixelRatio(saved.ratio); this.renderer.setSize(size.x, size.y, false);
@@ -780,8 +780,11 @@ export class PlannerScene {
       this.camera.updateProjectionMatrix(); this.controls.target.copy(saved.target); this.controls.maxDistance = saved.maxDistance;
       this.currentCameraView = saved.view; this.controls.update();
       this.controls.enableDamping = saved.damping; this.controls.enabled = saved.enabled; this.helperGroup.visible = saved.helpers;
+      this.camera.layers.mask = saved.layers;
       this.updateCeilingVisibility(true); this.updateCutawayWalls(true); this.requestRender();
     }
+    const reportPages = renderRoomReport(report, roomName, date, captures.flatMap((capture) => capture.summary ? [capture.summary] : []));
+    const snapshots = renderRoomViewPages(captures, report, roomName, date, reportPages.length);
     const bytes = buildRoomPdf(snapshots, reportPages);
     const url = URL.createObjectURL(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'application/pdf' }));
     const link = document.createElement('a'); link.href = url;
@@ -2076,6 +2079,19 @@ export class PlannerScene {
     return this.pairedSunsEnvironmentTarget.texture;
   }
 
+  private productEnvironment() {
+    if (this.productEnvironmentTarget) return this.productEnvironmentTarget.texture;
+    const environment = new RoomEnvironment();
+    const generator = new THREE.PMREMGenerator(this.renderer);
+    try {
+      this.productEnvironmentTarget = generator.fromScene(environment, 0.04);
+      return this.productEnvironmentTarget.texture;
+    } finally {
+      environment.dispose();
+      generator.dispose();
+    }
+  }
+
   private applyRoomLighting(snapshot: PlannerSnapshot) {
     const enabled = snapshot.room.lighting.enabled;
     const hasDaylight = this.daylightGroup.children.some((child) => child instanceof THREE.SpotLight);
@@ -2087,6 +2103,9 @@ export class PlannerScene {
     this.fillLight.color.setHex(pairedSuns ? 0xbacfff : 0xe9edf0);
     this.scene.environment = pairedSuns ? this.pairedSunsEnvironment() : null;
     this.scene.environmentIntensity = pairedSuns ? 0.28 : 1;
+    if (this.options.showFurniture) {
+      this.productModels.setEnvironment(pairedSuns ? null : this.productEnvironment());
+    }
     const glazedOpeningCount = snapshot.openings.filter((opening) => !opening.wallId.startsWith('divider-') && isSunGlazedOpening(opening)).length;
     const environmentAzimuth = effectiveSunAzimuth(snapshot.room.lighting.sunAzimuth, glazedOpeningCount);
     this.scene.environmentRotation.set(0, THREE.MathUtils.degToRad(environmentAzimuth), 0);

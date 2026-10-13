@@ -144,15 +144,25 @@ furniture are grouped by semantic category. Cameras, selection outlines,
 measurements, and other editing helpers are excluded.
 
 **Project → Project details** edits optional company/client names and contacts,
-project reference, preparer and notes. These details are kept with saves,
+project reference, preparer, revision, status, room purpose, site/department and notes. These details are kept with saves,
 recovery drafts and draft imports/exports; use Save as to persist changes.
 
 **Project → Export to PDF** starts with a room summary, project details,
-furniture quantities and measured dimensions, opening sizes and notes. Long lists
-continue on extra pages; unplaced furniture is listed separately. It then includes
+furniture quantities and entered real-life dimensions, opening sizes and notes.
+Missing real-life sizes are explicitly labelled; measured geometry remains in the
+technical schedule alongside catalogue references, positions and rotation.
+Long lists use banded rows and repeated headers; unplaced furniture is listed separately.
+Architectural schedules include hidden-wall measurements, aperture coverage and
+existing clearance recommendations. It then includes
 five landscape room views: Top, Front, Right, Back and Left, with loaded furniture and
 finishes. Editing helpers and selection outlines are excluded, and the current
-camera view and selection are restored afterward. Openings can be dragged past
+camera view and selection are restored afterward. Each side reports its actual
+cutaway boundary length, projected span, height and gross/net wall area, with a
+matching small plan key. Top reports the footprint, floor area and perimeter.
+Report positions use the bounding box's front-left corner (X right, Z back, Y up)
+and document the Domus coordinate offset. Model scaling and placement still use
+the measured geometry; exporting a report does not alter either.
+Openings can be dragged past
 wall ends in Build Room 3D to continue onto adjacent perimeter walls or joined
 interior walls. A complete drag is one undo step.
 

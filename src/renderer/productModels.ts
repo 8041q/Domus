@@ -7,6 +7,9 @@ export class ProductModelLibrary {
   private templates = new Set<THREE.Group>();
   private templatesByUrl = new Map<string, THREE.Group>();
   private disposed = false;
+  private environment: THREE.Texture | null = null;
+  private environmentIntensity = 0.28;
+  private originalEnvironments = new WeakMap<THREE.MeshStandardMaterial, { map: THREE.Texture | null; intensity: number }>();
 
   constructor(private load = async (url: string) => {
     const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
@@ -41,6 +44,7 @@ export class ProductModelLibrary {
             node.receiveShadow = true;
           }
         });
+        this.applyEnvironment(template);
         this.templatesByUrl.set(url, template);
         return template;
       });
@@ -56,6 +60,47 @@ export class ProductModelLibrary {
 
   retry(url: string) { this.requests.delete(url); }
 
+  /** The renderer owns this texture; imported asset resources remain library-owned. */
+  setEnvironment(texture: THREE.Texture | null, intensity = 0.28) {
+    if (this.environment === texture && this.environmentIntensity === intensity) return;
+    this.environment = texture;
+    this.environmentIntensity = intensity;
+    for (const template of this.templates) this.applyEnvironment(template);
+  }
+
+  cloneForExport(material: THREE.Material) {
+    const exported = material.clone();
+    if (material instanceof THREE.MeshStandardMaterial && exported instanceof THREE.MeshStandardMaterial) {
+      const original = this.originalEnvironments.get(material);
+      if (original) {
+        exported.envMap = original.map;
+        exported.envMapIntensity = original.intensity;
+      }
+    }
+    return exported;
+  }
+
+  private applyEnvironment(template: THREE.Group) {
+    template.traverse((node) => {
+      if (!(node instanceof THREE.Mesh)) return;
+      for (const material of Array.isArray(node.material) ? node.material : [node.material]) {
+        if (!(material instanceof THREE.MeshStandardMaterial)) continue;
+        let original = this.originalEnvironments.get(material);
+        if (!original) {
+          original = { map: material.envMap, intensity: material.envMapIntensity };
+          this.originalEnvironments.set(material, original);
+        }
+        // Explicit asset environment maps take precedence over the viewport fallback.
+        const map = original.map ?? this.environment;
+        if (material.envMap !== map) {
+          material.envMap = map;
+          material.needsUpdate = true;
+        }
+        material.envMapIntensity = !original.map && this.environment ? this.environmentIntensity : original.intensity;
+      }
+    });
+  }
+
   releaseModel(url: string) {
     this.requests.delete(url);
     const template = this.templatesByUrl.get(url);
@@ -67,6 +112,7 @@ export class ProductModelLibrary {
     for (const template of this.templates) this.release(template);
     this.requests.clear();
     this.templatesByUrl.clear();
+    this.environment = null;
   }
 
   private release(template: THREE.Group) {
@@ -76,6 +122,13 @@ export class ProductModelLibrary {
       resources.add(node.geometry);
       const materials = Array.isArray(node.material) ? node.material : [node.material];
       for (const material of materials) {
+        if (material instanceof THREE.MeshStandardMaterial) {
+          const original = this.originalEnvironments.get(material);
+          if (original) {
+            material.envMap = original.map;
+            material.envMapIntensity = original.intensity;
+          }
+        }
         resources.add(material);
         for (const value of Object.values(material)) if (value instanceof THREE.Texture) resources.add(value);
       }
