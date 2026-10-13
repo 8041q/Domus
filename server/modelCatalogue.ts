@@ -125,7 +125,7 @@ export async function inspectProductGLB(filename: string, url: string, id: strin
     const category = normalizeProductCategory(text('domus_category', 'Others'));
     if (!category) throw new Error('Choose a supported product category in Blender.');
     const display = { width: positive('domus_display_width_m'), depth: positive('domus_display_depth_m'), height: positive('domus_display_height_m') };
-    if (version >= 2 && (!display.width || !display.depth || !display.height || !text('domus_name') || !text('domus_category'))) throw new Error('Complete the product name, category and display size in metres in Blender, then save metadata again.');
+    if (version >= 2 && (!display.width || !display.depth || !display.height || !text('domus_name') || !text('domus_category'))) throw new Error('Complete the product name, category and external dimensions in Blender, then save metadata again.');
     // v1 manually entered size and collider fields may be in the wrong units.
     // Geometry is authoritative for physics in every version.
     const product: ProductDefinition = {

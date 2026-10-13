@@ -149,18 +149,19 @@ recovery drafts and draft imports/exports; use Save as to persist changes.
 
 **Project → Export to PDF** starts with a room summary, project details,
 furniture quantities and entered real-life dimensions, opening sizes and notes.
-Missing real-life sizes are explicitly labelled; measured geometry remains in the
-technical schedule alongside catalogue references, positions and rotation.
+Furniture appears in one inventory with quantities, dimensions, size source and
+placement status. Missing real-life sizes use measured geometry and are labelled.
 Long lists use banded rows and repeated headers; unplaced furniture is listed separately.
-Architectural schedules include hidden-wall measurements, aperture coverage and
+Architectural schedules include every physical wall's measurements, opening coverage and
 existing clearance recommendations. It then includes
 five landscape room views: Top, Front, Right, Back and Left, with loaded furniture and
 finishes. Editing helpers and selection outlines are excluded, and the current
 camera view and selection are restored afterward. Each side reports its actual
 cutaway boundary length, projected span, height and gross/net wall area, with a
-matching small plan key. Top reports the footprint, floor area and perimeter.
-Report positions use the bounding box's front-left corner (X right, Z back, Y up)
-and document the Domus coordinate offset. Model scaling and placement still use
+matching plan key. Polygon corners separate coloured sides, with large length
+labels; contiguous curved sections remain one side. View measurements sit below
+the room image. Top reports the footprint, floor area and perimeter.
+Model scaling and placement still use
 the measured geometry; exporting a report does not alter either.
 Openings can be dragged past
 wall ends in Build Room 3D to continue onto adjacent perimeter walls or joined

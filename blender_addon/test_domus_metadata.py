@@ -74,7 +74,8 @@ assert source.mode == "COLLECTION"
 props = collection.domus_metadata
 assert bpy.ops.domus.read_model() == {"FINISHED"}
 assert props.name == "Hospital Bed"
-assert all(abs(a-b)<1e-5 for a,b in zip((props.width,props.depth,props.height),(3,2,1.1)))
+assert all(abs(a-b)<1e-5 for a,b in zip((props.width,props.depth,props.height),(300,200,110)))
+assert [props.bl_rna.properties[field].name for field in addon.DISPLAY_KEYS] == ["Length (cm)", "Width (cm)", "Height (cm)"]
 assert not hasattr(props,"product_id") and not hasattr(props,"swatch")
 assert not hasattr(props,"collision_width") and not hasattr(props,"tags")
 try:
@@ -83,7 +84,7 @@ try:
 except RuntimeError as error: assert "Category" in str(error)
 assert collection.domus_model_root is None
 props.category = "Hospital Bed"
-props.width, props.depth, props.height = .995, 2.18, .4
+props.width, props.depth, props.height = 99.5, 218, 40
 props.clearance_front = .2
 original_parents = [obj.parent for obj in (frame,pillow)]
 original_world = [obj.matrix_world.copy() for obj in (frame,pillow)]
@@ -92,17 +93,19 @@ root = collection.domus_model_root
 assert "domus_product_id" not in root
 assert all(abs(root[key]-expected)<1e-5 for key,expected in (("domus_width_m",3),("domus_depth_m",2),("domus_height_m",1.1)))
 assert abs(root["domus_display_width_m"]-.995)<1e-5
+assert abs(root["domus_display_depth_m"]-2.18)<1e-5
+assert abs(root["domus_display_height_m"]-.4)<1e-5
 assert root["domus_collision_width_m"] == root["domus_width_m"]
 assert original_parents == [obj.parent for obj in (frame,pillow)]
 props.width = 0
 try:
     bpy.ops.domus.save_metadata()
     raise AssertionError("Zero display width should reject saving")
-except RuntimeError as error: assert "Width in metres" in str(error)
-props.width = .995
+except RuntimeError as error: assert "Width in centimetres" in str(error)
+props.width = 99.5
 props.name = "Changed"
 assert bpy.ops.domus.load_metadata() == {"FINISHED"}
-assert props.name == "Hospital Bed" and abs(props.width-.995)<1e-5
+assert props.name == "Hospital Bed" and abs(props.width-99.5)<1e-5
 for field in addon.DISPLAY_KEYS.keys() | addon.EDITABLE_KEYS.keys():
     assert props.bl_rna.properties[field].description, field
 for field in ("mode", "collection", "object"):
@@ -116,15 +119,16 @@ assert all(description for _, _, description in addon.CATEGORIES)
 assert not any(getattr(cls,"bl_idname",None)=="domus.select_product" for cls in addon.CLASSES)
 
 class LayoutRecorder:
-    def __init__(self): self.labels, self.operators = [], []
+    def __init__(self): self.labels, self.operators, self.fields = [], [], []
     def box(self): return self
-    def prop(self, *_args, **_kwargs): pass
+    def prop(self, _props, field, **_kwargs): self.fields.append(field)
     def label(self, text, **_kwargs): self.labels.append(text)
     def operator(self, operator, **_kwargs): self.operators.append(operator)
 
 layout = LayoutRecorder()
 addon.DOMUS_PT_metadata.draw(SimpleNamespace(layout=layout),bpy.context)
 assert "Model External Dimensions" in layout.labels
+assert layout.fields.index("depth") < layout.fields.index("width") < layout.fields.index("height")
 assert "domus.select_product" not in layout.operators
 assert {"domus.save_metadata","domus.load_metadata","domus.export_product"}.issubset(layout.operators)
 assert not any(text.startswith(("Catalogue size", "Display only", "Use-space clearance", "Export includes")) for text in layout.labels)
@@ -148,7 +152,7 @@ with tempfile.TemporaryDirectory(dir=os.path.dirname(__file__)) as directory:
     # Centimetre scene units, un-applied scaling, nested collection parts and
     # evaluated modifiers must agree with the actual GLB's metre dimensions.
     bpy.context.scene.unit_settings.scale_length = .01
-    props.width, props.depth, props.height = .03,.02,.011
+    props.width, props.depth, props.height = 3,2,1.1
     assert bpy.ops.domus.export_product(filepath=path) == {"FINISHED"}
     gltf = glb_json(path)
     assert all(abs(a-b)<1e-6 for a,b in zip(exported_bounds(gltf),(.03,.011,.02)))
@@ -159,6 +163,17 @@ with tempfile.TemporaryDirectory(dir=os.path.dirname(__file__)) as directory:
     assert not any(obj.name.startswith("Domus Export Metres") for obj in bpy.data.objects)
     assert set(bpy.context.selected_objects) == {outside}
     assert bpy.context.view_layer.objects.active == outside
+
+# Saved pre-0.4.2 property groups remain correct even when loaded after registration.
+legacy = bpy.data.collections.new("Saved metre inputs")
+for field, value in (("width", .995), ("depth", 2.18), ("height", .4)):
+    legacy.domus_metadata[field] = value
+assert abs(legacy.domus_metadata.width - 99.5) < 1e-5
+assert abs(legacy.domus_metadata.depth - 218) < 1e-5
+assert abs(legacy.domus_metadata.height - 40) < 1e-5
+addon.register()
+assert abs(legacy.domus_metadata.width - 99.5) < 1e-5, "repeat registration must not convert twice"
+props = collection.domus_metadata
 
 # Loading older saved metadata maps broad categories to the current choices.
 root["domus_category"] = "Decor"

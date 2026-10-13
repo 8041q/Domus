@@ -1,7 +1,7 @@
 """Collection-based product metadata for Blender's built-in GLB exporter."""
 
 bl_info = {
-    "name": "Domus Product Metadata", "author": "Domus", "version": (0, 4, 1),
+    "name": "Domus Product Metadata", "author": "Domus", "version": (0, 4, 2),
     "blender": (4, 2, 0), "location": "View3D > Sidebar > Domus",
     "description": "Prepare a complete product collection for the Domus catalogue", "category": "Object",
 }
@@ -25,7 +25,7 @@ from bpy_extras.io_utils import ExportHelper
 SCHEMA = json.loads(Path(__file__).with_name("catalogue_schema.json").read_text(encoding="utf-8"))
 SCHEMA_VERSION = SCHEMA["version"]
 CATEGORIES = [("UNSET", "Choose category", "Required: choose the group used to find this model in Domus")] + [(name, name, SCHEMA["categoryDescriptions"][name]) for name in SCHEMA["categories"]]
-DISPLAY_KEYS = {"width": "domus_display_width_m", "depth": "domus_display_depth_m", "height": "domus_display_height_m"}
+DISPLAY_KEYS = {"depth": "domus_display_depth_m", "width": "domus_display_width_m", "height": "domus_display_height_m"}
 EDITABLE_KEYS = {"name": "domus_name", "category": "domus_category", "price_label": "domus_price_label",
                  "collision": "domus_collision", "wall_affinity": "domus_wall_affinity",
                  "clearance_front": "domus_clearance_front_m", "clearance_back": "domus_clearance_back_m", "clearance_sides": "domus_clearance_sides_m"}
@@ -117,7 +117,7 @@ def invalid_fields(props):
         missing.append("Category")
     for field in DISPLAY_KEYS:
         if not math.isfinite(getattr(props, field)) or getattr(props, field) <= 0:
-            missing.append(field.title() + " in metres")
+            missing.append(("Length" if field == "depth" else field.title()) + " in centimetres")
     return missing
 
 
@@ -129,16 +129,36 @@ def use_measured_size(context, target):
         if not props.name.strip():
             props.name = target.name
         for field, axis in (("width", 0), ("depth", 1), ("height", 2)):
-            setattr(props, field, max(upper[axis] - lower[axis], 0.001))
+            setattr(props, field, max(upper[axis] - lower[axis], 0.001) * 100)
     return bounds
+
+
+def ensure_centimetre_dimensions(props):
+    """Migrate saved metre inputs once, including files opened after registration."""
+    if props.get("domus_dimensions_unit") != "cm":
+        for field in DISPLAY_KEYS:
+            if field in props:
+                props[field] = float(props[field]) * 100
+        props["domus_dimensions_unit"] = "cm"
+
+
+def dimension_cm(props, field):
+    # Getters also run while Blender draws read-only UI: conversion here must
+    # not write data. Persist the one-time migration when an input is edited.
+    return float(props.get(field, 0)) * (1 if props.get("domus_dimensions_unit") == "cm" else 100)
+
+
+def set_dimension_cm(props, field, value):
+    ensure_centimetre_dimensions(props)
+    props[field] = value
 
 
 class DomusMetadata(PropertyGroup):
     name: StringProperty(name="Name", default="", description="Required: the name shown for this model in the Domus catalogue")
     category: EnumProperty(name="Category", items=CATEGORIES, default="UNSET", description="Required: the hospital product group used by the catalogue filter")
-    width: FloatProperty(name="Width (m)", min=0, precision=4, default=0, description="Required external width along Blender X, in metres (995 mm = 0.995 m). Shown in the catalogue; does not scale geometry")
-    depth: FloatProperty(name="Depth (m)", min=0, precision=4, default=0, description="Required external depth along Blender Y, in metres. Shown in the catalogue; placement uses the measured geometry")
-    height: FloatProperty(name="Height (m)", min=0, precision=4, default=0, description="Required external height along Blender Z, in metres. Shown in the catalogue; actual height is measured on save")
+    width: FloatProperty(name="Width (cm)", min=0, precision=2, default=0, get=lambda p: dimension_cm(p, "width"), set=lambda p, v: set_dimension_cm(p, "width", v), description="Required external width along Blender X, in centimetres (995 mm = 99.5 cm). Converted to metres on export; does not scale geometry")
+    depth: FloatProperty(name="Length (cm)", min=0, precision=2, default=0, get=lambda p: dimension_cm(p, "depth"), set=lambda p, v: set_dimension_cm(p, "depth", v), description="Required external length along Blender Y, in centimetres (2180 mm = 218 cm). Converted to metres on export; placement uses measured geometry")
+    height: FloatProperty(name="Height (cm)", min=0, precision=2, default=0, get=lambda p: dimension_cm(p, "height"), set=lambda p, v: set_dimension_cm(p, "height", v), description="Required external height along Blender Z, in centimetres. Converted to metres on export; actual height is measured on save")
     collision: BoolProperty(name="Blocks other furniture", default=True, description="Prevent other furniture from overlapping this product during normal placement. Its footprint is measured automatically")
     wall_affinity: BoolProperty(name="Prefer walls", default=False, description="Snap the back of this product to nearby walls when placing it in Domus")
     clearance_front: FloatProperty(name="Front (m)", min=0, precision=3, default=0, description="Recommended free space for access in front of the model, facing Blender -Y, in metres. Zero means no clearance guide")
@@ -214,7 +234,7 @@ class DOMUS_OT_load_metadata(Operator):
             # Legacy dimensions may contain millimetres in metre fields.
             # A v1 import starts from measured geometry instead.
             if root.get("domus_schema_version") >= 2 and key in root:
-                setattr(props, field, root[key])
+                setattr(props, field, root[key] * 100)
         if root.get("domus_schema_version") == 1:
             use_measured_size(context, target)
         return {"FINISHED"}
@@ -257,9 +277,12 @@ class DOMUS_OT_save_metadata(Operator):
             if key in root:
                 del root[key]
         root["domus_schema_version"] = SCHEMA_VERSION
-        for field, key in {**EDITABLE_KEYS, **DISPLAY_KEYS}.items():
+        for field, key in EDITABLE_KEYS.items():
             value = getattr(props, field)
             root[key] = value.strip() if isinstance(value, str) else value
+        for field, key in DISPLAY_KEYS.items():
+            # Keep the GLB's established metre schema while the authoring UI uses cm.
+            root[key] = getattr(props, field) / 100
         for key, axis in (("width", 0), ("depth", 1), ("height", 2)):
             root["domus_" + key + "_m"] = max(dimensions[axis], 0.001)
         # Internal fields are recomputed on every save, never entered manually.
@@ -451,7 +474,7 @@ class DOMUS_PT_metadata(Panel):
         box.operator("domus.read_model", icon="FILE_REFRESH")
         root = metadata_root(target)
         if root and root.get("domus_schema_version"):
-            box.label(text="Last measured: %.3f × %.3f × %.3f m" % (root.get("domus_width_m", 0), root.get("domus_depth_m", 0), root.get("domus_height_m", 0)))
+            box.label(text="Last measured L × W × H: %.2f × %.2f × %.2f cm" % (root.get("domus_depth_m", 0) * 100, root.get("domus_width_m", 0) * 100, root.get("domus_height_m", 0) * 100))
         box = layout.box()
         box.label(text="Placement")
         box.prop(props, "wall_affinity")
@@ -510,6 +533,9 @@ def capture_metadata():
         if hasattr(target, "domus_metadata"):
             props = target.domus_metadata
             values = {key: getattr(props, key) for key in DomusMetadata.__annotations__ if hasattr(props, key)}
+            if not props.bl_rna.properties["width"].name.endswith("(cm)") and props.get("domus_dimensions_unit") != "cm":
+                for field in DISPLAY_KEYS:
+                    values[field] = values.get(field, 0) * 100
             category = values.get("category", "UNSET")
             category = SCHEMA["legacyCategoryAliases"].get(category, category)
             values["category"] = category if any(item[0] == category for item in CATEGORIES) else "UNSET"

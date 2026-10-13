@@ -5,11 +5,13 @@ import { getPhysicalWalls } from './spaces';
 import { BASEBOARD_STYLES } from './architecturalStyles';
 import { ReportDocument, reportFooter } from './reportLayout';
 import { jpegBytes, ROOM_PDF_VIEWS, type PdfSnapshot } from './roomPdf';
-import type { ReportViewSummary } from './roomReportGeometry';
+import { roomWallMeasurements, type ReportViewSummary } from './roomReportGeometry';
 import type { PlannerSnapshot, ProductDefinition } from './types';
 
 export const reportMetres = (value: number) => value.toFixed(2);
-const sizeText = (size: { width: number; depth: number; height: number }) => `${reportMetres(size.width)} × ${reportMetres(size.depth)} × ${reportMetres(size.height)}`;
+// Preserve half-centimetre manufacturer sizes such as 99.5 cm (0.995 m).
+const sizeText = (size: { width: number; depth: number; height: number }) =>
+  [size.depth, size.width, size.height].map((value) => value.toFixed(3).replace(/0$/, '')).join(' × ');
 export function roomReportData(snapshot: PlannerSnapshot, products: Record<string, ProductDefinition>, warnings: { name: string; message: string }[] = []) {
   const room = snapshot.room, bounds = roomBounds(room.vertices);
   const furniture = new Map<string, { productId: string; name: string; category: string; quantity: number; dimensions: string; geometryDimensions: string; dimensionSource: string; status: string }>();
@@ -26,7 +28,8 @@ export function roomReportData(snapshot: PlannerSnapshot, products: Record<strin
   }
   const counters = { door: 0, window: 0, opening: 0 };
   const walls = getPhysicalWalls(room, snapshot.dividers);
-  return { details: normalizeProjectDetails(room.projectDetails), vertices: room.vertices, bounds, area: Math.abs(polygonArea(room.vertices)),
+  const wallMeasurements = roomWallMeasurements(snapshot);
+  return { details: normalizeProjectDetails(room.projectDetails), vertices: room.vertices, bounds, wallMeasurements, area: Math.abs(polygonArea(room.vertices)),
     perimeter: getRoomWalls(room).reduce((sum, wall) => sum + wall.length, 0), height: room.height,
     shape: room.shapeKind.replaceAll('-', ' '),
     finishes: `${floorFinishDefinition(room.floorFinish).name} · Walls ${room.wallColor} · Ceiling ${room.ceilingColor}`,
@@ -46,14 +49,14 @@ export function roomReportData(snapshot: PlannerSnapshot, products: Record<strin
       const wall = walls.find((wall) => wall.id === opening.wallId), index = walls.findIndex((wall) => wall.id === opening.wallId);
       return { id: opening.id, name: `${opening.type[0].toUpperCase()}${opening.type.slice(1)} ${++counters[opening.type]}`,
         dimensions: `${reportMetres(opening.width)} × ${reportMetres(opening.height)} m`, sill: `${reportMetres(opening.sillHeight)} m`,
-        location: `${opening.wallId.startsWith('divider-') ? 'Interior' : room.shapeKind === 'circle' ? 'Circular segment' : 'Wall'} ${index + 1}`,
+        location: wallMeasurements[index]?.label ?? 'Unknown wall',
         position: `${reportMetres(opening.offset)} m from segment start`, start: wall?.start };
     }) };
 }
 
 export type RoomReportData = ReturnType<typeof roomReportData>;
-/** Client summary first, followed by architectural and model handoff schedules. */
-export function renderRoomReport(data: RoomReportData, roomName: string, date: string, views: ReportViewSummary[] = []): PdfSnapshot[] {
+/** One furniture inventory, followed by architectural measurements and recommendations. */
+export function renderRoomReport(data: RoomReportData, roomName: string, date: string, _views: ReportViewSummary[] = []): PdfSnapshot[] {
   const doc = new ReportDocument(roomName);
   const populated = PROJECT_DETAIL_FIELDS.filter((field) => field.key !== 'notes' && data.details[field.key]);
   if (populated.length) { doc.section('Project', 150); for (const entry of populated) doc.field(entry.label, data.details[entry.key]!); }
@@ -61,36 +64,31 @@ export function renderRoomReport(data: RoomReportData, roomName: string, date: s
   doc.field('Floor area / perimeter', `${reportMetres(data.area)} m² · ${reportMetres(data.perimeter)} m`);
   doc.field('Finishes', data.finishes); doc.field('Baseboard', data.baseboard);
   doc.field('Furniture', `${data.furniture.filter((item) => item.status === 'In room').reduce((sum, item) => sum + item.quantity, 0)} in room · ${data.furniture.filter((item) => item.status === 'Not placed').reduce((sum, item) => sum + item.quantity, 0)} not placed`);
-  doc.field('Apertures', data.openingSummary);
+  doc.field('Openings', data.openingSummary);
   if (!data.furniture.length) { doc.section('Furniture list'); doc.paragraph('No furniture in this draft.'); }
-  else doc.table('Furniture list', ['Model / category', 'Qty', 'Real-life W × D × H (m)', 'Size source', 'Placement'], [490, 90, 430, 360, 290],
-    data.furniture.map((item) => [`${item.name}\n${item.category}`, String(item.quantity), item.dimensions, item.dimensionSource, item.status]));
+  else doc.table('Furniture list', ['Model / category', 'Qty', 'Real-life L × W × H (m)', 'Size source', 'Placement'], [490, 90, 430, 360, 290],
+    data.furniture.map((item) => [`${item.name} - ${item.category}`, String(item.quantity), item.dimensions, item.dimensionSource, item.status]));
   doc.paragraph('Real-life sizes use entered product metadata; catalogue sizes are used for built-in furniture. Where no real-life size was supplied, the model geometry is shown. Not placed items are excluded from the room views.');
   if (data.details.notes) { doc.section('Client requirements and notes', 32); doc.paragraph(data.details.notes); }
-  if (data.openings.length) doc.table('Doors, windows and openings', ['Type', 'Width × height', 'Above floor', 'Location / centre'], [310, 380, 290, 680],
-    data.openings.map((opening) => [opening.name, opening.dimensions, opening.sill, `${opening.location}\n${opening.position}`]));
+  if (data.openings.length) doc.table('Doors, windows and openings', ['Type', 'Width × height', 'Bottom edge above floor', 'Location / centre'], [290, 350, 390, 630],
+    data.openings.map((opening) => [opening.name, opening.dimensions, opening.sill, `${opening.location} · ${opening.position}`]));
   else { doc.section('Doors, windows and openings'); doc.paragraph('No doors, windows or openings.'); }
-  doc.paragraph('Opening centres are measured along the perimeter/segment direction. The matching hidden-boundary schedule below gives positions from each highlighted run’s start.');
-  const boundaries = views.flatMap((view) => view.boundaries);
+  doc.paragraph('Bottom edge above floor is the distance from the floor to the bottom of the opening, not its height. Opening centres are measured from the start of their wall.');
+  const boundaries = data.wallMeasurements;
   if (boundaries.length) {
-    doc.table('Hidden wall measurements', ['Boundary', 'Length / span (m)', 'Height (m)', 'Gross / net area (m²)', 'Apertures'], [310, 400, 260, 440, 250],
-      boundaries.map((boundary) => [boundary.label + (boundary.curved ? '\nCurved boundary' : ''), `${reportMetres(boundary.length)} / ${reportMetres(boundary.span)}`,
-        reportMetres(boundary.height), `${reportMetres(boundary.grossArea)} / ${reportMetres(boundary.netArea)}`, String(boundary.openingCount)]));
-    doc.paragraph('Length follows the represented boundary geometry; span is its horizontal projection in that view. Gross area is length × height. Net area deducts the union of clipped apertures, without double-counting overlaps.');
+    doc.field('Wall height', `${reportMetres(data.height)} m - shared by all walls`);
+    doc.table('Wall Measurements', ['Wall', 'Length (m)', 'Gross / net area (m²)', 'Openings'], [400, 360, 550, 350],
+      boundaries.map((boundary) => [boundary.label, reportMetres(boundary.length),
+        `${reportMetres(boundary.grossArea)} / ${reportMetres(boundary.netArea)}`, String(boundary.openingCount)]));
+    doc.paragraph('Every perimeter wall and physical interior wall is listed once, in wall order. Length follows the wall geometry. Gross area is length × room height; net area deducts openings without double-counting overlaps.');
     const coverage = boundaries.flatMap((boundary) => boundary.openings.map((opening) => [boundary.label, opening.name,
-      `${reportMetres(opening.start)}–${reportMetres(opening.end)} m`, `${reportMetres(opening.bottom)}–${reportMetres(opening.top)} m`]));
-    if (coverage.length) doc.table('Openings on hidden boundaries', ['Boundary', 'Aperture', 'Start–end along run', 'Bottom–top above floor'], [340, 380, 470, 470], coverage);
-    doc.paragraph('Plan keys highlight only the hidden sections used for each view. Run positions begin at the dot shown on the key and follow its arrow. An aperture crossing a cutaway boundary is listed only for its covered portion.');
+      `${reportMetres(opening.start)}-${reportMetres(opening.end)} m`, `${reportMetres(opening.bottom)}-${reportMetres(opening.top)} m`]));
+    if (coverage.length) doc.table('Openings by wall', ['Wall', 'Opening', 'Start-end along wall', 'Bottom-top above floor'], [340, 380, 470, 470], coverage);
+    doc.paragraph('Opening positions follow each wall from its start to its end. An opening crossing several wall segments is listed for its covered portion on each segment.');
   }
   if (data.warnings.length) doc.table('Clearance recommendations', ['Furniture', 'Existing planner recommendation'], [490, 1170], data.warnings.map((warning) => [warning.name, warning.message]));
   else { doc.section('Clearance recommendations', 32); doc.paragraph('No clearance warnings from the current planner rules.'); }
   doc.paragraph('These recommendations use the model geometry and existing use-space settings. They do not assess regulatory compliance. Real-life/model size differences can affect the result.');
-  doc.section('3D handoff reference', 96);
-  doc.paragraph(`All dimensions and positions are in metres. Origin: bounding box front-left corner, corresponding to Domus X ${reportMetres(data.bounds.minX)}, Z ${reportMetres(data.bounds.minZ)}. X points right, Z points back and Y points upward. Furniture sits at floor level (Y = 0). Rotation is around Y in degrees from the source model orientation.`);
-  if (data.furniture.length) doc.table('Model geometry and references', ['Model', 'Catalogue ID', 'Measured W × D × H (m)'], [480, 710, 470],
-    [...new Map(data.furniture.map((item) => [item.productId, item])).values()].map((item) => [item.name, item.productId, item.geometryDimensions]));
-  if (data.instances.length) doc.table('Furniture placement', ['Instance / model', 'X / Z (m)', 'Y (m)', 'Y rotation'], [820, 400, 210, 230],
-    data.instances.map((item) => [`${item.label} · ${item.name}`, `${reportMetres(item.x)} / ${reportMetres(item.z)}`, '0.00', `${item.rotation.toFixed(1)}°`]));
   return doc.pages.map((canvas, index) => {
     reportFooter(canvas.getContext('2d')!, date, index + 1, doc.pages.length + ROOM_PDF_VIEWS.length);
     return { jpeg: jpegBytes(canvas), width: canvas.width, height: canvas.height };

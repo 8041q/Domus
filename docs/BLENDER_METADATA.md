@@ -6,7 +6,7 @@ In Blender 4.2 or newer, open
 **Edit → Preferences → Add-ons → Install from Disk** and select
 [`blender_addon/domus_metadata_addon.zip`](../blender_addon/domus_metadata_addon.zip).
 Leave **Overwrite** checked and select **Enable on Install**, or enable the new
-**Domus Product Metadata** entry after installation. Version 0.4.1 automatically
+**Domus Product Metadata** entry after installation. Version 0.4.2 automatically
 disables the legacy single-file/v0.3 package and migrates the existing inputs,
 including category names, without changing your saved metadata or model parts.
 You do not need to disable or uninstall the previous version first.
@@ -35,8 +35,13 @@ python blender_addon/package_addon.py
    collection. **Object hierarchy** remains available for a root and its children.
 3. Enter a **Name** and **Category**. Under **Model External Dimensions**, choose **Use Measured Size** to fill
    the display size from the complete product, or enter its manufacturer size
-   directly. Width, depth and height are required, positive values **in metres**:
-   enter `0.995`, not `995`, for a 995 mm width.
+   directly. **Length, width and height** are required, positive values **in centimetres**,
+   in that order: enter length `218`, width `99.5` and height `40` for a
+   2180 × 995 × 400 mm model. Length is Blender Y, width is X and height is Z.
+   Previously saved metre inputs are displayed in centimetres automatically and
+   migrate once when edited or when the add-on reloads. Metadata is converted to
+   the existing metre-based GLB schema on export, so Domus reads 218 × 99.5 cm
+   correctly. Placement clearance inputs remain in metres.
 4. Set **Prefer walls**, **Blocks other furniture**, and front/back/side use-space
    clearance if needed. **Price** is optional. Hover a field or button for an
    explanation, including measurement axes and clearance directions.
@@ -89,7 +94,7 @@ changes its collision footprint.
 The actual size is measured internally on every save and measured again from
 the exported GLB on import. Placement, collision, 2D footprints, 3D measurements
 and AI layout checks use the actual geometry. Domus centres it horizontally and
-places its lowest point on the floor. Blender X is width, Y is depth and Z is
+places its lowest point on the floor. Blender X is width, Y is length and Z is
 height; a product's front faces Blender −Y, which becomes Domus +Z.
 
 There are no Product ID, manual collider, Interaction or Swatch inputs. IDs
@@ -159,7 +164,7 @@ Schema v2 stores custom properties on exactly one exported metadata carrier:
 | Fields | Meaning |
 | --- | --- |
 | `domus_name`, `domus_category`, `domus_price_label` | Display fields; price is optional. |
-| `domus_display_width_m`, `domus_display_depth_m`, `domus_display_height_m` | Required catalogue size in metres. |
+| `domus_display_width_m`, `domus_display_depth_m`, `domus_display_height_m` | Catalogue size converted from centimetre inputs to metres on export. `depth` stores length along Blender Y. |
 | `domus_width_m`, `domus_depth_m`, `domus_height_m` | Actual measured geometry size. |
 | `domus_collision_width_m`, `domus_collision_depth_m`, offsets and bounds fields | Automatically generated internal placement data. |
 | `domus_collision`, `domus_wall_affinity`, clearance fields | Simple placement preferences. |

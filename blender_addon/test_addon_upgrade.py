@@ -56,7 +56,10 @@ with TemporaryDirectory(prefix="domus-addon-upgrade-", dir=directory) as tempora
             # The previous collection-based package used these same classes,
             # with only unconditional register/unregister and no update watcher.
             source = (directory / "domus_metadata.py").read_text().split("PROPERTIES =")[0]
-            source = source.replace('"version": (0, 4, 1)', '"version": (0, 3, 0)')
+            source = source.replace('"version": (0, 4, 2)', '"version": (0, 3, 0)')
+            for field in ("width", "depth", "height"):
+                source = source.replace(f', get=lambda p: dimension_cm(p, "{field}"), set=lambda p, v: set_dimension_cm(p, "{field}", v)', '')
+            source = source.replace('name="Width (cm)"', 'name="Width (m)"').replace('name="Length (cm)"', 'name="Depth (m)"').replace('name="Height (cm)"', 'name="Height (m)"')
             source += '''
 def register():
     for cls in CLASSES: bpy.utils.register_class(cls)
@@ -96,7 +99,8 @@ def unregister():
     assert "domus_metadata" not in bpy.context.preferences.addons
     assert cube.domus_metadata.name == "Retained hospital bed"
     assert cube.domus_metadata.category == ("Hospital Bed" if package_legacy else "Others")
-    assert cube.domus_metadata.depth == 2
+    assert cube.domus_metadata.depth == 200
+    assert cube.domus_metadata.width == 100
     if not package_legacy:
         assert unknown.domus_metadata.category == "UNSET"
     assert cube["domus_name"] == "Saved metadata stays"
@@ -114,17 +118,18 @@ def unregister():
     update_zip = root / "domus_metadata_addon.zip"
     with ZipFile(update_zip, "w") as archive:
         archive.writestr("domus_product_metadata/", "")
-        source = (directory / "domus_metadata.py").read_text().replace('"version": (0, 4, 1)', '"version": (0, 4, 2)')
+        source = (directory / "domus_metadata.py").read_text().replace('"version": (0, 4, 2)', '"version": (0, 4, 3)')
         archive.writestr("domus_product_metadata/__init__.py", source)
         archive.write(directory / "catalogue_schema.json", "domus_product_metadata/catalogue_schema.json")
     assert bpy.ops.preferences.addon_install(filepath=str(update_zip), overwrite=True) == {"FINISHED"}
     assert module.check_for_update() is None
-    assert module.bl_info["version"] == (0, 4, 2)
+    assert module.bl_info["version"] == (0, 4, 3)
     assert module.__addon_enabled__
     assert bpy.context.scene.domus_product_source.collection == collection
     assert collection.domus_metadata.name == "Collection fields stay"
     assert collection.domus_metadata.category == "Hospital Bed"
     assert cube.domus_metadata.name == "Retained hospital bed"
+    assert cube.domus_metadata.depth == 200, "upgrades must not multiply cm inputs again"
     # Register twice and disable twice: no duplicate classes or stale pointers.
     module.register()
     assert collection.domus_metadata.name == "Collection fields stay"

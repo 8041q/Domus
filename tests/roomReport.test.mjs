@@ -6,12 +6,12 @@ import * as THREE from 'three';
 const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: 'custom', logLevel: 'silent' });
 after(() => vite.close());
 const { emptyRoomSnapshot, parseProjectSnapshot } = await vite.ssrLoadModule('/src/store.ts');
-const { roomReportData } = await vite.ssrLoadModule('/src/core/roomReport.ts');
-const { roomViewSummary, coverageArea } = await vite.ssrLoadModule('/src/core/roomReportGeometry.ts');
+const { roomReportData, renderRoomReport } = await vite.ssrLoadModule('/src/core/roomReport.ts');
+const { roomViewSummary, coverageArea, roomWallMeasurements } = await vite.ssrLoadModule('/src/core/roomReportGeometry.ts');
 const { getRoomWalls, roomBounds } = await vite.ssrLoadModule('/src/core/roomGeometry.ts');
 const { normalizeProjectDetails } = await vite.ssrLoadModule('/src/core/projectDetails.ts');
 const { ReportDocument, wrapReportText } = await vite.ssrLoadModule('/src/core/reportLayout.ts');
-const { drawReportPlanKey } = await vite.ssrLoadModule('/src/core/roomReportViews.ts');
+const { drawReportPlanKey, renderRoomViewPages } = await vite.ssrLoadModule('/src/core/roomReportViews.ts');
 const { PlannerScene } = await vite.ssrLoadModule('/src/renderer/PlannerScene.ts');
 
 test('reports distinguish entered real-life sizes, geometry fallbacks and catalogue sizes without changing placement', () => {
@@ -20,8 +20,8 @@ test('reports distinguish entered real-life sizes, geometry fallbacks and catalo
   snapshot.objects = [{ id: 'a', productId: 'bed', x: 1.5, z: 2, rotationY: -Math.PI / 2 }];
   snapshot.unplacedObjects = [{ id: 'b', productId: 'bed' }, { id: 'c', productId: 'bed' }];
   const before = structuredClone(snapshot), report = roomReportData(snapshot, { bed: product });
-  assert.equal(report.furniture[0].dimensions, '1.20 × 2.10 × 0.90');
-  assert.equal(report.furniture[0].geometryDimensions, '1.00 × 1.50 × 0.50');
+  assert.equal(report.furniture[0].dimensions, '2.10 × 1.20 × 0.90');
+  assert.equal(report.furniture[0].geometryDimensions, '1.50 × 1.00 × 0.50');
   assert.equal(report.furniture[0].dimensionSource, 'Real-life dimensions');
   assert.deepEqual(report.furniture.map((item) => [item.quantity, item.status]), [[1, 'In room'], [2, 'Not placed']]);
   assert.equal(report.instances[0].rotation, 270); assert.deepEqual(snapshot, before);
@@ -29,6 +29,33 @@ test('reports distinguish entered real-life sizes, geometry fallbacks and catalo
   assert.equal(roomReportData(snapshot, { bed: noEntered }).furniture[0].dimensionSource, 'Real-life size not supplied');
   assert.equal(roomReportData(snapshot, { bed: { ...noEntered, model: undefined } }).furniture[0].dimensionSource, 'Catalogue dimensions');
   assert.equal(roomReportData(snapshot, {}).furniture[0].dimensions, 'Unavailable');
+});
+
+test('wall schedules include each physical wall once for every room shape, independent of cutaways', () => {
+  for (const shape of ['rectangle', 'l-shape', 'angled-corner', 'recess', 'circle']) {
+    const snapshot = emptyRoomSnapshot(shape);
+    const walls = getRoomWalls(snapshot.room), rows = roomWallMeasurements(snapshot);
+    assert.equal(rows.length, walls.length);
+    assert.deepEqual(rows.map(row => row.walls[0].id), walls.map(wall => wall.id));
+    assert.deepEqual(rows.map(row => row.label), walls.map((_, i) => `Wall ${i + 1}`));
+    assert.ok(rows.every(row => row.height === snapshot.room.height));
+    assert.ok(Math.abs(rows.reduce((sum, row) => sum + row.length, 0) - walls.reduce((sum, wall) => sum + wall.length, 0)) < 1e-8);
+    assert.deepEqual(roomReportData(snapshot, {}).wallMeasurements, rows);
+    const view = roomViewSummary(snapshot, 'front', [walls[0].id, walls[2].id]);
+    assert.deepEqual(view.boundaries.map(boundary => boundary.label), view.boundaries.map((_, i) => `Side ${i + 1}`));
+  }
+});
+
+test('wall schedules include physical interior walls and deduct their openings', () => {
+  const snapshot = emptyRoomSnapshot(), walls = getRoomWalls(snapshot.room);
+  snapshot.dividers = [{ id: 'divider-report', kind: 'wall', start: { kind: 'perimeter', id: walls[0].id, t: .5 }, end: { kind: 'perimeter', id: walls[2].id, t: .5 } }];
+  snapshot.openings = [{ id: 'interior-door', type: 'door', variant: 'single-door', wallId: 'divider-report', offset: 1, width: .9, height: 2, sillHeight: 0 }];
+  const rows = roomWallMeasurements(snapshot), interior = rows.at(-1);
+  assert.equal(rows.length, walls.length + 1);
+  assert.equal(interior.label, 'Interior wall 1');
+  assert.equal(interior.openingCount, 1);
+  assert.ok(Math.abs(interior.grossArea - interior.netArea - 1.8) < 1e-8);
+  assert.equal(roomReportData(snapshot, {}).openings[0].location, 'Interior wall 1');
 });
 
 test('legacy metadata defaults are blank, new fields validate and preserve imports', () => {
@@ -70,6 +97,25 @@ test('circular boundary runs wrap the perimeter, merge aperture pieces and disti
   assert.deepEqual(new Set(disjoint.hiddenWallIds), new Set([walls[0].id, walls[4].id]));
 });
 
+test('adjacent angled walls are separate sides while collinear split walls stay together', () => {
+  const snapshot = emptyRoomSnapshot('angled-corner'), walls = getRoomWalls(snapshot.room);
+  for (const [view, indices] of [['front', [0, 1]], ['right', [1, 2]]]) {
+    const summary = roomViewSummary(snapshot, view, indices.map(i => walls[i].id));
+    assert.equal(summary.boundaries.length, 2);
+    assert.deepEqual(summary.boundaries.map(side => side.walls.map(wall => wall.id)), indices.map(i => [walls[i].id]));
+    assert.deepEqual(summary.boundaries.map(side => side.length), indices.map(i => walls[i].length));
+    assert.ok(Math.abs(summary.length - summary.boundaries.reduce((sum, side) => sum + side.length, 0)) < 1e-8);
+    assert.ok(Math.abs(summary.grossArea - summary.boundaries.reduce((sum, side) => sum + side.grossArea, 0)) < 1e-8);
+  }
+  const straight = emptyRoomSnapshot();
+  const [a, b] = straight.room.vertices;
+  straight.room.vertices.splice(1, 0, { id: 'split', x: (a.x + b.x) / 2, z: (a.z + b.z) / 2 });
+  const split = getRoomWalls(straight.room);
+  const summary = roomViewSummary(straight, 'front', split.slice(0, 2).map(wall => wall.id));
+  assert.equal(summary.boundaries.length, 1);
+  assert.equal(summary.boundaries[0].walls.length, 2);
+});
+
 test('fixed-view summaries consume actual renderer cutaways for rectangle, circle, angled and recessed rooms', () => {
   for (const shape of ['rectangle', 'circle', 'angled-corner', 'recess']) {
     const snapshot = emptyRoomSnapshot(shape), bounds = roomBounds(snapshot.room.vertices);
@@ -91,13 +137,45 @@ test('fixed-view summaries consume actual renderer cutaways for rectangle, circl
 function recordingCanvas() {
   const operations = [], ctx = { font: '', fillStyle: '', strokeStyle: '', lineWidth: 1, textAlign: 'left', textBaseline: 'top', path: [],
     measureText: (value) => ({ width: value.length * 12 }),
-    fillText(text, x, y) { operations.push({ kind: 'text', text, x, y }); },
+    fillText(text, x, y) { operations.push({ kind: 'text', text, x, y, fill: this.fillStyle, font: this.font }); },
     fillRect(x, y, width, height) { operations.push({ kind: 'fill', x, y, width, height, fill: this.fillStyle }); },
     strokeRect(x, y, width, height) { operations.push({ kind: 'border', x, y, width, height }); },
     beginPath() { this.path = []; }, moveTo(x, y) { this.path.push([x, y]); }, lineTo(x, y) { this.path.push([x, y]); },
-    stroke() { operations.push({ kind: 'path', points: [...this.path], width: this.lineWidth }); }, closePath() {}, fill() {}, arc() {}, save() {}, restore() {} };
+    stroke() { operations.push({ kind: 'path', points: [...this.path], width: this.lineWidth, colour: this.strokeStyle }); }, closePath() {}, fill() {}, arc() {}, save() {}, restore() {} };
   return { getContext: () => ctx, operations };
 }
+
+test('report labels keep model/category together and list walls without view labels or repeated heights', () => {
+  const snapshot = emptyRoomSnapshot('recess');
+  snapshot.openings = [{ id: 'window', type: 'window', wallId: getRoomWalls(snapshot.room)[0].id,
+    offset: 1.1, width: 1.2, height: 1.2, sillHeight: .85 }];
+  snapshot.objects = [{ id: 'bed', productId: 'bed', x: 1, z: 1, rotationY: 0 }];
+  const data = roomReportData(snapshot, { bed: { id: 'bed', name: 'C8c', category: 'Hospital Bed', width: .995, depth: 2.18, height: .4 } });
+  assert.equal(data.furniture[0].dimensions, '2.18 × 0.995 × 0.40');
+  const canvases = [], previousDocument = globalThis.document;
+  globalThis.document = { createElement() { const canvas = recordingCanvas(); canvas.toDataURL = () => 'data:image/jpeg;base64,/9j/2Q=='; canvases.push(canvas); return canvas; } };
+  try {
+    renderRoomReport(data, 'Label regression', '2026-10-13');
+    const text = canvases.flatMap(canvas => canvas.operations.filter(op => op.kind === 'text').map(op => op.text));
+    assert.ok(text.includes('C8c - Hospital Bed'));
+    assert.ok(text.includes('Wall Measurements'));
+    const start = text.indexOf('Wall Measurements');
+    const end = text.findIndex((value, i) => i > start && value.startsWith('Every perimeter'));
+    const schedule = text.slice(start + 1, end);
+    for (const row of data.wallMeasurements) assert.equal(schedule.filter(value => value === row.label).length, 1);
+    assert.ok(text.join(' ').includes('Bottom edge above floor'));
+    assert.ok(text.includes('Wall 1 · 1.10 m from segment start'));
+    assert.ok(text.includes('Openings'));
+    assert.equal(text.filter(value => value === 'Wall height').length, 1);
+    assert.ok(!text.some(value => /Aperture|Hidden wall measurements|Front-\d|Right-\d/.test(value)));
+    assert.equal(text.filter(value => value === 'Furniture list').length, 1);
+    assert.ok(!text.includes('Model geometry and references'));
+    assert.ok(!text.includes('Furniture placement'));
+    assert.ok(!text.includes('3D handoff reference'));
+  } finally {
+    globalThis.document = previousDocument;
+  }
+});
 
 test('banded multiline rows share exact borders, repeat headings and continue their stripe sequence across pages', () => {
   const doc = new ReportDocument('Pagination test', recordingCanvas);
@@ -125,6 +203,17 @@ test('banded multiline rows share exact borders, repeat headings and continue th
   assert.deepEqual(wrapReportText({ measureText: (value) => ({ width: value.length }) }, 'abcdefghij', 4), ['abcd', 'efgh', 'ij']);
 });
 
+test('short schedules stay together instead of splitting their last row onto another page', () => {
+  const doc = new ReportDocument('Short schedule', recordingCanvas);
+  doc.paragraph(Array(24).fill('Existing report content').join('\n'));
+  doc.table('Openings', ['Type', 'Dimensions'], [830, 830], [['Window', '1.20 × 1.20 m'], ['Door', '.90 × 2.08 m']]);
+  assert.equal(doc.pages.length, 2);
+  const labels = page => page.operations.filter(op => op.kind === 'text').map(op => op.text);
+  assert.ok(!labels(doc.pages[0]).includes('Window'));
+  assert.ok(labels(doc.pages[1]).includes('Window') && labels(doc.pages[1]).includes('Door'));
+  assert.equal(labels(doc.pages[1]).filter(text => text === 'Openings').length, 1);
+});
+
 test('plan diagram highlighted paths are drawn from exactly the measured boundary runs', () => {
   const snapshot = emptyRoomSnapshot('recess'), walls = getRoomWalls(snapshot.room);
   const summary = roomViewSummary(snapshot, 'front', [walls[0].id, walls[3].id]);
@@ -132,6 +221,102 @@ test('plan diagram highlighted paths are drawn from exactly the measured boundar
   const highlights = canvas.operations.filter((op) => op.kind === 'path' && op.width === 6);
   assert.equal(highlights.length, summary.boundaries.length);
   highlights.forEach((line, i) => assert.equal(line.points.length, summary.boundaries[i].walls.length + 1));
+  const labels = canvas.operations.filter(op => op.kind === 'text').map(op => op.text);
+  assert.ok(labels.includes('Side 1') && labels.includes('Side 2'));
+  assert.ok(!labels.includes('Front'));
+});
+
+test('large labels on adjacent angled sides do not overlap in the diagram', () => {
+  const snapshot = emptyRoomSnapshot('angled-corner');
+  snapshot.room.width = 3.2; snapshot.room.depth = 4.5;
+  const { vertices } = emptyRoomSnapshot('angled-corner').room;
+  snapshot.room.vertices = vertices.map(v => ({ ...v, x: v.x * 3.2 / 5.2, z: v.z * 4.5 / 3.8 }));
+  const walls = getRoomWalls(snapshot.room), summary = roomViewSummary(snapshot, 'front', walls.slice(0, 2).map(wall => wall.id));
+  const canvas = recordingCanvas();
+  drawReportPlanKey(canvas.getContext(), snapshot.room.vertices, summary, 1390, 160, 340, 360);
+  const [a, b] = canvas.operations.filter(op => op.kind === 'text' && /^Side /.test(op.text));
+  assert.ok(a && b);
+  const aw = canvas.getContext().measureText(a.text).width, bw = canvas.getContext().measureText(b.text).width;
+  assert.ok(a.x + aw / 2 <= b.x - bw / 2 || b.x + bw / 2 <= a.x - aw / 2 || a.y + 24 <= b.y || b.y + 24 <= a.y);
+  const highlights = canvas.operations.filter(op => op.kind === 'path' && op.width === 6);
+  [a, b].forEach((label, i) => {
+    const [start, end] = highlights[i].points, wall = summary.boundaries[i].walls[0];
+    const halfWidth = canvas.getContext().measureText(label.text).width / 2;
+    const distances = [label.x - halfWidth, label.x + halfWidth].flatMap(x => [label.y, label.y + 24].map(y =>
+      (x - (start[0] + end[0]) / 2) * wall.inward.x + (y - (start[1] + end[1]) / 2) * wall.inward.z));
+    if (Math.abs(wall.inward.x) >= Math.abs(wall.inward.z) - 1e-8) assert.ok(Math.max(...distances) <= -10 + 1e-8);
+    else assert.ok(Math.min(...distances) >= 10 - 1e-8);
+  });
+});
+
+test('minimap names sit close to walls, outside left/right and inside top/bottom', () => {
+  const snapshot = emptyRoomSnapshot(), walls = getRoomWalls(snapshot.room);
+  const summary = roomViewSummary(snapshot, 'front', walls.map(wall => wall.id));
+  summary.boundaries[0].label = 'Side 12';
+  const canvas = recordingCanvas();
+  drawReportPlanKey(canvas.getContext(), snapshot.room.vertices, summary, 1390, 160, 340, 360);
+  const highlights = canvas.operations.filter(op => op.kind === 'path' && op.width === 6);
+  const labels = canvas.operations.filter(op => op.kind === 'text' && /^Side /.test(op.text));
+  const points = highlights.flatMap(op => op.points), minX = Math.min(...points.map(p => p[0])), maxX = Math.max(...points.map(p => p[0]));
+  const minY = Math.min(...points.map(p => p[1])), maxY = Math.max(...points.map(p => p[1]));
+  assert.equal(labels.length, 4);
+  labels.forEach((label, i) => {
+    const [a, b] = highlights[i].points, halfWidth = canvas.getContext().measureText(label.text).width / 2;
+    assert.equal(label.fill, highlights[i].colour);
+    if (a[0] === b[0]) {
+      if (a[0] === minX) assert.equal(label.x + halfWidth, minX - 10);
+      else assert.equal(label.x - halfWidth, maxX + 10);
+      assert.ok(Math.abs(label.y + 12 - (a[1] + b[1]) / 2) < 1e-8);
+    } else {
+      assert.equal(label.x, (a[0] + b[0]) / 2);
+      assert.equal(label.y, a[1] === minY ? minY + 10 : maxY - 34);
+    }
+    assert.ok(label.x - halfWidth >= 1390 && label.x + halfWidth <= 1730);
+  });
+  assert.ok(!canvas.operations.some(op => op.kind === 'path' && op.width === 1.5));
+});
+
+test('plan keys keep the front marker fixed and match side labels to legend colours', () => {
+  const snapshot = emptyRoomSnapshot('recess'), walls = getRoomWalls(snapshot.room);
+  const summaries = ['front', 'right', 'back', 'left'].map(view => roomViewSummary(snapshot, view, [walls[0].id, walls[3].id]));
+  summaries[0].boundaries[1].label = 'Side 12';
+  const pages = [], previousDocument = globalThis.document;
+  globalThis.document = { createElement() {
+    const canvas = recordingCanvas(); canvas.getContext().drawImage = (...args) => canvas.operations.push({ kind: 'image', args });
+    const context = canvas.getContext();
+    context.measureText = value => ({ width: [...value].reduce((sum, character) => sum + (character === '1' ? 7 : 12), 0) });
+    context.fill = function() { canvas.operations.push({ kind: 'filledPath', points: [...this.path], fill: this.fillStyle }); };
+    canvas.toDataURL = () => 'data:image/jpeg;base64,/9j/2Q=='; pages.push(canvas); return canvas;
+  } };
+  try {
+    renderRoomViewPages(summaries.map(summary => ({ view: summary.view, image: {}, summary })), roomReportData(snapshot, {}), 'Keys', '2026-10-13', 0);
+    const arrow = pages[0].operations.find(op => op.kind === 'filledPath');
+    assert.equal(arrow.fill, '#52525b');
+    for (const page of pages) {
+      assert.deepEqual(page.operations.find(op => op.kind === 'filledPath'), arrow);
+      const text = page.operations.filter(op => op.kind === 'text');
+      const sides = page === pages[0] ? ['Side 1', 'Side 12'] : ['Side 1', 'Side 2'];
+      for (const side of sides) {
+        const keyLabel = text.find(op => op.text === side), legendLabel = text.find(op => op.text === side && op.x === 1390);
+        assert.ok(keyLabel && legendLabel); assert.equal(keyLabel.fill, legendLabel.fill);
+        assert.equal(keyLabel.fill, side === 'Side 1' ? '#0e7490' : '#7c3aed');
+        assert.equal(keyLabel.font, '600 24px system-ui');
+        assert.equal(legendLabel.font, '600 30px system-ui');
+        const separator = text.find(op => op.text === '·' && op.y === legendLabel.y);
+        const length = text.find(op => /^\d+\.\d{2} m$/.test(op.text) && op.y === legendLabel.y);
+        const separatorX = 1390 + Math.ceil(page.getContext().measureText('Side 99').width) + 4;
+        assert.equal(separator.x, separatorX, 'label column reserves only two digits and a small gap');
+        assert.equal(length.x, separatorX + Math.ceil(page.getContext().measureText('·').width) + 8, 'all measurements start in one fixed column');
+        assert.equal(length.font, legendLabel.font);
+        assert.ok(legendLabel.x + page.getContext().measureText(side).width < separator.x, 'label column fits two digits');
+      }
+      assert.ok(text.some(op => op.text.includes('Colours identify')));
+      assert.ok(!text.some(op => /Hidden wall key|Dot =|Arrow =|top arrow marks/.test(op.text)));
+      assert.equal(page.operations.find(op => op.kind === 'image').args[2], 160);
+      assert.ok(text.find(op => op.text === 'Highlighted wall length').y >= 980);
+      assert.ok(text.every(op => op.y < 1180 || op.y === 1200), 'key explanation stays above the footer');
+    }
+  } finally { globalThis.document = previousDocument; }
 });
 
 test('a failed PDF capture restores camera, render size, helper visibility and controls', async () => {

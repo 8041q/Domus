@@ -62,7 +62,7 @@ source = bpy.context.scene.domus_product_source
 source.collection = collection
 props = collection.domus_metadata
 props.name, props.category = "Alpha regression", "Others"
-props.width, props.depth, props.height = 1, 1, 1
+props.width, props.depth, props.height = 100, 100, 100
 
 # A generated RGBA texture contains both fully transparent and opaque pixels.
 image = bpy.data.images.new("Alpha fixture", 2, 2, alpha=True)

@@ -70,8 +70,13 @@ export class ReportDocument {
       const lines = cells.map((cell, i) => wrapReportText(this.ctx, cell, widths[i] - 32));
       return { lines, height: Math.max(...lines.map((cell) => cell.length)) * 31 + 28 };
     };
-    const heading = prepare(headers, true), first = rows.length ? prepare(rows[0]) : { height: 0 };
-    this.section(title, heading.height + first.height);
+    const preparedRows = rows.map(cells => prepare(cells));
+    const heading = prepare(headers, true), first = preparedRows[0] ?? { height: 0 };
+    const total = heading.height + preparedRows.reduce((sum, row) => sum + row.height, 0);
+    // Small schedules should remain a single block rather than leaving one row
+    // on the next page. Long schedules still paginate with repeated headers.
+    const keepTogether = rows.length <= 6 && 56 + total + 24 <= this.bottom - 165;
+    this.section(title, keepTogether ? total + 24 : heading.height + first.height);
     const draw = (row: ReturnType<typeof prepare>, fill: string, bold: boolean) => {
       let x = 70; const top = this.y;
       this.ctx.fillStyle = fill; this.ctx.fillRect(x, top, 1660, row.height);
@@ -83,8 +88,7 @@ export class ReportDocument {
       this.y += row.height;
     };
     draw(heading, '#e9e9ee', true);
-    rows.forEach((cells, index) => {
-      const row = prepare(cells);
+    preparedRows.forEach((row, index) => {
       if (this.y + row.height > this.bottom) { this.newPage(); this.section(`${title} · continued`, heading.height + row.height); draw(heading, '#e9e9ee', true); }
       draw(row, index % 2 === 0 ? '#ffffff' : '#f5f5f8', false);
     });

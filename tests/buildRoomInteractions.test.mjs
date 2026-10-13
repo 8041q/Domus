@@ -54,7 +54,7 @@ test('report groups quantities and separates unplaced furniture using measured m
   snapshot.unplacedObjects = [{ id: 'c', productId: 'chair' }];
   const data = roomReportData(snapshot, PRODUCTS);
   assert.deepEqual(data.furniture.map((row) => [row.quantity, row.status]), [[2, 'In room'], [1, 'Not placed']]);
-  assert.equal(data.furniture[0].dimensions, '0.50 × 0.56 × 0.83');
+  assert.equal(data.furniture[0].dimensions, '0.56 × 0.50 × 0.83');
   assert.equal(data.area, snapshot.room.width * snapshot.room.depth);
   const jpeg = { jpeg: Uint8Array.from([0xff, 0xd8, 0xff, 0xd9]), width: 10, height: 10 };
   const pdf = buildRoomPdf(Array(5).fill(jpeg), Array(3).fill(jpeg));

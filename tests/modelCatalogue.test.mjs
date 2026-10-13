@@ -82,7 +82,7 @@ test('a partial export or invalid metadata reports an issue without discarding e
   await writeFile(file,Buffer.from('glTF'));
   let data = await catalogue.scan(); assert.equal(data.issues.length,1); assert.equal(data.products[0].id,original.id); assert.equal(data.products[0].available,false);
   await writeFile(file,glb({...metadata,domus_display_width_m:0}));
-  data = await catalogue.scan(); assert.match(data.issues[0].message,/display size/);
+  data = await catalogue.scan(); assert.match(data.issues[0].message,/external dimensions/);
   await writeFile(file,glb(metadata)); data = await catalogue.scan();
   assert.equal(data.issues.length,0); assert.equal(data.products[0].id,original.id); assert.equal(data.products[0].available,true);
 });
