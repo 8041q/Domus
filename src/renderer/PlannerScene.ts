@@ -25,6 +25,7 @@ import { themeHex, themeMetric } from '../theme';
 import { interiorWallProfile, profileHeight } from '../core/interiorWallView';
 import { cutWallGeometry } from './interiorWallGeometry';
 import { createFloorSurfaceGeometry } from './floorGeometry';
+import { createPerimeterShade } from './perimeterShading';
 import { createFrameQueue } from '../core/frameQueue';
 import { ProductModelLibrary } from './productModels';
 import { renderRoomReport, roomReportData } from '../core/roomReport';
@@ -1604,55 +1605,15 @@ export class PlannerScene {
     const bounds = roomBounds(snapshot.room.vertices);
     const width = Math.min(0.65, Math.min(bounds.width, bounds.depth) * 0.16);
     const edge = this.insetRoomVertices(snapshot, WALL_THICKNESS / 2);
-    const inner = this.insetRoomVertices(snapshot, WALL_THICKNESS / 2 + width);
-    const underside = snapshot.room.height - CEILING_THICKNESS - 0.002;
-
-    for (const wall of getRoomWalls(snapshot.room)) {
-      const next = (wall.index + 1) % edge.length;
-      const geometry = this.makeQuadGeometry([
-        new THREE.Vector3(edge[wall.index].x, underside, edge[wall.index].z),
-        new THREE.Vector3(edge[next].x, underside, edge[next].z),
-        new THREE.Vector3(inner[next].x, underside, inner[next].z),
-        new THREE.Vector3(inner[wall.index].x, underside, inner[wall.index].z)
-      ]);
-      geometry.setAttribute('uv', new THREE.Float32BufferAttribute([
-        0, 0, wall.length, 0, wall.length, 1, 0, 1
-      ], 2));
-      const material = new THREE.ShaderMaterial({
-        uniforms: { wallLength: { value: wall.length },
-          cornerStart: { value: wallCornerShading(snapshot.room, wall).start }, cornerEnd: { value: wallCornerShading(snapshot.room, wall).end } },
-        vertexShader: `
-          varying vec2 vCeilingPosition;
-          void main() {
-            vCeilingPosition = uv;
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-          }
-        `,
-        fragmentShader: `
-          uniform float wallLength;
-          uniform float cornerStart; uniform float cornerEnd;
-          varying vec2 vCeilingPosition;
-          void main() {
-            float fromWall = 1.0 - smoothstep(0.0, 1.0, vCeilingPosition.y);
-            float nearCorner = max(
-              (1.0 - smoothstep(0.0, 0.7, vCeilingPosition.x)) * cornerStart,
-              (1.0 - smoothstep(0.0, 0.7, wallLength - vCeilingPosition.x)) * cornerEnd
-            );
-            float contact = 1.0 - smoothstep(0.0, 0.15, vCeilingPosition.y);
-            float opacity = fromWall * (0.04 + 0.015 * nearCorner) + 0.015 * contact;
-            gl_FragColor = vec4(0.16, 0.15, 0.14, opacity);
-          }
-        `,
-        transparent: true,
-        depthWrite: false,
-        side: THREE.DoubleSide
-      });
-      const shade = new THREE.Mesh(geometry, material);
-      shade.userData.ceilingShade = true;
-      shade.visible = this.ceilingVisible;
-      shade.renderOrder = 1;
-      this.architecturalShadeGroup.add(shade);
-    }
+    const shade = createPerimeterShade(edge, this.perimeterCornerStrengths(snapshot), {
+      height: snapshot.room.height - CEILING_THICKNESS - 0.002,
+      width, cornerRadius: 0.7, contactWidth: width * 0.15,
+      edgeOpacity: 0.04, cornerOpacity: 0.015, contactOpacity: 0.015,
+      color: new THREE.Color(0.16, 0.15, 0.14)
+    });
+    shade.userData.ceilingShade = true;
+    shade.visible = this.ceilingVisible;
+    this.architecturalShadeGroup.add(shade);
   }
 
   private updateLightFixtureVisibility(snapshot: PlannerSnapshot) {
@@ -2513,53 +2474,19 @@ export class PlannerScene {
     const bounds = roomBounds(snapshot.room.vertices);
     const width = Math.min(1.1, Math.max(0.25, Math.min(bounds.width, bounds.depth) * 0.24));
     const edge = this.insetRoomVertices(snapshot, WALL_THICKNESS / 2);
-    const inner = this.insetRoomVertices(snapshot, WALL_THICKNESS / 2 + width);
-    const walls = getRoomWalls(snapshot.room);
+    const shade = createPerimeterShade(edge, this.perimeterCornerStrengths(snapshot), {
+      height: 0.004,
+      width, cornerRadius: 0.8, contactWidth: width * 0.12,
+      edgeOpacity: 0.17, cornerOpacity: 0.08, contactOpacity: 0.08,
+      color: new THREE.Color(0.045, 0.045, 0.055)
+    });
+    this.architecturalShadeGroup.add(shade);
+  }
 
-    for (const wall of walls) {
-      const next = (wall.index + 1) % edge.length;
-      const geometry = this.makeQuadGeometry([
-        new THREE.Vector3(edge[wall.index].x, 0.004, edge[wall.index].z),
-        new THREE.Vector3(edge[next].x, 0.004, edge[next].z),
-        new THREE.Vector3(inner[next].x, 0.004, inner[next].z),
-        new THREE.Vector3(inner[wall.index].x, 0.004, inner[wall.index].z)
-      ]);
-      geometry.setAttribute('uv', new THREE.Float32BufferAttribute([
-        0, 0, wall.length, 0, wall.length, 1, 0, 1
-      ], 2));
-      const material = new THREE.ShaderMaterial({
-        uniforms: { wallLength: { value: wall.length },
-          cornerStart: { value: wallCornerShading(snapshot.room, wall).start }, cornerEnd: { value: wallCornerShading(snapshot.room, wall).end } },
-        vertexShader: `
-          varying vec2 vEdgePosition;
-          void main() {
-            vEdgePosition = uv;
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-          }
-        `,
-        fragmentShader: `
-          uniform float wallLength;
-          uniform float cornerStart; uniform float cornerEnd;
-          varying vec2 vEdgePosition;
-          void main() {
-            float fromWall = 1.0 - smoothstep(0.0, 1.0, vEdgePosition.y);
-            float contact = 1.0 - smoothstep(0.0, 0.12, vEdgePosition.y);
-            float nearCorner = max(
-              (1.0 - smoothstep(0.0, 0.8, vEdgePosition.x)) * cornerStart,
-              (1.0 - smoothstep(0.0, 0.8, wallLength - vEdgePosition.x)) * cornerEnd
-            );
-            float opacity = fromWall * (0.17 + 0.08 * nearCorner) + 0.08 * contact;
-            gl_FragColor = vec4(0.045, 0.045, 0.055, opacity);
-          }
-        `,
-        transparent: true,
-        depthWrite: false,
-        side: THREE.DoubleSide
-      });
-      const shade = new THREE.Mesh(geometry, material);
-      shade.renderOrder = 1;
-      this.architecturalShadeGroup.add(shade);
-    }
+  private perimeterCornerStrengths(snapshot: PlannerSnapshot) {
+    const corners = getRoomWalls(snapshot.room).map((wall) => wallCornerShading(snapshot.room, wall));
+    // A shared corner has one strength, independent of either wall's UV mapping.
+    return corners.map((corner, index) => Math.min(corner.start, corners[(index - 1 + corners.length) % corners.length].end));
   }
 
   private addBaseboard(
