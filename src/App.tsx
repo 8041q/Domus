@@ -4,6 +4,7 @@ import { BuildRoom } from './BuildRoom';
 import { usePlannerStore } from './store';
 import { Button, Icon } from './ui';
 import { ProjectControls } from './ProjectControls';
+import { handlePlannerShortcut } from './core/plannerShortcuts';
 
 const PlanRoom = lazy(() => import('./PlanRoom').then((module) => ({ default: module.PlanRoom })));
 
@@ -27,15 +28,7 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (target?.matches('input, textarea, select') || document.querySelector('dialog[open]')) return;
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-        e.preventDefault();
-        e.shiftKey ? redo() : undo();
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); }
-      if (mode === 'plan' && e.key.toLowerCase() === 'r') rotate();
-      if (mode === 'plan' && (e.key === 'Delete' || e.key === 'Backspace')) remove();
+      handlePlannerShortcut(e, { mode, rotate, remove, undo, redo });
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);

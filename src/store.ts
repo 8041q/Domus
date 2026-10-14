@@ -834,6 +834,11 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
   },
 
   removeSelected: () => {
+    const openingId = get().selectedOpeningId;
+    if (openingId) {
+      get().removeOpening(openingId);
+      return;
+    }
     const id = get().selectedId;
     if (!id) return;
     get().removeFurniture(id);

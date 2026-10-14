@@ -8,7 +8,7 @@ export type ArchitectureMeasurement = {
   start: Vec2; end: Vec2; distance: number;
 };
 
-/** Two gap rows, always outside the selected aperture: corners and nearest targets. */
+/** Corner gaps and a second row only for neighboring items, outside the selected aperture. */
 export function architectureSpacingMeasurements(snapshot: PlannerSnapshot, selectedId: string): ArchitectureMeasurement[] {
   const opening = snapshot.openings.find((opening) => opening.id === selectedId);
   if (!opening) return [];
@@ -69,7 +69,7 @@ export function architectureSpacingMeasurements(snapshot: PlannerSnapshot, selec
   });
   const left = others.filter((other) => other.end > boundaryStart && other.end <= selected.start + 1e-6).sort((a, b) => b.end - a.end)[0];
   const right = others.filter((other) => other.start < boundaryEnd && other.start >= selected.end - 1e-6).sort((a, b) => a.start - b.start)[0];
-  add('left-item', left ? 'item-gap' : 'wall-gap', 0, left?.end ?? boundaryStart, selected.start);
-  add('right-item', right ? 'item-gap' : 'wall-gap', 0, selected.end, right?.start ?? boundaryEnd);
+  if (left) add('left-item', 'item-gap', 0, left.end, selected.start);
+  if (right) add('right-item', 'item-gap', 0, selected.end, right.start);
   return result;
 }

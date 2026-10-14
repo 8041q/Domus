@@ -235,6 +235,7 @@ export class PlannerScene {
       this.renderer.outputColorSpace = THREE.SRGBColorSpace;
       this.renderer.toneMapping = THREE.NeutralToneMapping;
       this.renderer.toneMappingExposure = 0.98;
+      this.renderer.domElement.tabIndex = -1;
       this.container.appendChild(this.renderer.domElement);
       this.moveHint = createMoveHint(this.container);
 
@@ -5014,6 +5015,8 @@ export class PlannerScene {
 
   private onPointerDown = (event: PointerEvent) => {
     if (event.button !== 0) return;
+    // A room selection takes keyboard focus away from the architecture inputs.
+    this.renderer.domElement.focus?.({ preventScroll: true });
     if (this.moveHint) this.moveHint.hidden = true;
     this.spaceClick = null;
     this.wallClick = null;

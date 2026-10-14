@@ -1140,6 +1140,8 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
 
   const onPointerDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     if (e.button !== 0 || dragRef.current) return;
+    // Returning to the drawing ends input editing before selection/drag snapshots.
+    e.currentTarget.focus({ preventScroll: true });
     setMoveHint(null);
     moveQueue.current!.clear();
     dragPointerId.current = e.pointerId;
@@ -1368,6 +1370,7 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
     <div className={`plan-stage ${purpose}`}>
       <canvas
         ref={canvasRef}
+        tabIndex={-1}
         aria-label={purpose === 'build' ? 'Editable room floor plan' : 'Furniture floor plan'}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}

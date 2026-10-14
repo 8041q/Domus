@@ -270,7 +270,9 @@ test('architectural spacing follows ceiling and wall visibility and centres its 
   fresh();
   let snapshot = { ...getSnapshot(), selectedOpeningId: 'active', showSpacingDimensions: false, showRoomDimensions: false,
     openings: [{ id: 'active', type: 'door', variant: 'single-door', wallId: 'wall-v0-v1',
-      offset: 2.5, width: 0.9, height: 2.08, sillHeight: 0 }] };
+      offset: 2.5, width: 0.9, height: 2.08, sillHeight: 0 },
+      { id: 'neighbor', type: 'opening', variant: 'wall-opening', wallId: 'wall-v0-v1',
+        offset: 0.6, width: 0.8, height: 1.2, sillHeight: 0.75 }] };
   const scene = Object.create(PlannerScene.prototype);
   Object.assign(scene, { bridge: { getSnapshot: () => snapshot }, options: { interactiveArchitecture: true, showFurniture: false },
     currentCameraView: 'free', ceilingVisible: false, wallHiddenState: new Map(),
@@ -292,7 +294,7 @@ test('architectural spacing follows ceiling and wall visibility and centres its 
   assert.equal(scene.architectureSpacingGroup.visible, true);
   assert.equal(roomDimensions.visible, true);
   for (const [type, height, sillHeight] of [['door', 2.08, 0], ['window', 1.2, 0.8], ['opening', 0.75, 1]]) {
-    snapshot = { ...snapshot, openings: [{ ...snapshot.openings[0], type, height, sillHeight }] };
+    snapshot = { ...snapshot, openings: snapshot.openings.map((opening) => opening.id === 'active' ? { ...opening, type, height, sillHeight } : opening) };
     scene.syncArchitectureSpacing(snapshot);
     const label = scene.architectureSpacingLabels.get('left-item');
     assert.ok(Math.abs(label.position.y - sillHeight - height / 2) < 1e-8);
@@ -326,18 +328,23 @@ test('architectural spacing follows ceiling and wall visibility and centres its 
   scene.disposeGroup(scene.helperGroup);
 });
 
-test('the nearest-target row falls back to a wall when no neighboring item exists', () => {
+test('empty sides hide the nearest-item measurement and retain the wall measurement', () => {
   fresh();
   const opening = { id: 'only', type: 'door', variant: 'single-door', wallId: 'wall-v0-v1',
     offset: 2, width: 0.9, height: 2.08, sillHeight: 0 };
   const measures = architectureSpacingMeasurements({ ...getSnapshot(), openings: [opening] }, opening.id);
   const byId = Object.fromEntries(measures.map((measurement) => [measurement.id, measurement]));
-  assert.equal(measures.length, 4);
+  assert.equal(measures.length, 2);
   for (const side of ['left', 'right']) {
-    assert.equal(byId[`${side}-item`].kind, 'wall-gap');
-    assert.equal(byId[`${side}-item`].distance, byId[`${side}-wall`].distance);
-    assert.deepEqual(byId[`${side}-item`].start, byId[`${side}-wall`].start);
-    assert.deepEqual(byId[`${side}-item`].end, byId[`${side}-wall`].end);
+    assert.equal(byId[`${side}-item`], undefined);
+    assert.equal(byId[`${side}-wall`].kind, 'wall-gap');
+  }
+  for (const [side, offset] of [['left', 0.6], ['right', 4]]) {
+    const neighbor = { ...opening, id: 'neighbor', offset, width: 0.6 };
+    const withNeighbor = architectureSpacingMeasurements({ ...getSnapshot(), openings: [opening, neighbor] }, opening.id);
+    assert.equal(withNeighbor.length, 3);
+    assert.equal(withNeighbor.find((measurement) => measurement.id === `${side}-item`).kind, 'item-gap');
+    assert.equal(withNeighbor.find((measurement) => measurement.id === `${side === 'left' ? 'right' : 'left'}-item`), undefined);
   }
 });
 
@@ -376,7 +383,7 @@ test('circular and corner-wrapped gaps start at the full aperture edges, includi
     const opening = { id: 'wrapped', type: 'opening', variant: 'wall-opening', wallId: walls[0].id,
       offset: shape === 'circle' ? 0.2 : 0.1, width: 1.6, height: 1.2, sillHeight: 0.75 };
     const measures = architectureSpacingMeasurements({ ...snapshot, openings: [opening] }, opening.id);
-    assert.equal(measures.length, 4, `${shape} keeps both rows when the anchor section is covered`);
+    assert.equal(measures.length, 2, `${shape} keeps only wall gaps without neighboring items`);
     const startDistance = opening.offset - opening.width / 2, endDistance = opening.offset + opening.width / 2;
     const startLocation = geometry.perimeterLocation(snapshot.room, startDistance);
     const endLocation = geometry.perimeterLocation(snapshot.room, endDistance);
