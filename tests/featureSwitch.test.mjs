@@ -15,6 +15,7 @@ const { overlapsInteriorWall, resolvePlacement, spacingMeasurements } = await vi
 const { PlannerScene } = await vite.ssrLoadModule('/src/renderer/PlannerScene.ts');
 const { BuildRoom } = await vite.ssrLoadModule('/src/BuildRoom.tsx');
 const { PlanRoom } = await vite.ssrLoadModule('/src/PlanRoom.tsx');
+const { LoadingProvider } = await vite.ssrLoadModule('/src/LoadingStatus.tsx');
 const { returnToLayout } = await vite.ssrLoadModule('/src/ViewErrorBoundary.tsx');
 
 function dividedProject() {
@@ -155,7 +156,7 @@ test('disabled UI retains 2D height and hides interior layout, space and wall-vi
     const builder = renderToString(createElement(BuildRoom));
     assert.doesNotMatch(builder, /Interior divisions|Draw a division|Space 1/);
     assert.match(builder, /Room height in metres/);
-    const planner = renderToString(createElement(PlanRoom));
+    const planner = renderToString(createElement(LoadingProvider, null, createElement(PlanRoom)));
     assert.doesNotMatch(planner, /Editing space|Walls up|Walls down/);
     assert.match(planner, /Free cam/);
   } finally { FEATURES.interiorWalls = true; }

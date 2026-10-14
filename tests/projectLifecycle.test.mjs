@@ -10,6 +10,7 @@ const { RoomProjects, ROOM_LIBRARY_KEY, ROOM_DRAFT_KEY } = await vite.ssrLoadMod
 const { emptyRoomSnapshot, parseProjectSnapshot, usePlannerStore: store, getSnapshot } = await vite.ssrLoadModule('/src/store.ts');
 const { FEATURES } = await vite.ssrLoadModule('/src/config/features.ts');
 const { PlanRoom } = await vite.ssrLoadModule('/src/PlanRoom.tsx');
+const { LoadingProvider } = await vite.ssrLoadModule('/src/LoadingStatus.tsx');
 const { AIExperimentPanel } = await vite.ssrLoadModule('/src/ai/AIExperimentPanel.tsx');
 const client = await vite.ssrLoadModule('/src/ai/client.ts');
 const { experimentalAiGateway } = await vite.ssrLoadModule('/server/aiGateway.ts');
@@ -178,7 +179,7 @@ test('disabled AI hides all entry points and refuses client, gateway and proposa
   FEATURES.aiExperiment = false;
   globalThis.fetch = () => { fetches++; throw new Error('Unexpected provider call'); };
   try {
-    assert.doesNotMatch(renderToString(createElement(PlanRoom)), /Experimental AI room assistant/);
+    assert.doesNotMatch(renderToString(createElement(LoadingProvider, null, createElement(PlanRoom))), /Experimental AI room assistant/);
     assert.equal(renderToString(createElement(AIExperimentPanel, { onClose() {} })), '');
     await assert.rejects(client.getAiGatewayConfig(), /disabled/);
     await assert.rejects(client.listAiModels({ provider: 'openai' }), /disabled/);
@@ -193,7 +194,7 @@ test('disabled AI hides all entry points and refuses client, gateway and proposa
       assert.equal(response.statusCode, 503); assert.match(body.error, /disabled/);
     }
   } finally { FEATURES.aiExperiment = previous; globalThis.fetch = previousFetch; }
-  assert.match(renderToString(createElement(PlanRoom)), /Experimental AI room assistant/);
+  assert.match(renderToString(createElement(LoadingProvider, null, createElement(PlanRoom))), /Experimental AI room assistant/);
 });
 
 test('an unreadable recovery draft is retained until an explicit replacement or save', () => {

@@ -1,5 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { usePlannerStore } from './store';
+import { ViewRecovery } from './ViewRecovery';
 
 export function returnToLayout() {
   const state = usePlannerStore.getState();
@@ -14,10 +15,7 @@ export class ViewErrorBoundary extends Component<{ children: ReactNode }, { fail
   componentDidCatch(error: Error, info: ErrorInfo) { console.error('Could not open planner view', error, info.componentStack); }
   render() {
     if (!this.state.failed) return this.props.children;
-    return <div className="view-error" role="alert">
-      <h2>Could not open this view</h2>
-      <p>Your layout is still available. Return to 2D to continue editing.</p>
-      <button type="button" className="primary-button" onClick={returnToLayout}>Return to 2D</button>
-    </div>;
+    return <ViewRecovery title="Could not open this view"
+      description="Your layout is still available. Return to 2D to continue editing." onReturn={returnToLayout} />;
   }
 }

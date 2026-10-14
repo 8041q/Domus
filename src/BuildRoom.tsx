@@ -1,6 +1,6 @@
 import { FEATURES } from './config/features';
 import { activeArchitecture } from './core/activeArchitecture';
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type KeyboardEvent } from 'react';
+import { lazy, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type KeyboardEvent } from 'react';
 import { Plan2D } from './Plan2D';
 import { getRoomWalls, getWall, MIN_WALL_LENGTH, MIN_CIRCLE_DIAMETER, openingFollowsPerimeter, perimeterLocation, polygonArea } from './core/roomGeometry';
 import { deriveSpaces, getPhysicalWalls, resolveDividers } from './core/spaces';
@@ -10,7 +10,7 @@ import { getSnapshot, usePlannerStore } from './store';
 import { Icon } from './ui';
 import { openingVisibleInActiveView, openingVisibilityRevision, subscribeOpeningVisibility } from './core/openingVisibility';
 import { openingSliderRange } from './core/openingSliderRange';
-import { LoadingStatus } from './LoadingStatus';
+import { LoadingBoundary, useLoadingSurface } from './LoadingStatus';
 
 const Viewport3D = lazy(() => import('./Viewport3D').then((module) => ({ default: module.Viewport3D })));
 
@@ -346,7 +346,6 @@ function WallEditor({ wallId }: { wallId: string }) {
   const room = usePlannerStore((s) => s.room);
   const system = usePlannerStore((s) => s.measurementSystem);
   const resizeWallById = usePlannerStore((s) => s.resizeWallById);
-  const splitWallById = usePlannerStore((s) => s.splitWallById);
   const syncSpaces = usePlannerStore((s) => s.syncSpaces);
   const sliderBefore = useRef<ReturnType<typeof getSnapshot> | null>(null);
   const wall = getWall(room, wallId);
@@ -364,8 +363,6 @@ function WallEditor({ wallId }: { wallId: string }) {
           <strong>Wall {wall.index + 1}</strong>
           <span>{wallAngleLabel(wall.start, wall.end)}</span>
         </div>
-        <button type="button" className="small-button" disabled={wall.length < MIN_WALL_LENGTH * 2.05}
-          onClick={() => splitWallById(wall.id)}>+ Split wall</button>
       </div>
       <label className="field-label wall-length-slider">
         <EditableRangeValue label="Adjust length" value={wall.length} min={MIN_WALL_LENGTH} max={20} system={system} metricStep={0.05} onCommit={(length) => resizeWallById(wall.id, length)} />
@@ -389,6 +386,7 @@ function WallEditor({ wallId }: { wallId: string }) {
 }
 
 export function BuildRoom() {
+  const loadingSurface = useLoadingSurface();
   const [resetViewRequest, setResetViewRequest] = useState(0);
   const [dividerTool, setDividerTool] = useState<'wall' | 'open' | null>(null);
   const [openingWarning, setOpeningWarning] = useState('');
@@ -617,7 +615,7 @@ export function BuildRoom() {
       </aside>
 
       <section className="workspace-panel">
-        <div className="workspace-content">
+        <div className="workspace-content" ref={loadingSurface}>
           <div className="workspace-toolbar" aria-label="Room builder view controls">
             <div className="workspace-toolbar-actions">
               <span className="workspace-area-badge" title="Room area"><small>Room area</small><strong>{formatArea(roomArea, system)}</strong></span>
@@ -631,9 +629,9 @@ export function BuildRoom() {
 
           {buildView === 'plan' ? <Plan2D purpose="build" dividerTool={FEATURES.interiorWalls ? dividerTool : null} onDividerAdded={() => setDividerTool(null)} /> : (
             <div className="builder-3d-selection-surface">
-              <Suspense fallback={<div className="viewport-loading"><LoadingStatus blocking label="Preparing 3D preview…" detail="Building your room view" /></div>}>
+              <LoadingBoundary label="Preparing 3D preview…" detail="Building your room view">
                 <Viewport3D furniture={false} interactive={false} architectureInteractive sunRays={false} resetViewRequest={resetViewRequest} />
-              </Suspense>
+              </LoadingBoundary>
             </div>
           )}
         </div>

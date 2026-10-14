@@ -1,11 +1,11 @@
 import { ViewErrorBoundary } from './ViewErrorBoundary';
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { BuildRoom } from './BuildRoom';
 import { usePlannerStore } from './store';
 import { Button, Icon } from './ui';
 import { ProjectControls } from './ProjectControls';
 import { handlePlannerShortcut } from './core/plannerShortcuts';
-import { LoadingStatus } from './LoadingStatus';
+import { LoadingBoundary, LoadingProvider } from './LoadingStatus';
 
 const PlanRoom = lazy(() => import('./PlanRoom').then((module) => ({ default: module.PlanRoom })));
 
@@ -66,13 +66,15 @@ export default function App() {
       </header>
 
       <main className="app-main">
+        <LoadingProvider key={`${mode}-${buildView}`}>
         <ViewErrorBoundary key={`${mode}-${buildView}`}>
           {mode === 'build' ? <BuildRoom /> : (
-            <Suspense fallback={<div className="mode-loading"><LoadingStatus blocking label="Opening room planner…" detail="Getting your workspace ready" /></div>}>
+            <LoadingBoundary label="Opening room planner…" detail="Getting your workspace ready">
               <PlanRoom onExportReady={registerExport} onPdfExportReady={registerPdfExport} />
-            </Suspense>
+            </LoadingBoundary>
           )}
         </ViewErrorBoundary>
+        </LoadingProvider>
       </main>
 
     </div>

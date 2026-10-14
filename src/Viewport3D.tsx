@@ -2,6 +2,7 @@ import { returnToLayout } from './ViewErrorBoundary';
 import { useEffect, useRef, useState } from 'react';
 import { PlannerScene, type ModelLoadStatus } from './renderer/PlannerScene';
 import { LoadingStatus } from './LoadingStatus';
+import { ViewRecovery } from './ViewRecovery';
 import type { PlanCameraView } from './core/types';
 import { usePlannerStore } from './store';
 import { subscribeProductCatalogue } from './core/products';
@@ -30,6 +31,8 @@ export function Viewport3D({
   const [failure, setFailure] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [modelStatus, setModelStatus] = useState<ModelLoadStatus>({ loading: false, error: null, completed: 0, total: 0 });
+  const [preparingRoom, setPreparingRoom] = useState(true);
+  const [loadingTextures, setLoadingTextures] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<PlannerScene | null>(null);
   const internallyChangedViewRef = useRef<PlanCameraView | null>(null);
@@ -66,6 +69,9 @@ export function Viewport3D({
 
   useEffect(() => {
     if (!ref.current) return;
+    setPreparingRoom(true);
+    setLoadingTextures(false);
+    setModelStatus({ loading: false, error: null, completed: 0, total: 0 });
     let scene: PlannerScene | null = null;
     let unsubscribe = () => {};
     let unsubscribeCatalogue = () => {};
@@ -132,6 +138,8 @@ export function Viewport3D({
         interactiveArchitecture: architectureInteractive,
         sunRays,
         onModelStatus: setModelStatus,
+        onReady: () => { if (!stopped) setPreparingRoom(false); },
+        onTextureStatus: loading => { if (!stopped) setLoadingTextures(loading); },
         onError: fail
       });
       sceneRef.current = scene;
@@ -197,22 +205,19 @@ export function Viewport3D({
 
   return (
     <div className="viewport-stage">
-      <LoadingStatus active={exportingPdf || exportingGlb} blocking label={exportingPdf ? 'Preparing room report…' : 'Preparing 3D export…'}
+      <LoadingStatus phase="view" active={!failure && preparingRoom} blocking label="Preparing your room…" detail="Building the 3D view" />
+      <LoadingStatus phase="textures" active={!failure && loadingTextures} label="Loading room materials…" detail="Preparing surface textures" />
+      <LoadingStatus phase="export" active={!failure && (exportingPdf || exportingGlb)} blocking label={exportingPdf ? 'Preparing room report…' : 'Preparing 3D export…'}
         detail={exportingPdf ? 'Capturing room views and measurements' : 'Gathering room geometry and materials'} />
       <div className="viewport" ref={ref} hidden={failure} />
-      <LoadingStatus active={!failure && !exportingPdf && !exportingGlb && (modelStatus.loading || !!modelStatus.error)}
-        label={modelStatus.error ? 'Some furniture could not load' : 'Loading furniture…'}
-        detail={modelStatus.error ?? (modelStatus.total > 1 ? undefined : 'Preparing the model for your room')}
-        progress={{ ...modelStatus, unit: 'models' }} error={!!modelStatus.error}
-        action={modelStatus.error ? <button type="button" onClick={() => sceneRef.current?.retryProductModels()}>Retry</button> : undefined} />
-      {failure && <div className="view-error" role="alert">
-        <h2>Could not open 3D</h2>
-        <p>Your layout is still available. Try again or continue in 2D.</p>
-        <div className="view-error-actions">
-          <button type="button" className="primary-button" onClick={() => { setFailure(false); setAttempt((value) => value + 1); }}>Try again</button>
-          <button type="button" onClick={returnToLayout}>Return to 2D</button>
-        </div>
-      </div>}
+      <LoadingStatus phase="models" active={!failure && (modelStatus.loading || !!modelStatus.error)}
+        label={modelStatus.loading ? 'Loading furniture…' : 'Some furniture could not load'}
+        detail={modelStatus.loading ? (modelStatus.total > 1 ? undefined : 'Preparing the model for your room') : modelStatus.error ?? undefined}
+        progress={{ ...modelStatus, unit: 'models' }} error={!modelStatus.loading && !!modelStatus.error}
+        action={!modelStatus.loading && modelStatus.error ? <button type="button" onClick={() => sceneRef.current?.retryProductModels()}>Retry</button> : undefined} />
+      {failure && <ViewRecovery title="Could not open 3D"
+        description="Your layout is still available. Try again or continue in 2D."
+        onReturn={returnToLayout} onRetry={() => { setFailure(false); setAttempt((value) => value + 1); }} />}
     </div>
   );
 }

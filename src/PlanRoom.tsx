@@ -1,5 +1,5 @@
 import { FEATURES } from './config/features';
-import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ChangeEvent } from 'react';
+import { lazy, memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ChangeEvent } from 'react';
 import { PRODUCT_LIST, PRODUCTS, displayProductDimensions, getProductCatalogueIssues, getProductCatalogueVersion, subscribeProductCatalogue } from './core/products';
 import { PRODUCT_CATEGORIES } from './core/productSchema';
 import { clearanceIssues } from './core/placement';
@@ -15,7 +15,7 @@ import { getSnapshot, usePlannerStore } from './store';
 import { Icon } from './ui';
 import { FloatingPanel } from './FloatingPanel';
 import { EditingSpaceSelector } from './EditingSpaceSelector';
-import { LoadingStatus } from './LoadingStatus';
+import { LoadingBoundary, useLoadingSurface } from './LoadingStatus';
 
 const Viewport3D = lazy(() => import('./Viewport3D').then((module) => ({ default: module.Viewport3D })));
 const AIExperimentPanel = lazy(() => import('./ai/AIExperimentPanel').then((module) => ({ default: module.AIExperimentPanel })));
@@ -324,6 +324,7 @@ const ProductCatalog = memo(function ProductCatalog() {
   const placeUnplacedObject = usePlannerStore((s) => s.placeUnplacedObject);
   const removeFurniture = usePlannerStore((s) => s.removeFurniture);
   const select = usePlannerStore((s) => s.select);
+  const selectedId = usePlannerStore((s) => s.selectedId);
   const setMode = usePlannerStore((s) => s.setMode);
   const usedFurniture = [
     ...objects.map((object) => ({ ...object, placed: true })),
@@ -339,43 +340,48 @@ const ProductCatalog = memo(function ProductCatalog() {
   return (
     <aside className="catalog-panel">
       <div className="catalog-heading">
-        <div><span className="eyebrow">Step 2</span><h1>Plan your room</h1></div>
+        <h1>Furniture</h1>
         <button type="button" className="edit-room-link" onClick={() => setMode('build')}><Icon name="arrowLeft" />Edit room</button>
       </div>
       <section className="used-furniture" aria-labelledby="used-furniture-heading">
         <div className="used-furniture-heading">
-          <h2 id="used-furniture-heading">Used furniture</h2>
+          <h2 id="used-furniture-heading">Room items</h2>
           <span>{usedFurniture.length}</span>
         </div>
         {usedFurniture.length ? (
           <ul className="used-furniture-list">
-            {usedFurniture.map((item) => (
-              <li key={item.id} className="used-furniture-item">
-                <div className="used-furniture-details">
-                  <strong>{PRODUCTS[item.productId].name}</strong>
-                  {!item.placed && <small>Not placed</small>}
-                  {PRODUCTS[item.productId].available === false && <small>Model file unavailable</small>}
-                </div>
-                <button type="button" className="used-furniture-action" onClick={() => item.placed ? select(item.id) : placeUnplacedObject(item.id)}>
-                  {item.placed ? 'Select' : 'Place'}
-                </button>
+            {usedFurniture.map((item) => {
+              const details = <span className="used-furniture-details">
+                <strong>{PRODUCTS[item.productId].name}</strong>
+                {PRODUCTS[item.productId].available === false ? <small>Model unavailable</small> : !item.placed && <small>Not placed</small>}
+              </span>;
+              return (
+              <li key={item.id} className={`used-furniture-item ${selectedId === item.id ? 'is-selected' : ''}`}>
+                {item.placed ? <button type="button" className="used-furniture-select" aria-label={`Select ${PRODUCTS[item.productId].name}`}
+                  aria-pressed={selectedId === item.id} onClick={() => select(item.id)}>{details}</button>
+                  : <div className="used-furniture-label">{details}</div>}
+                {!item.placed && <button type="button" className="used-furniture-row-action" aria-label={`Place ${PRODUCTS[item.productId].name}`}
+                  onClick={() => placeUnplacedObject(item.id)}>Place</button>}
                 <button type="button" className="used-furniture-remove" aria-label={`Remove ${PRODUCTS[item.productId].name} from used furniture`} title="Remove furniture" onClick={() => removeFurniture(item.id)}><Icon name="x" /></button>
               </li>
-            ))}
+              );
+            })}
           </ul>
         ) : <p className="used-furniture-empty">Furniture you add will appear here.</p>}
-        {unplacedObjects.length > 0 && <p className="used-furniture-empty">No clear spot in the selected space. Choose another space, then click Place.</p>}
+        {unplacedObjects.length > 0 && <p className="used-furniture-empty">Choose a space, then place the remaining items.</p>}
       </section>
-      <div className="catalog-section-heading"><h2>Furniture catalogue</h2></div>
+      <div className="catalog-section-heading"><h2>Catalogue</h2><span>{filtered.length}</span></div>
+      <div className="catalog-filters">
       <label className="search-box">
         <span><Icon name="search" /></span>
-        <input value={search} onChange={(e: ChangeEvent<HTMLInputElement>) => setSearch(e.target.value)} placeholder="Search furniture" />
+        <input aria-label="Search furniture" value={search} onChange={(e: ChangeEvent<HTMLInputElement>) => setSearch(e.target.value)} placeholder="Search furniture" />
       </label>
-      <label className="catalog-category">Category
+      <label className="catalog-category">
         <select aria-label="Product category" value={category} onChange={(event) => setCategory(event.target.value)}>
-          {CATEGORIES.map((item) => <option key={item} value={item}>{item}</option>)}
+          {CATEGORIES.map((item) => <option key={item} value={item}>{item === 'All' ? 'All categories' : item}</option>)}
         </select>
       </label>
+      </div>
       {catalogueIssues.length > 0 && <div className="catalog-import-issues" role="alert">
         <strong>Some models could not be imported</strong>
         {catalogueIssues.map((issue) => <p key={issue.file}>{issue.file}: {issue.message}</p>)}
@@ -399,6 +405,7 @@ export function PlanRoom({ onExportReady, onPdfExportReady }: {
   onExportReady?: (handler: (() => Promise<void>) | null) => void;
   onPdfExportReady?: (handler: (() => Promise<void>) | null) => void;
 }) {
+  const loadingSurface = useLoadingSurface();
   const [resetViewRequest, setResetViewRequest] = useState(0);
   const [showFinishes, setShowFinishes] = useState(false);
   const [showViewOptions, setShowViewOptions] = useState(false);
@@ -440,7 +447,7 @@ export function PlanRoom({ onExportReady, onPdfExportReady }: {
       <ProductCatalog />
 
       <section className="designer-canvas">
-        <div className="designer-stage">
+        <div className="designer-stage" ref={loadingSurface}>
           {FEATURES.interiorWalls && <EditingSpaceSelector spaces={spaces} value={selectedSpaceId ?? spaces[0]?.id ?? ''} onChange={selectSpace} />}
           <div className={`designer-topbar ${FEATURES.interiorWalls ? '' : 'without-space-selector'}`} aria-label="Room view controls">
             <div className="view-preset-bar" role="group" aria-label="3D room view">
@@ -480,10 +487,10 @@ export function PlanRoom({ onExportReady, onPdfExportReady }: {
             </div>
           </div>
 
-          <Suspense fallback={<div className="viewport-loading"><LoadingStatus blocking label="Preparing your room…" detail="Opening the 3D view" /></div>}>
+          <LoadingBoundary label="Preparing your room…" detail="Opening the 3D view">
             <Viewport3D furniture interactive sunRays={sunRaysEnabled} view={planView} resetViewRequest={resetViewRequest} onExportReady={onExportReady} onPdfExportReady={onPdfExportReady} />
-          </Suspense>
-          {FEATURES.aiExperiment && showAi && <Suspense fallback={<div className="ai-panel-loading"><LoadingStatus label="Opening assistant…" detail="Getting things ready" /></div>}><AIExperimentPanel onClose={() => setShowAi(false)} /></Suspense>}
+          </LoadingBoundary>
+          {FEATURES.aiExperiment && showAi && <LoadingBoundary label="Opening assistant…" detail="Getting things ready" phase="assistant"><AIExperimentPanel onClose={() => setShowAi(false)} /></LoadingBoundary>}
           {showFinishes && <FinishesPanel onClose={() => setShowFinishes(false)} />}
           {showViewOptions && <DesignPanel onClose={() => setShowViewOptions(false)} />}
           {selectedId && !(FEATURES.aiExperiment && showAi) && <SelectionPanel />}

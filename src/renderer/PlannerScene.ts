@@ -77,6 +77,8 @@ interface SceneOptions {
   sunRays: boolean;
   onError?: (error: unknown) => void;
   onModelStatus?: (status: ModelLoadStatus) => void;
+  onReady?: () => void;
+  onTextureStatus?: (loading: boolean) => void;
 }
 
 const DIMENSION_COLOR = themeHex('dimension-line');
@@ -198,6 +200,8 @@ export class PlannerScene {
   private stateSyncPending = false;
   private restingPixelRatio = 1;
   private disposed = false;
+  private firstFrameRendered = false;
+  private pendingFloorFinishes = new Set<FloorFinish>();
   private controlsInteracting = false;
   private controlsInteractionStartDirection = new THREE.Vector3();
   private lastRoomKey = '';
@@ -395,6 +399,7 @@ export class PlannerScene {
     this.disposeGroup(this.helperGroup);
     for (const texture of this.floorMapAssets) texture.dispose();
     this.floorMapAssets.clear();
+    this.pendingFloorFinishes?.clear();
     this.floorMapCache.clear();
     this.floorMapResults.clear();
     this.outlinePass?.dispose();
@@ -1307,6 +1312,9 @@ export class PlannerScene {
   private loadFloorFinishMaps(definition: FloorFinishDefinition) {
     const cached = this.floorMapCache.get(definition.id);
     if (cached) return cached;
+    const pending = this.pendingFloorFinishes ??= new Set<FloorFinish>();
+    pending.add(definition.id);
+    this.options?.onTextureStatus?.(true);
 
     const wrapMode = definition.wrapMode ?? 'repeat';
     const anisotropy = definition.anisotropy ?? 8;
@@ -1326,6 +1334,9 @@ export class PlannerScene {
       const maps = { color, normal, height, roughness };
       this.floorMapResults.set(definition.id, maps);
       return maps;
+    }).finally(() => {
+      pending.delete(definition.id);
+      if (!this.disposed) this.options?.onTextureStatus?.(pending.size > 0);
     });
     this.floorMapCache.set(definition.id, load);
     return load;
@@ -5495,6 +5506,10 @@ export class PlannerScene {
 
     // OrbitControls damping needs a few follow-up frames, but an idle scene should do
     // no RAF/GPU work at all. `change` events also schedule a frame during interaction.
+    if (!this.firstFrameRendered) {
+      this.firstFrameRendered = true;
+      this.options.onReady?.();
+    }
     if (this.controlsInteracting || controlsChanged) this.requestRender();
   }
 }
