@@ -690,3 +690,43 @@ test('position slider continues across the perimeter seam without including a se
   assert.deepEqual(openingSliderRange(room, { ...opening, wallId: walls[1].id }, 0, perimeter,
     candidate => scene.openingAllowedOnVisibleWalls(candidate)), { min: walls[0].length + 1, max: walls[0].length + 1 });
 });
+
+test('models and all architectural selections share one outline pass without tinting their materials', () => {
+  const scene = Object.create(PlannerScene.prototype);
+  const walls = new THREE.Group();
+  const model = new THREE.Group();
+  const materials = [new THREE.MeshStandardMaterial({ color: 0xeeeeee, emissive: 0x222222, emissiveIntensity: .22 }),
+    new THREE.MeshPhysicalMaterial({ color: 0xb7d7e1, transparent: true, opacity: .3 }),
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide })];
+  const meshes = materials.map((material, index) => {
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material);
+    mesh.userData.openingId = ['door', 'window', 'opening'][index];
+    if (index === 0) mesh.userData.stableTrimColor = 0xeeeeee;
+    if (index === 2) mesh.userData.invisiblePick = true;
+    walls.add(mesh);
+    return mesh;
+  });
+  const before = materials.map(material => material.toJSON());
+  Object.assign(scene, { wallsGroup: walls, objectModels: new Map([['model', model]]),
+    options: { showFurniture: true, interactiveArchitecture: true }, outlinePass: { selectedObjects: [] } });
+  for (const [index, id] of ['door', 'window', 'opening'].entries()) {
+    scene.syncOpeningHighlight({ selectedOpeningId: id });
+    assert.deepEqual(scene.outlinePass.selectedObjects, [meshes[index]]);
+    assert.deepEqual(materials.map(material => material.toJSON()), before, 'Selection must preserve trim, glass, and the empty aperture');
+  }
+  scene.syncOpeningHighlight({ selectedId: 'model' });
+  assert.deepEqual(scene.outlinePass.selectedObjects, [model]);
+  scene.hoverOpeningId = 'opening';
+  scene.syncOpeningHighlight({ selectedId: 'model' });
+  assert.deepEqual(scene.outlinePass.selectedObjects, [model, meshes[2]], 'Hover uses the same pass without removing the selected model');
+  meshes[2].visible = false;
+  scene.syncOpeningHighlight({ selectedOpeningId: 'opening' });
+  assert.deepEqual(scene.outlinePass.selectedObjects, [], 'Cutaway openings stay hidden when selected');
+  meshes[2].visible = true;
+  scene.syncOpeningHighlight({ selectedOpeningId: 'opening' });
+  assert.deepEqual(scene.outlinePass.selectedObjects, [meshes[2]], 'A revealed aperture regains its outline');
+  scene.hoverOpeningId = null;
+  scene.syncOpeningHighlight({});
+  assert.deepEqual(scene.outlinePass.selectedObjects, []);
+  for (const mesh of meshes) { mesh.geometry.dispose(); mesh.material.dispose(); }
+});

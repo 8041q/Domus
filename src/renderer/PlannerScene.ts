@@ -79,7 +79,6 @@ interface SceneOptions {
 
 const DIMENSION_COLOR = themeHex('dimension-line');
 const SELECTION_COLOR = themeHex('interaction');
-const INTERACTION_STRONG_COLOR = themeHex('interaction-strong');
 const PRODUCT_DIMENSION_COLOR = themeHex('product-dimension-line');
 const CLEARANCE_COLOR = themeHex('clearance-fill');
 const CLEARANCE_EDGE_COLOR = themeHex('clearance-edge');
@@ -203,7 +202,6 @@ export class PlannerScene {
   private lastOpeningsKey = '';
   private lastRenderedOpenings: RoomOpening[] = [];
   private wallSpaces?: ReturnType<typeof deriveSpaces>;
-  private lastOpeningHighlightKey = '';
   private lastHelperKey = '';
   private lastSpacingHelperKey = '';
   private lastSnapHelperKey = '';
@@ -262,18 +260,17 @@ export class PlannerScene {
       this.scene.add(this.floorGroup, this.wallsGroup, this.ceilingGroup, this.architecturalShadeGroup, this.lightFixtureGroup, this.interiorLightGroup, this.daylightGroup, this.sunsetGroup, this.contactShadowGroup, this.objectGroup, this.helperGroup);
       this.scene.add(this.interiorViewGroup);
 
-      // Screen-space silhouette outlining matches the reference planner: the selected
-      // product gets one crisp yellow contour, independent of its component meshes.
-      // Only selected furniture needs the off-screen outline path. The ordinary
+      // All selectable items share a thin white screen-space contour, independent
+      // of their materials. Only highlighted items need the off-screen path. The ordinary
       // room uses the renderer's native MSAA, avoiding a fullscreen filter and its
       // softened texture detail on every camera movement.
       this.composer = new EffectComposer(this.renderer);
       this.composer.addPass(new RenderPass(this.scene, this.camera));
       this.outlinePass = new OutlinePass(new THREE.Vector2(1, 1), this.scene, this.camera);
-      this.outlinePass.visibleEdgeColor.setHex(SELECTION_COLOR);
-      this.outlinePass.hiddenEdgeColor.setHex(SELECTION_COLOR);
-      this.outlinePass.edgeStrength = 20.0;
-      this.outlinePass.edgeThickness = 3.8;
+      this.outlinePass.visibleEdgeColor.setHex(0xffffff);
+      this.outlinePass.hiddenEdgeColor.setHex(0xffffff);
+      this.outlinePass.edgeStrength = 3;
+      this.outlinePass.edgeThickness = 1;
       this.outlinePass.edgeGlow = 0;
       this.outlinePass.pulsePeriod = 0;
       this.composer.addPass(this.outlinePass);
@@ -2209,7 +2206,6 @@ export class PlannerScene {
     this.disposeWallCornerShades(affected);
     const unchanged = new Set(this.wallsGroup.children);
     const unchangedShades = new Set(this.architecturalShadeGroup.children);
-    this.lastOpeningHighlightKey = '';
     const { height, wallColor } = snapshot.room;
     const thickness = WALL_THICKNESS;
 
@@ -2862,49 +2858,21 @@ export class PlannerScene {
   }
 
   private syncOpeningHighlight(snapshot: SceneSnapshot) {
-    const selected = snapshot.selectedOpeningId ?? null;
-    const highlightKey = `${selected ?? '-'}|${this.hoverOpeningId ?? '-'}`;
-    if (highlightKey === this.lastOpeningHighlightKey) return;
-    this.lastOpeningHighlightKey = highlightKey;
+    if (!this.outlinePass) return;
+    const outlined: THREE.Object3D[] = [];
+    const model = this.options.showFurniture && snapshot.selectedId ? this.objectModels.get(snapshot.selectedId) : null;
+    if (model) outlined.push(model);
+    const selected = this.options.interactiveArchitecture ? snapshot.selectedOpeningId : null;
+    const hovered = this.options.interactiveArchitecture ? this.hoverOpeningId : null;
     this.wallsGroup.traverse((object) => {
       const openingId = typeof object.userData.openingId === 'string' ? object.userData.openingId : null;
-      if (!openingId || !(object instanceof THREE.Mesh)) return;
-      const active = openingId === selected || openingId === this.hoverOpeningId;
-      const materials = Array.isArray(object.material) ? object.material : [object.material];
-      for (const mat of materials) {
-        if (mat instanceof THREE.MeshBasicMaterial) {
-          if (typeof object.userData.stableTrimColor === 'number') {
-            mat.color.setHex(active ? SELECTION_COLOR : object.userData.stableTrimColor);
-            mat.opacity = 1;
-            mat.transparent = false;
-            continue;
-          }
-          // Custom wall openings use a transparent pick plane only. Never tint/fill it:
-          // a selected empty opening must remain a true void, not look like glass.
-          if (object.userData.invisiblePick) {
-            mat.opacity = 0;
-            mat.transparent = true;
-            mat.depthWrite = false;
-          } else {
-            mat.color.setHex(active ? SELECTION_COLOR : 0xffffff);
-            mat.opacity = active ? 0.18 : 0;
-            mat.transparent = true;
-          }
-        } else if (mat instanceof THREE.MeshPhysicalMaterial) {
-          mat.emissive.setHex(active ? INTERACTION_STRONG_COLOR : 0x000000);
-          mat.emissiveIntensity = active ? 0.16 : 0;
-        } else if (mat instanceof THREE.MeshStandardMaterial) {
-          if (typeof object.userData.stableTrimColor === 'number') {
-            mat.color.setHex(active ? SELECTION_COLOR : object.userData.stableTrimColor);
-            mat.emissive.setHex(active ? INTERACTION_STRONG_COLOR : object.userData.stableTrimColor);
-            mat.emissiveIntensity = active ? 0.18 : 0.22;
-            continue;
-          }
-          mat.emissive.setHex(active ? INTERACTION_STRONG_COLOR : 0x000000);
-          mat.emissiveIntensity = active ? 0.18 : 0;
-        }
-      }
+      if (!openingId || !(object instanceof THREE.Mesh) || !object.visible) return;
+      if (openingId !== selected && openingId !== hovered) return;
+      // Transparent pick planes provide the contour of empty wall openings in
+      // the mask pass while remaining completely transparent in the scene.
+      outlined.push(object);
     });
+    this.outlinePass.selectedObjects = outlined;
   }
 
   private tagCutawaySurface(object: THREE.Object3D, wall: ReturnType<typeof getRoomWalls>[number]) {
@@ -2967,6 +2935,7 @@ export class PlannerScene {
       if (force || object.visible === hidden) object.visible = !hidden;
     });
     this.updateInteriorWallView(snapshot);
+    this.syncOpeningHighlight(snapshot);
     this.updateArchitectureSpacingVisibility();
     if (cutawayChanged && snapshot.showRoomDimensions) {
       // Camera orbit only changes which room-wall dimensions belong above the
@@ -5497,7 +5466,7 @@ export class PlannerScene {
     this.updateSpacingMeasurementLines(this.architectureSpacingGroup, this.architectureSpacingLines, this.architectureSpacingLabels?.values() ?? []);
 
     // Native MSAA keeps ordinary room geometry and floor textures crisp. Only a
-    // selected product needs the composer's outline pass.
+    // highlighted item needs the composer's outline pass.
     this.camera.layers.set(SCENE_LAYER);
     if (this.outlinePass.selectedObjects.length) this.composer.render();
     else this.renderer.render(this.scene, this.camera);
