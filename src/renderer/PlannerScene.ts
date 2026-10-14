@@ -3045,13 +3045,7 @@ export class PlannerScene {
         this.contactShadowGroup.add(contact);
         if (product.model) this.syncProductModel(object.productId, group);
       }
-      group.position.set(object.x, 0, object.z);
-      group.rotation.y = object.rotationY;
-      const contact = this.contactShadows.get(object.id);
-      if (contact) {
-        contact.position.set(object.x, 0, object.z);
-        contact.rotation.y = object.rotationY;
-      }
+      this.syncObjectTransform(object.id, object.x, object.z, object.rotationY);
       if (object.id === snapshot.selectedId) outlined = group;
     }
     this.outlinePass.selectedObjects = outlined ? [outlined] : [];
@@ -3068,6 +3062,20 @@ export class PlannerScene {
       this.productModels.releaseModel(url);
     }
     this.notifyProductModelStatus();
+  }
+
+  /** Keep the model and its floor contact on the same immediate update path. */
+  private syncObjectTransform(id: string, x: number, z: number, rotationY: number) {
+    const model = this.objectModels.get(id);
+    if (model) {
+      model.position.set(x, 0, z);
+      model.rotation.y = rotationY;
+    }
+    const contact = this.contactShadows.get(id);
+    if (contact) {
+      contact.position.set(x, 0, z);
+      contact.rotation.y = rotationY;
+    }
   }
 
   private disposeObject(group: THREE.Group) {
@@ -5072,14 +5080,10 @@ export class PlannerScene {
       this.dragging.snap = freeMove ? { kind: 'none' } : resolved.snap;
       const patch: Partial<PlacedObject> = { x: resolved.x, z: resolved.z };
       if (resolved.rotationY != null && Math.abs(resolved.rotationY - moving.rotationY) > 1e-6) patch.rotationY = resolved.rotationY;
-      // Apply the visual transform immediately. Store/React synchronisation still happens
-      // below, but the mesh no longer waits for another animation frame while dragging.
-      const model = this.objectModels.get(moving.id);
-      if (model) {
-        model.position.set(resolved.x, 0, resolved.z);
-        model.rotation.y = resolved.rotationY ?? moving.rotationY;
-        this.requestRender();
-      }
+      // Move the model and its contact shadow together before scheduling a frame
+      // or notifying the store, so a drag cannot render a stale contact position.
+      this.syncObjectTransform(moving.id, resolved.x, resolved.z, resolved.rotationY ?? moving.rotationY);
+      this.requestRender();
       this.bridge.updateObject(moving.id, patch);
       // Keep every moving annotation on the same immediate path as the mesh rather
       // than waiting for the store subscription's next RAF. Spacing helpers are now

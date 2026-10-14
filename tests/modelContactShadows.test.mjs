@@ -7,6 +7,7 @@ const vite = await createServer({ server: { middlewareMode: true, hmr: false }, 
 after(async () => vite.close());
 const { ModelContactShadows } = await vite.ssrLoadModule('/src/renderer/modelContactShadows.ts');
 const { createFloorCastShadow } = await vite.ssrLoadModule('/src/renderer/floorCastShadow.ts');
+const { PlannerScene } = await vite.ssrLoadModule('/src/renderer/PlannerScene.ts');
 
 function renderer() {
   return {
@@ -18,6 +19,43 @@ function renderer() {
     render(scene, camera) { this.renders++; this.capture = scene.children[0]; this.camera = camera; }
   };
 }
+
+test('live furniture moves and wall-snap rotations keep the baked contact aligned before state synchronization', () => {
+  const template = new THREE.Group();
+  const support = new THREE.Mesh(new THREE.BoxGeometry(.2, .05, .3), new THREE.MeshStandardMaterial());
+  support.position.set(.35, .025, -.45);
+  template.add(support);
+  const gpu = renderer();
+  const library = new ModelContactShadows(gpu);
+  const contact = library.create(template);
+  const model = new THREE.Group();
+  model.add(template.clone());
+  const scene = Object.create(PlannerScene.prototype);
+  Object.assign(scene, { objectModels: new Map([['bed', model]]), contactShadows: new Map([['bed', contact]]) });
+  const localContact = contact.children[0].position.clone();
+  const mask = contact.children[0].material.uniforms.contactMask.value;
+
+  for (const [x, z, rotationY] of [[1, 2, 0], [3, 1, Math.PI / 2], [.5, 3, -Math.PI / 2]]) {
+    scene.syncObjectTransform('bed', x, z, rotationY);
+    model.updateMatrixWorld(true);
+    contact.updateMatrixWorld(true);
+    const contactPoint = contact.children[0].getWorldPosition(new THREE.Vector3());
+    const supportPoint = model.children[0].children[0].getWorldPosition(new THREE.Vector3());
+    assert.ok(Math.abs(contactPoint.x - supportPoint.x) < 1e-6);
+    assert.ok(Math.abs(contactPoint.z - supportPoint.z) < 1e-6);
+    assert.equal(contactPoint.y, .007, 'Contact remains on the floor');
+    assert.equal(contact.rotation.y, rotationY);
+    assert.ok(contact.children[0].position.equals(localContact), 'Baked support offsets stay in model space');
+    assert.equal(contact.children[0].material.uniforms.contactMask.value, mask);
+  }
+  assert.equal(gpu.renders, 1, 'Dragging repositions the existing contact without rebaking');
+  scene.contactShadows.clear();
+  assert.doesNotThrow(() => scene.syncObjectTransform('bed', 2, 2, 0), 'A missing contact cannot prevent a model move');
+  assert.deepEqual(model.position.toArray(), [2, 0, 2]);
+  library.dispose();
+  support.geometry.dispose(); support.material.dispose();
+  contact.children[0].geometry.dispose(); contact.children[0].material.dispose(); gpu.target.dispose();
+});
 
 test('contact capture retains the curved underside and excludes floor decals and elevated geometry', () => {
   const model = new THREE.Group();
