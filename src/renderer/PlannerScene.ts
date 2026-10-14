@@ -14,7 +14,8 @@ import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeome
 import { PRODUCTS, PRODUCT_LIST } from '../core/products';
 import { floorFinishDefinition, type FloorFinishDefinition } from '../core/roomFinishes';
 import { clearanceIssues, clearanceRegions, resolvePlacement, spacingMeasurements, type SpacingMeasurement } from '../core/placement';
-import { BASEBOARD_STYLES, DOOR_LEAF_COLOR, DOOR_FRAME_WIDTH, WINDOW_FRAME_WIDTH, WINDOW_SILL_OVERHANG, DOOR_CORNICE_WIDTH_FACTOR, glazingAreas, isSunGlazedOpening } from '../core/architecturalStyles';
+import { BASEBOARD_STYLES, DOOR_LEAF_COLOR, DOOR_FRAME_WIDTH, WINDOW_FRAME_WIDTH, WINDOW_SILL_OVERHANG, DOOR_CORNICE_WIDTH_FACTOR, glazingAreas, isSunGlazedOpening, openingFrameOverhang } from '../core/architecturalStyles';
+import { fitOpening } from '../core/openingPlacement';
 import { getRoomWalls, openingFollowsPerimeter, openingsOnWall, perimeterDistance, perimeterLocation, pointInRoom, roomBounds, wallPoint, wallProjectionDistance } from '../core/roomGeometry';
 import { architectureRoom, deriveSpaces, dividerJunctionDistances, getPhysicalWalls, interiorDoorHasThreshold, resolveDividers, wallAdjacentSpaces } from '../core/spaces';
 import { effectiveSunAzimuth } from '../core/sun';
@@ -5233,13 +5234,16 @@ export class PlannerScene {
     const opening = snapshot.openings.find((opening) => opening.id === this.openingDragging!.id);
     if (!opening) return;
     const grabWallId = this.openingDragging.grabWallId;
+    if (this.wallHiddenState?.get(grabWallId ?? opening.wallId)) return;
     const along = this.openingAlongUnderRay(snapshot, grabWallId ? { ...opening, wallId: grabWallId } : opening);
     if (along == null) return;
     if (grabWallId) {
       const distance = perimeterDistance(snapshot.room, grabWallId, along);
       if (distance == null) return;
-      this.openingDragging.grabWallId = perimeterLocation(snapshot.room, distance).wallId;
-      this.bridge.updateOpening(opening.id, perimeterLocation(snapshot.room, distance + this.openingDragging.grabOffset), false);
+      const grabLocation = perimeterLocation(snapshot.room, distance);
+      if (this.wallHiddenState?.get(grabLocation.wallId)) return;
+      if (!this.moveOpeningOnVisibleWalls(snapshot, opening, perimeterLocation(snapshot.room, distance + this.openingDragging.grabOffset))) return;
+      this.openingDragging.grabWallId = grabLocation.wallId;
       this.renderFromState();
       return;
     }
@@ -5253,6 +5257,7 @@ export class PlannerScene {
       for (let count = 0; count <= walls.length && (offset < 0 || offset > walls[index].length); count++) {
         if (offset < 0) { index = (index - 1 + walls.length) % walls.length; offset += walls[index].length; }
         else { offset -= walls[index].length; index = (index + 1) % walls.length; }
+        if (this.wallHiddenState?.get(walls[index].id)) return;
       }
       wallId = walls[index].id;
       if (!openingFollowsPerimeter(snapshot.room, opening) && wallId !== opening.wallId && walls[index].length < opening.width + 0.2) return;
@@ -5262,7 +5267,7 @@ export class PlannerScene {
       if (current && (offset < 0 || offset > current.length)) {
         const junction = offset < 0 ? current.start : current.end;
         const overshoot = offset < 0 ? -offset : offset - current.length;
-        const joined = physical.filter((wall) => wall.id !== current.id && wall.length >= opening.width + 0.2
+        const joined = physical.filter((wall) => wall.id !== current.id && !this.wallHiddenState?.get(wall.id) && wall.length >= opening.width + 0.2
           && (opening.type !== 'window' || !wall.id.startsWith('divider-')))
           .map((wall) => {
             const along = wallProjectionDistance(wall, junction);
@@ -5280,10 +5285,36 @@ export class PlannerScene {
         }
       }
     }
-    this.bridge.updateOpening(opening.id, { wallId, offset }, false);
+    if (!this.moveOpeningOnVisibleWalls(snapshot, opening, { wallId, offset })) return;
     // This handler already runs once per frame. Apply the geometry here rather
     // than waiting for the store subscription to schedule another sync frame.
     this.renderFromState();
+  }
+
+  private moveOpeningOnVisibleWalls(snapshot: SceneSnapshot, opening: RoomOpening, patch: Pick<RoomOpening, 'wallId' | 'offset'>) {
+    const walls = getPhysicalWalls(snapshot.room, snapshot.dividers);
+    const allowed = (candidate: RoomOpening) => {
+      if (this.wallHiddenState?.get(candidate.wallId)) return false;
+      const footprint = { ...candidate, width: candidate.width + openingFrameOverhang(candidate) * 2 };
+      // Wrapped apertures must remain on visible sections in their entirety.
+      return walls.every((wall) => {
+        const pieces = openingsOnWall(snapshot.room, [footprint], wall.id);
+        if (!pieces.length) return true;
+        if (this.wallHiddenState?.get(wall.id)) return false;
+        if (!wall.id.startsWith('divider-')) return true;
+        const profile = interiorWallProfile(wall, snapshot.room.height, snapshot.interiorWallView ?? 'up');
+        return pieces.every((piece) => Math.min(profileHeight(profile, piece.offset - piece.width / 2),
+          profileHeight(profile, piece.offset + piece.width / 2)) >= piece.sillHeight + piece.height - 0.003);
+      });
+    };
+    const candidate = { ...opening, ...patch };
+    if (!allowed(candidate)) return false;
+    // Restrict the fallback too: collision/frame fitting may change the wall.
+    const fitted = fitOpening(snapshot.room, snapshot.dividers, candidate,
+      snapshot.openings.filter((other) => other.id !== opening.id), allowed);
+    if (!fitted) return false;
+    this.bridge.updateOpening(opening.id, { wallId: fitted.wallId, offset: fitted.offset }, false);
+    return true;
   }
 
   private finishOpeningDrag() {

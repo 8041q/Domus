@@ -509,3 +509,56 @@ test('a wrapped opening can be dragged from its continuation on the next wall wi
   assert.ok(Math.abs(moved.offset - 0.2) < 1e-8);
   assert.equal(moved.width, opening.width);
 });
+
+test('3D opening drags stop at cutaway walls and resume when those walls are visible', () => {
+  const store = usePlannerStore;
+  for (const shape of ['rectangle', 'circle', 'rounded-rectangle']) {
+    for (const continuation of [false, true]) {
+      store.getState().resetProject(); store.getState().setRoomTemplate(shape);
+      const walls = getRoomWalls(store.getState().room), wall = walls[0], hidden = walls[1];
+      const opening = { id: 'visible-drag', type: 'opening', variant: 'wall-opening', wallId: wall.id,
+        offset: wall.length / 2, width: 0.4, height: 1.2, sillHeight: 0.75 };
+      store.setState({ openings: [opening] });
+      let updates = 0;
+      const scene = Object.create(PlannerScene.prototype);
+      Object.assign(scene, {
+        options: { interactiveArchitecture: true }, wallHiddenState: new Map([[hidden.id, true]]),
+        bridge: { getSnapshot: () => store.getState(), updateOpening: (id, patch) => {
+          updates++; return store.getState().updateOpening(id, patch, false);
+        } },
+        openingDragging: { id: opening.id, before: getSnapshot(), grabOffset: 0, pointerId: 7,
+          ...(continuation ? { grabWallId: wall.id } : {}) },
+        setPointer: () => {}, openingAlongUnderRay: () => wall.length + 0.25, renderFromState: () => {}
+      });
+      const before = getSnapshot();
+      scene.moveOpening({ pointerId: 7 });
+      assert.equal(updates, 0); assert.deepEqual(getSnapshot(), before);
+      if (continuation) assert.equal(scene.openingDragging.grabWallId, wall.id, 'Blocked drags retain the visible projection wall');
+      // Also reject a partial wrap before the centre reaches the hidden wall.
+      scene.openingAlongUnderRay = () => wall.length - 0.1;
+      scene.moveOpening({ pointerId: 7 });
+      assert.equal(updates, 0); assert.deepEqual(getSnapshot(), before);
+      scene.wallHiddenState.set(hidden.id, false);
+      scene.openingAlongUnderRay = () => wall.length + 0.25;
+      scene.moveOpening({ pointerId: 7 });
+      assert.equal(updates, 1);
+      assert.equal(store.getState().openings[0].wallId, hidden.id);
+    }
+  }
+});
+
+test('3D collision fitting cannot relocate a dragged door onto a cutaway wall', () => {
+  const store = usePlannerStore;
+  store.getState().resetProject();
+  const walls = getRoomWalls(store.getState().room);
+  const door = { id: 'drag-door', type: 'door', variant: 'single-door', wallId: walls[2].id,
+    offset: 2.6, width: 0.9, height: 2.08, sillHeight: 0 };
+  const occupied = { id: 'occupied', type: 'opening', variant: 'wall-opening', wallId: walls[0].id,
+    offset: 2.6, width: 4.8, height: 2.1, sillHeight: 0 };
+  store.setState({ openings: [door, occupied] });
+  const scene = Object.create(PlannerScene.prototype);
+  Object.assign(scene, { wallHiddenState: new Map([[walls[1].id, true], [walls[3].id, true]]),
+    bridge: { updateOpening: (id, patch) => store.getState().updateOpening(id, patch, false) } });
+  assert.equal(scene.moveOpeningOnVisibleWalls(store.getState(), door, { wallId: walls[0].id, offset: 2.6 }), true);
+  assert.equal(store.getState().openings[0].wallId, walls[2].id, 'Only the opposite visible wall has room for the frame');
+});

@@ -56,8 +56,9 @@ export function openingPlacementValid(room: RoomState, dividers: InteriorDivider
 }
 
 /** Find the nearest legal position while preserving the requested type and size. */
-export function fitOpening(room: RoomState, dividers: InteriorDivider[], opening: RoomOpening, others: RoomOpening[]) {
-  if (openingPlacementValid(room, dividers, opening, others)) return opening;
+export function fitOpening(room: RoomState, dividers: InteriorDivider[], opening: RoomOpening, others: RoomOpening[],
+  allowed: (candidate: RoomOpening) => boolean = () => true) {
+  if (allowed(opening) && openingPlacementValid(room, dividers, opening, others)) return opening;
   const physical = getPhysicalWalls(room, dividers);
   const anchor = physical.find((wall) => wall.id === opening.wallId);
   if (!anchor) return null;
@@ -77,7 +78,7 @@ export function fitOpening(room: RoomState, dividers: InteriorDivider[], opening
         return { opening: { ...opening, wallId: wall.id, offset }, distance: desired != null ? Math.min(direct, perimeter - direct) : direct };
       });
     }).sort((a, b) => a.distance - b.distance);
-  return candidates.find((candidate) => openingPlacementValid(room, dividers, candidate.opening, others))?.opening ?? null;
+  return candidates.find((candidate) => allowed(candidate.opening) && openingPlacementValid(room, dividers, candidate.opening, others))?.opening ?? null;
 }
 
 /** Shared pointer projection for 2D drags, including corner-wrapping apertures. */
