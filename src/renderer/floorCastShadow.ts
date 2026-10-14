@@ -94,8 +94,18 @@ export function createFloorCastShadow(perimeter: Vec2[], light: THREE.Directiona
   mesh.position.y = 0.005;
   mesh.renderOrder = 2;
   mesh.userData.floorCastShadow = true;
-  mesh.onBeforeRender = (renderer) => {
+  let cachedMap: THREE.WebGLRenderTarget | null = null;
+  let cachedVersion = -1;
+  let cachedBias = NaN;
+  const cachedMatrix = new THREE.Matrix4();
+  mesh.onBeforeRender = (renderer, scene) => {
+    // Outline depth/mask passes override this material; they do not need a filter.
+    if (scene?.overrideMaterial) return;
     const map = light.shadow.map;
+    const version = light.userData.castShadowVersion ?? 0;
+    if (map && cachedMap === map && cachedVersion === version && cachedBias === light.shadow.bias
+      && mask.width === map.width && mask.height === map.height && cachedMatrix.equals(light.shadow.matrix)
+      && material.uniforms.ready.value === 1) return;
     material.uniforms.ready.value = 0;
     if (!map) return;
     mask.setSize(map.width, map.height);
@@ -125,6 +135,10 @@ export function createFloorCastShadow(perimeter: Vec2[], light: THREE.Directiona
       renderer.setRenderTarget(mask);
       renderer.render(filterScene, filterCamera);
       material.uniforms.ready.value = 1;
+      cachedMap = map;
+      cachedVersion = version;
+      cachedBias = light.shadow.bias;
+      cachedMatrix.copy(light.shadow.matrix);
     } finally {
       renderer.setRenderTarget(previousTarget);
       renderer.autoClear = previousAutoClear;

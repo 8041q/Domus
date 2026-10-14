@@ -203,7 +203,7 @@ export interface ProductDefinition {
   priceLabel: string;
   swatch: string;
   /** Public GLB asset; geometry is centred horizontally and grounded on load. */
-  model?: { url: string };
+  model?: { url: string; runtimeUrl?: string };
 }
 
 export interface PlacedObject {

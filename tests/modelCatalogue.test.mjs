@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { mkdtemp, mkdir, writeFile, readFile, rename, unlink, rm, utimes } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rename, unlink, rm, utimes, stat } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
 import { createServer, preview } from 'vite';
+import { MODEL_CACHE_TTL_MS } from '../scripts/model-cache.mjs';
 
 const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: 'custom', logLevel: 'silent' });
 after(() => vite.close());
@@ -32,7 +33,7 @@ const metadata = { domus_schema_version: 2, domus_name: 'Hospital bed', domus_ca
   domus_product_id: 'duplicate-in-blender', domus_width_m: 995, domus_collision_width_m: 995 };
 async function sandbox(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'domus-catalogue-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const models = path.join(root,'public','models'); await mkdir(models,{recursive:true});
   return { root, models, catalogue: new ModelCatalogue(root) };
 }
@@ -55,11 +56,108 @@ test('new models, copies and nested folders import automatically with unique per
   assert.match(first.products[0].model.url,/\/models\/Medical\/bed\.glb\?v=/);
 });
 
+test('runtime derivatives retain source identity and dimensions, and stale or incomplete copies fall back to the source', async (t) => {
+  const { root, models, catalogue } = await sandbox(t);
+  const source = path.join(models, 'bed.glb');
+  await writeFile(source, glb(metadata));
+  const original = (await catalogue.scan()).products[0];
+  const registry = JSON.parse(await readFile(path.join(root, 'model-catalogue.json'), 'utf8'));
+  const fingerprint = registry.entries[0].fingerprint;
+  const directory = path.join(root, 'public', 'optimized-models');
+  await mkdir(directory);
+  const filename = `${fingerprint}-v4.glb`;
+  const derivative = glb(metadata, [-.1, 0, -.1, .1, .1, .1]);
+  await writeFile(path.join(directory, filename), derivative);
+  const manifest = { version: 4, models: { 'bed.glb': { sourceFingerprint: fingerprint,
+    url: `/optimized-models/${filename}`, after: { bytes: derivative.length } } } };
+  await writeFile(path.join(directory, 'manifest.json'), JSON.stringify(manifest));
+  const optimized = (await catalogue.scan()).products[0];
+  assert.equal(optimized.id, original.id);
+  assert.equal(optimized.width, original.width);
+  assert.equal(optimized.depth, original.depth);
+  assert.equal(optimized.model.url, original.model.url);
+  assert.equal(optimized.model.runtimeUrl, manifest.models['bed.glb'].url);
+  const expiredAt = new Date(Date.now() - MODEL_CACHE_TTL_MS - 1000);
+  await utimes(path.join(directory, filename), expiredAt, expiredAt);
+  assert.equal((await catalogue.scan()).products[0].model.runtimeUrl, undefined);
+  assert.equal(catalogue.requiresOptimization, true);
+  assert.equal(catalogue.nextCacheExpiry, undefined);
+  await writeFile(path.join(directory, filename), derivative.subarray(0, 20));
+  assert.equal((await catalogue.scan()).products[0].model.runtimeUrl, undefined);
+  await writeFile(path.join(directory, filename), derivative);
+  await writeFile(source, glb({ ...metadata, domus_name: 'New export' }));
+  assert.equal((await catalogue.scan()).products[0].model.runtimeUrl, undefined);
+  await writeFile(path.join(directory, 'manifest.json'), '{broken');
+  assert.equal((await catalogue.scan()).products[0].available, true);
+});
+
+test('the running server automatically optimizes newly added models and removes their unused cache', async (t) => {
+  const { root, models } = await sandbox(t);
+  const server = await createServer({ configFile: false, root, plugins: [automaticModelCatalogue()], logLevel: 'silent',
+    server: { host: '127.0.0.1', port: 0 }, optimizeDeps: { noDiscovery: true } });
+  t.after(() => server.close());
+  await server.listen();
+  const origin = server.resolvedUrls.local[0];
+  const binary = glb(metadata, [-.5, 0, -1, .5, 0, -1, .5, .8, 1, -.5, 0, -1, .5, .8, 1, -.5, .8, 1]);
+  const source = path.join(models, 'automatic.glb');
+  const waitUntil = async (check) => {
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      const result = await check();
+      if (result) return result;
+      await new Promise(resolve => setTimeout(resolve, 30));
+    }
+    assert.fail('Automatic model processing did not finish');
+  };
+  await writeFile(source, binary);
+  const product = await waitUntil(async () => {
+    const data = await (await fetch(origin + 'api/model-catalogue')).json();
+    return data.products.find(product => product.model?.runtimeUrl);
+  });
+  assert.deepEqual(await readFile(source), binary);
+  assert.equal((await (await fetch(origin + 'api/model-catalogue')).json()).products.length, 1);
+  const head = await fetch(new URL(product.model.runtimeUrl, origin), { method: 'HEAD' });
+  assert.equal(head.status, 200);
+  assert.match(head.headers.get('cache-control'), /must-revalidate/);
+  assert.ok(Number(head.headers.get('cache-control').match(/max-age=(\d+)/)[1]) <= 259200);
+  const firstGenerated = path.join(root, 'public', product.model.runtimeUrl.slice(1));
+  // Schedule an imminent expiry, then observe disk only: no source change or
+  // catalogue polling should be necessary to trigger the background rebuild.
+  const nearExpiry = new Date(Date.now() - MODEL_CACHE_TTL_MS + 500);
+  await utimes(firstGenerated, nearExpiry, nearExpiry);
+  await fetch(origin + 'api/model-catalogue');
+  await waitUntil(async () => {
+    try { return (await stat(firstGenerated)).mtimeMs > nearExpiry.getTime() + 1000; }
+    catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  });
+  assert.deepEqual(await readFile(source), binary, 'Timed expiry never changes the original');
+  await writeFile(source, glb({ ...metadata, domus_name: 'Updated automatic' },
+    [-.6, 0, -1, .6, 0, -1, .6, .8, 1, -.6, 0, -1, .6, .8, 1, -.6, .8, 1]));
+  const updated = await waitUntil(async () => {
+    const data = await (await fetch(origin + 'api/model-catalogue')).json();
+    return data.products.find(item => item.model?.runtimeUrl && item.model.runtimeUrl !== product.model.runtimeUrl);
+  });
+  assert.equal(updated.id, product.id);
+  assert.equal(updated.name, 'Updated automatic');
+  await waitUntil(async () => { try { await stat(firstGenerated); return false; } catch (error) { return error.code === 'ENOENT'; } });
+  const generated = path.join(root, 'public', updated.model.runtimeUrl.slice(1));
+  await unlink(source);
+  await waitUntil(async () => {
+    const data = await (await fetch(origin + 'api/model-catalogue')).json();
+    if (data.products.length) return false;
+    try { await stat(generated); return false; } catch (error) { return error.code === 'ENOENT'; }
+  });
+  const manifest = JSON.parse(await readFile(path.join(root, 'public', 'optimized-models', 'manifest.json'), 'utf8'));
+  assert.equal(manifest.models['automatic.glb'], undefined);
+});
+
 test('file updates retain identity while renames and deletions retire IDs and remove registry definitions', async (t) => {
   const {root,models,catalogue} = await sandbox(t);
   const file = path.join(models,'bed.glb');
   await writeFile(file,glb(metadata)); const original = (await catalogue.scan()).products[0];
+  const initialStamp = (await stat(file)).mtimeMs;
   await writeFile(file,glb({...metadata,domus_name:'Updated bed'}));
+  await utimes(file, new Date(initialStamp + 1000), new Date(initialStamp + 1000));
   const updated = (await catalogue.scan()).products[0];
   assert.equal(updated.id,original.id); assert.equal(updated.name,'Updated bed'); assert.notEqual(updated.model.url,original.model.url);
   const renamed = path.join(models,'renamed bed.glb'); await rename(file,renamed);

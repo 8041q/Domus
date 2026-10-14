@@ -74,6 +74,36 @@ npm run dev
 
 Vite serves the app at `http://localhost:5173` by default.
 
+Development startup and production builds prepare compressed viewport copies of
+GLBs in `public/models`. Originals stay intact; the catalogue still measures the
+source geometry. Generated copies in `public/optimized-models` combine compatible
+opaque parts, simplify detail with an error limit, and use Meshopt compression.
+Transparent parts retain separate sorting. The first preparation takes longer;
+unchanged sources reuse their generated copies.
+
+The running development server detects new, updated and removed model files.
+It prepares optimized copies in a separate process and updates open planners
+when they are ready. Preview checks for changes when refreshing the catalogue.
+Unused generated copies are removed automatically, while identical source copies
+can share one cached file. Generated model caches expire after 72 hours from
+their last build, including browser caching. The running server removes expired
+copies and rebuilds them in the background; if it is closed, cleanup runs at
+the next startup. Reading a model does not extend its expiry, and original
+GLBs are never deleted by cache cleanup. `npm run models:optimize` and `npm run models:rescan`
+remain available for manual recovery. Derivatives are matched to the full source
+fingerprint; missing, incomplete or stale copies fall back to the source.
+The 3D view prepares detailed picking data in a background
+worker, processes pointer movement once per frame, caches unchanged shadows,
+and restores full display resolution when movement stops.
+
+Window dragging retains compatible frame/wall buffers, compiled materials and
+sun-shadow maps. Its latest pointer sample is drawn in the same animation frame;
+store synchronization is folded into rendering to avoid a duplicate update.
+
+`npm run models:benchmark -- C8c.glb` compares source/runtime geometry parsing and
+picking. This skips texture decoding and GPU rendering; its timings are not an
+end-to-end loading or frame-rate measurement.
+
 The experimental AI gateway is available with both `npm run dev` and
 `npm run preview`. Open Plan Room and choose **AI Experimental**. Cloud keys are
 encrypted in this browser and are never added to room project files.

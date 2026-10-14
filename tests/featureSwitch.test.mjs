@@ -165,7 +165,7 @@ test('partial graphics initialization can be disposed once without leaking its c
   const before = dividedProject();
   const scene = geometryScene(before);
   for (const key of ['ceilingGroup', 'lightFixtureGroup', 'interiorLightGroup', 'daylightGroup', 'sunsetGroup', 'contactShadowGroup', 'objectGroup', 'helperGroup']) scene[key] = new THREE.Group();
-  Object.assign(scene, { floorFinishRequest: 0, floorMapAssets: new Set(), floorMapCache: new Map(), openingMoves: { clear() {} },
+  Object.assign(scene, { floorFinishRequest: 0, floorMapAssets: new Set(), floorMapCache: new Map(), openingMoves: { clear() {} }, pointerMoves: { clear() {} },
     scene: new THREE.Scene(), container: { removeChild: () => calls.push('canvas') } });
   const calls = [];
   scene.renderer = { domElement: { parentNode: scene.container, removeEventListener() {} },

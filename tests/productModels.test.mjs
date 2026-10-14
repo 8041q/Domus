@@ -7,6 +7,7 @@ const vite = await createServer({ server: { middlewareMode: true, hmr: false }, 
 after(() => vite.close());
 const { ProductModelLibrary } = await vite.ssrLoadModule('/src/renderer/productModels.ts');
 const { ModelContactShadows } = await vite.ssrLoadModule('/src/renderer/modelContactShadows.ts');
+const { createPickingGeometry, pickingGeometryData } = await vite.ssrLoadModule('/src/renderer/modelPicking.ts');
 const { PlannerScene } = await vite.ssrLoadModule('/src/renderer/PlannerScene.ts');
 const { PRODUCTS } = await vite.ssrLoadModule('/src/core/products.ts');
 const { emptyRoomSnapshot, parseProjectSnapshot, usePlannerStore: store } = await vite.ssrLoadModule('/src/store.ts');
@@ -56,6 +57,55 @@ test('failed GLBs can be retried and empty GLBs are rejected', async () => {
   const empty = new ProductModelLibrary(async () => new THREE.Group());
   await assert.rejects(empty.loadModel('/empty.glb'), /no usable geometry/);
   empty.dispose();
+});
+
+test('detailed models share accelerated picking across moved instances without changing index order', async () => {
+  const source = new THREE.Group();
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(.5, 48, 32), new THREE.MeshStandardMaterial());
+  source.add(mesh);
+  const originalIndices = mesh.geometry.index.array.slice();
+  const library = new ProductModelLibrary(async () => source);
+  const template = await library.loadModel('/detailed.glb');
+  const one = library.instantiate(template), two = library.instantiate(template);
+  const firstMesh = one.children[0].children[0], secondMesh = two.children[0].children[0];
+  assert.ok(firstMesh.geometry.boundsTree);
+  assert.equal(firstMesh.geometry.boundsTree, secondMesh.geometry.boundsTree);
+  assert.deepEqual(mesh.geometry.index.array, originalIndices, 'Picking cannot reorder rendered/exported triangles');
+  assert.notEqual(firstMesh.raycast, THREE.Mesh.prototype.raycast, 'Clones retain accelerated picking');
+  for (const instance of [one, two]) {
+    instance.position.set(2, 0, -1); instance.rotation.y = Math.PI / 3; instance.updateMatrixWorld(true);
+    const picked = instance.children[0].children[0];
+    for (const x of [1.7, 2, 2.3]) {
+      const ray = new THREE.Raycaster(new THREE.Vector3(x, 2, -.85), new THREE.Vector3(0, -1, 0));
+      ray.firstHitOnly = true;
+      const accelerated = ray.intersectObject(instance, true)[0];
+      const ordinary = [];
+      THREE.Mesh.prototype.raycast.call(picked, ray, ordinary);
+      ordinary.sort((a, b) => a.distance - b.distance);
+      assert.equal(accelerated.faceIndex, ordinary[0].faceIndex);
+      assert.ok(accelerated.point.distanceTo(ordinary[0].point) < 1e-6);
+    }
+  }
+  library.dispose();
+  assert.equal(mesh.geometry.boundsTree, undefined, 'Releasing an asset also releases its picking tree');
+});
+
+test('background picking copies normalized interleaved positions without detaching render buffers', () => {
+  const geometry = new THREE.BufferGeometry();
+  const values = new Int16Array([-32767, 0, 0, 123, 32767, 0, 0, 123, 0, 32767, 0, 123]);
+  geometry.setAttribute('position', new THREE.InterleavedBufferAttribute(new THREE.InterleavedBuffer(values, 4), 3, 0, true));
+  geometry.setIndex([0, 1, 2]);
+  geometry.addGroup(0, 3, 0);
+  const data = pickingGeometryData(geometry);
+  assert.deepEqual([...data.position], [-1, 0, 0, 1, 0, 0, 0, 1, 0]);
+  assert.notEqual(data.position.buffer, values.buffer);
+  assert.notEqual(data.index.buffer, geometry.index.array.buffer);
+  const copy = createPickingGeometry(data);
+  assert.deepEqual(copy.groups, geometry.groups);
+  const material = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
+  const ray = new THREE.Raycaster(new THREE.Vector3(0, .5, 2), new THREE.Vector3(0, 0, -1));
+  assert.ok(ray.intersectObject(new THREE.Mesh(geometry, material))[0].point.equals(ray.intersectObject(new THREE.Mesh(copy, material))[0].point));
+  geometry.dispose(); copy.dispose(); material.dispose();
 });
 
 test('viewport environments follow late loads and mode switches without changing authored PBR values', async () => {

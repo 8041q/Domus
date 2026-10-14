@@ -81,6 +81,45 @@ function fakeFrames(apply) {
   return { queue, callbacks, tick: () => { const batch = [...callbacks.values()]; callbacks.clear(); batch.forEach((callback) => callback(0)); } };
 }
 
+test('furniture pointer bursts move the bed, contact and store together once per frame and flush before undo history', () => {
+  const store = usePlannerStore;
+  store.getState().resetProject();
+  store.getState().addObject('hospitalbed');
+  const before = getSnapshot();
+  const object = before.objects[0];
+  const model = new THREE.Group(), contact = new THREE.Group();
+  model.position.set(object.x, 0, object.z); contact.position.copy(model.position);
+  const scene = Object.create(PlannerScene.prototype);
+  let updates = 0;
+  Object.assign(scene, {
+    options: { interactiveFurniture: true }, objectModels: new Map([[object.id, model]]), contactShadows: new Map([[object.id, contact]]),
+    dragging: { id: object.id, before, snap: { kind: 'none' }, startClientX: 0, startClientY: 0,
+      startX: object.x, startZ: object.z, screenRight: { x: 1, z: 0 }, screenUp: { x: 0, z: 1 }, worldPerPixelX: .001, worldPerPixelY: .001 },
+    bridge: { getSnapshot: () => getSnapshot(), feedback() {},
+      updateObject: (id, patch) => { updates++; store.getState().updateObject(id, patch); },
+      commitDrag: snapshot => store.getState().commitSnapshot(snapshot) },
+    setPointer() {}, requestRender() {}, syncHelperTransforms() {
+      const live = store.getState().objects[0];
+      assert.deepEqual(model.position.toArray(), [live.x, 0, live.z]);
+      assert.ok(contact.position.equals(model.position));
+    }
+  });
+  const frames = fakeFrames(event => scene.movePointer(event));
+  for (let i = 1; i <= 400; i++) frames.queue.push({ clientX: i, clientY: 0, shiftKey: true });
+  assert.equal(updates, 0);
+  frames.tick();
+  assert.equal(updates, 1);
+  frames.queue.push({ clientX: 500, clientY: 0, shiftKey: true });
+  frames.queue.flush();
+  assert.equal(updates, 2);
+  assert.ok(Math.abs(model.position.x - object.x - .5) < 1e-6);
+  scene.bridge.commitDrag(before);
+  store.getState().undo();
+  assert.deepEqual(getSnapshot().objects, before.objects);
+  store.getState().redo();
+  assert.ok(Math.abs(store.getState().objects[0].x - object.x - .5) < 1e-6);
+});
+
 test('circle presets resize uniformly, retain real-size apertures across short sections and undo a size gesture once', () => {
   const store = usePlannerStore;
   store.getState().resetProject();

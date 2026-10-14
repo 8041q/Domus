@@ -11,7 +11,7 @@ import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
-import { PRODUCTS, PRODUCT_LIST } from '../core/products';
+import { PRODUCTS, PRODUCT_LIST, productModelUrl } from '../core/products';
 import { floorFinishDefinition, type FloorFinishDefinition } from '../core/roomFinishes';
 import { clearanceIssues, clearanceRegions, resolvePlacement, spacingMeasurements, type SpacingMeasurement } from '../core/placement';
 import { BASEBOARD_STYLES, DOOR_LEAF_COLOR, DOOR_FRAME_WIDTH, WINDOW_FRAME_WIDTH, WINDOW_SILL_OVERHANG, DOOR_CORNICE_WIDTH_FACTOR, glazingAreas, isSunGlazedOpening, openingFrameOverhang } from '../core/architecturalStyles';
@@ -30,6 +30,7 @@ import { createFrameQueue } from '../core/frameQueue';
 import { ProductModelLibrary } from './productModels';
 import { ModelContactShadows } from './modelContactShadows';
 import { createFloorCastShadow } from './floorCastShadow';
+import { reuseArchitectureMeshes } from './architectureReuse';
 import { renderRoomReport, roomReportData } from '../core/roomReport';
 import { roomViewSummary } from '../core/roomReportGeometry';
 import { renderRoomViewPages, type ReportViewCapture } from '../core/roomReportViews';
@@ -184,13 +185,16 @@ export class PlannerScene {
     worldPerPixelY: number;
   } | null = null;
   private openingDragging: { id: string; before: PlannerSnapshot; grabOffset: number; grabWallId?: string; pointerId: number } | null = null;
-  private openingMoves = createFrameQueue<PointerEvent>((event) => this.moveOpening(event));
+  private openingMoves = createFrameQueue<PointerEvent>((event) => this.renderOpeningMove(event));
+  private pointerMoves = createFrameQueue<PointerEvent>((event) => this.movePointer(event));
   private spaceClick: { id: string; x: number; y: number } | null = null;
   private wallClick: { id: string; x: number; y: number; pointerId: number } | null = null;
   private hoverOpeningId: string | null = null;
   private moveHint?: HTMLSpanElement;
   private resizeObserver: ResizeObserver;
   private animationFrame = 0;
+  private stateSyncPending = false;
+  private restingPixelRatio = 1;
   private disposed = false;
   private controlsInteracting = false;
   private controlsInteractionStartDirection = new THREE.Vector3();
@@ -233,9 +237,13 @@ export class PlannerScene {
     try {
       this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
       const pixelRatio = Math.min(window.devicePixelRatio, 1.6);
+      this.restingPixelRatio = pixelRatio;
       this.renderer.setPixelRatio(pixelRatio);
       this.renderer.shadowMap.enabled = true;
       this.renderer.shadowMap.type = THREE.PCFShadowMap;
+      this.renderer.shadowMap.autoUpdate = false;
+      this.renderer.shadowMap.needsUpdate = true;
+      this.raycaster.firstHitOnly = true;
       this.renderer.outputColorSpace = THREE.SRGBColorSpace;
       this.renderer.toneMapping = THREE.NeutralToneMapping;
       this.renderer.toneMappingExposure = 0.98;
@@ -366,6 +374,7 @@ export class PlannerScene {
     window.removeEventListener('pointercancel', this.onPointerCancel);
     window.removeEventListener('blur', this.onWindowBlur);
     this.openingMoves.clear();
+    this.pointerMoves.clear();
     this.controls?.removeEventListener('change', this.onControlsChange);
     this.controls?.removeEventListener('start', this.onControlsStart);
     this.controls?.removeEventListener('end', this.onControlsEnd);
@@ -687,7 +696,7 @@ export class PlannerScene {
     await Promise.all([this.floorTextureReady, ...this.spaceFloorReady]);
     while (this.productModelRequests.size) await Promise.all(this.productModelRequests.values());
     if (this.disposed) throw new Error('The 3D view closed while preparing the export.');
-    if (this.bridge.getSnapshot().objects.some((object) => this.productModelErrors.has(PRODUCTS[object.productId].model?.url ?? ''))) {
+    if (this.bridge.getSnapshot().objects.some((object) => this.productModelErrors.has(productModelUrl(PRODUCTS[object.productId]) ?? ''))) {
       throw new Error('A furniture model could not load. Retry loading it before exporting.');
     }
     // Export semantic data, not the current Cutaway view. Camera cutaways,
@@ -748,7 +757,7 @@ export class PlannerScene {
     await Promise.all([loadReportFonts(), this.floorTextureReady, ...this.spaceFloorReady]);
     while (this.productModelRequests.size) await Promise.all(this.productModelRequests.values());
     if (this.disposed) throw new Error('The 3D view closed while preparing the PDF.');
-    if (this.bridge.getSnapshot().objects.some((object) => this.productModelErrors.has(PRODUCTS[object.productId]?.model?.url ?? ''))) {
+    if (this.bridge.getSnapshot().objects.some((object) => this.productModelErrors.has(productModelUrl(PRODUCTS[object.productId]) ?? ''))) {
       throw new Error('Retry the failed furniture models before exporting.');
     }
     const size = this.renderer.getSize(new THREE.Vector2());
@@ -915,6 +924,7 @@ export class PlannerScene {
 
   renderFromState() {
     if (this.disposed) return;
+    this.stateSyncPending = false;
     const snapshot = this.sceneSnapshot();
     const { floorFinish, ...roomWithoutFloorFinish } = snapshot.room;
     const { sunAzimuth, sunElevation, ...lightingWithoutSunAngles } = roomWithoutFloorFinish.lighting;
@@ -946,6 +956,8 @@ export class PlannerScene {
     } else if (openingsKey !== this.lastOpeningsKey) {
       const old = new Map((this.lastRenderedOpenings ?? []).map((opening) => [opening.id, opening]));
       const changedWalls = new Set<string>();
+      let movingOnly = true;
+      const structure = ({ offset: _offset, wallId: _wallId, ...opening }: RoomOpening) => JSON.stringify(opening);
       const markOpeningWalls = (opening: RoomOpening) => {
         changedWalls.add(opening.wallId);
         for (const wall of getRoomWalls(snapshot.room)) {
@@ -955,13 +967,14 @@ export class PlannerScene {
       for (const opening of snapshot.openings) {
         const previous = old.get(opening.id);
         if (JSON.stringify(previous) !== JSON.stringify(opening)) {
+          if (!previous || structure(previous) !== structure(opening)) movingOnly = false;
           markOpeningWalls(opening);
           if (previous) markOpeningWalls(previous);
         }
         old.delete(opening.id);
       }
-      for (const opening of old.values()) markOpeningWalls(opening);
-      this.rebuildWalls(snapshot, changedWalls);
+      for (const opening of old.values()) { markOpeningWalls(opening); movingOnly = false; }
+      this.rebuildWalls(snapshot, changedWalls, movingOnly);
       this.rebuildWindowDaylighting(snapshot);
       this.rebuildSunset(snapshot);
       architectureChanged = true;
@@ -1007,7 +1020,13 @@ export class PlannerScene {
       this.updateCutawayWalls(true);
     }
     this.syncArchitectureSpacing(snapshot);
+    this.invalidateShadows();
     this.requestRender();
+  }
+
+  private invalidateShadows() {
+    if (this.renderer?.shadowMap) this.renderer.shadowMap.needsUpdate = true;
+    if (this.mainLight) this.mainLight.userData.castShadowVersion = (this.mainLight.userData.castShadowVersion ?? 0) + 1;
   }
 
   private updateShadowBounds(snapshot: PlannerSnapshot) {
@@ -1894,13 +1913,18 @@ export class PlannerScene {
   /** A soft and a crisp sun share one orbit while the established room
    * rig and furniture contact shadows remain independent. */
   private rebuildSunset(snapshot: PlannerSnapshot) {
-    this.disposeSunsetRig();
     this.lastSunAnglesKey = `${snapshot.room.lighting.sunAzimuth}:${snapshot.room.lighting.sunElevation}:${snapshot.room.lighting.sunStylePreset}`;
-    if (!this.options.sunRays) return;
+    if (!this.options.sunRays) { this.disposeSunsetRig(); return; }
 
     const walls = getRoomWalls(snapshot.room);
     const direction = this.sunDirection(snapshot);
-    if (!direction) return;
+    if (!direction) { this.disposeSunsetRig(); return; }
+    const retainedLights = this.sunsetLights;
+    if (retainedLights) for (const light of retainedLights) this.sunsetGroup.remove(light, light.target);
+    const retainedMasks = new THREE.Group();
+    for (const mask of [...this.sunsetGroup.children]) retainedMasks.add(mask);
+    this.sunsetLights = null;
+    let lightIndex = 0;
 
     const bounds = roomBounds(snapshot.room.vertices);
     const shadowSpan = Math.hypot(bounds.width, bounds.depth) + snapshot.room.height * 2 + 4;
@@ -1911,7 +1935,8 @@ export class PlannerScene {
       mapSize: number,
       radius: number
     ) => {
-      const light = new THREE.DirectionalLight(color, intensity);
+      const light = retainedLights?.[lightIndex++] ?? new THREE.DirectionalLight(color, intensity);
+      light.color.set(color); light.intensity = intensity;
       light.name = name;
       light.castShadow = true;
       light.shadow.mapSize.set(mapSize, mapSize);
@@ -2027,6 +2052,8 @@ export class PlannerScene {
     ceilingMask.onBeforeShadow = beforeMaskShadow;
     ceilingMask.onAfterShadow = afterMaskShadow;
     this.sunsetGroup.add(ceilingMask);
+    reuseArchitectureMeshes(this.sunsetGroup, retainedMasks, new Set());
+    this.disposeGroup(retainedMasks);
   }
 
   private pairedSunsEnvironment() {
@@ -2142,6 +2169,7 @@ export class PlannerScene {
     if (!force && visible === this.ceilingVisible) return;
     this.ceilingVisible = visible;
     this.ceilingGroup.visible = visible;
+    this.invalidateShadows();
     this.architecturalShadeGroup.children.forEach((shade) => {
       if (shade.userData.ceilingShade) shade.visible = visible;
     });
@@ -2158,7 +2186,9 @@ export class PlannerScene {
     this.updateArchitectureSpacingVisibility();
   }
 
-  private rebuildWalls(snapshot: PlannerSnapshot, affected?: Set<string>) {
+  private rebuildWalls(snapshot: PlannerSnapshot, affected?: Set<string>, reuse = false) {
+    const retained = new THREE.Group();
+    const retainedShades = new THREE.Group();
     this.wallSpaces = deriveSpaces(snapshot);
     if (!affected || [...affected].some((id) => id.startsWith('divider-'))) {
       this.disposeGroup(this.interiorViewGroup);
@@ -2169,9 +2199,15 @@ export class PlannerScene {
       for (const child of [...this.wallsGroup.children]) {
         if (affected.has(child.userData.cutawayWallId ?? child.userData.architectureWallId)) removed.add(child);
       }
-      this.disposeGroup(removed);
+      if (reuse) for (const child of [...removed.children]) retained.add(child);
+      else this.disposeGroup(removed);
     } else this.disposeGroup(this.wallsGroup);
+    if (reuse) for (const shade of [...this.architecturalShadeGroup.children]) {
+      if (shade.userData.wallCornerShade && (!affected || affected.has(shade.userData.cutawayWallId))) retainedShades.add(shade);
+    }
     this.disposeWallCornerShades(affected);
+    const unchanged = new Set(this.wallsGroup.children);
+    const unchangedShades = new Set(this.architecturalShadeGroup.children);
     this.lastOpeningHighlightKey = '';
     const { height, wallColor } = snapshot.room;
     const thickness = WALL_THICKNESS;
@@ -2229,6 +2265,12 @@ export class PlannerScene {
         cursor = Math.max(cursor, end);
       }
       if (cursor < wall.length) add(cursor, wall.length, 0, height);
+    }
+    if (reuse) {
+      reuseArchitectureMeshes(this.wallsGroup, retained, unchanged);
+      reuseArchitectureMeshes(this.architecturalShadeGroup, retainedShades, unchangedShades);
+      this.disposeGroup(retained);
+      this.disposeGroup(retainedShades);
     }
   }
 
@@ -2908,6 +2950,7 @@ export class PlannerScene {
 
     const cutawayChanged = [...nextState.entries()].some(([id, hidden]) => this.wallHiddenState.get(id) !== hidden)
       || this.wallHiddenState.size !== nextState.size;
+    if (cutawayChanged || force) this.invalidateShadows();
     this.wallHiddenState = nextState;
     for (const group of [this.wallsGroup, this.floorGroup, this.architecturalShadeGroup]) group.traverse((object) => {
       const wallId = typeof object.userData.cutawayWallId === 'string' ? object.userData.cutawayWallId : null;
@@ -3019,9 +3062,10 @@ export class PlannerScene {
     for (const object of snapshot.objects) {
       let group = this.objectModels.get(object.id);
       const product = PRODUCTS[object.productId];
-      const modelKey = product.model ? JSON.stringify([product.model.url, product.available, product.width, product.depth, product.height]) : '';
+      const url = productModelUrl(product);
+      const modelKey = product.model ? JSON.stringify([url, product.available, product.width, product.depth, product.height]) : '';
       if (group && group.userData.productModelKey !== modelKey) {
-        if (product.model && product.available !== false && this.productModelErrors.delete(product.model.url)) this.productModels.retry(product.model.url);
+        if (url && product.available !== false && this.productModelErrors.delete(url)) this.productModels.retry(url);
         this.disposeObject(group);
         this.objectGroup.remove(group);
         this.objectModels.delete(object.id);
@@ -3035,7 +3079,7 @@ export class PlannerScene {
         group.userData.objectId = object.id;
         group.userData.productId = object.productId;
         group.userData.productModelKey = modelKey;
-        group.userData.productModelUrl = product.model?.url;
+        group.userData.productModelUrl = url;
         this.tagExportRoot(group, 'Furniture', object.id, product.name);
         group.traverse((node) => { node.userData.objectId = object.id; });
         this.objectModels.set(object.id, group);
@@ -3051,7 +3095,7 @@ export class PlannerScene {
     this.outlinePass.selectedObjects = outlined ? [outlined] : [];
     // A fresh Blender export changes the asset URL. Release obsolete versions
     // after their instances are replaced so repeated edits do not retain huge GLBs.
-    const catalogueUrls = new Set(PRODUCT_LIST.flatMap((product) => product.model ? [product.model.url] : []));
+    const catalogueUrls = new Set(PRODUCT_LIST.flatMap((product) => productModelUrl(product) ? [productModelUrl(product)!] : []));
     for (const url of new Set([...this.productModelTemplates.keys(), ...this.productModelRequests.keys()])) {
       if (catalogueUrls.has(url)) continue;
       const obsoleteTemplate = this.productModelTemplates.get(url);
@@ -3068,6 +3112,7 @@ export class PlannerScene {
   private syncObjectTransform(id: string, x: number, z: number, rotationY: number) {
     const model = this.objectModels.get(id);
     if (model) {
+      if (model.position.x !== x || model.position.z !== z || model.rotation.y !== rotationY) this.invalidateShadows();
       model.position.set(x, 0, z);
       model.rotation.y = rotationY;
     }
@@ -3088,6 +3133,7 @@ export class PlannerScene {
     model.traverse((node) => { node.userData.objectId = group.userData.objectId; });
     group.add(model);
     group.userData.productModelLoaded = true;
+    this.invalidateShadows();
     const previousContact = this.contactShadows.get(group.userData.objectId);
     if (previousContact) {
       const contact = this.createContactShadow(group.userData.productId, template);
@@ -3103,7 +3149,7 @@ export class PlannerScene {
   private syncProductModel(id: keyof typeof PRODUCTS, group: THREE.Group) {
     const asset = PRODUCTS[id].model;
     if (!asset) return;
-    const url = asset.url;
+    const url = productModelUrl(PRODUCTS[id])!;
     if (PRODUCTS[id].available === false) { this.productModelErrors.add(url); return; }
     const template = this.productModelTemplates.get(url);
     if (template) {
@@ -3133,8 +3179,8 @@ export class PlannerScene {
 
   private notifyProductModelStatus() {
     const live = this.bridge.getSnapshot().objects.map((object) => PRODUCTS[object.productId]);
-    const urls = new Set(live.map((product) => product.model?.url));
-    const failed = live.filter((product) => product.model && this.productModelErrors.has(product.model.url));
+    const urls = new Set(live.map(productModelUrl));
+    const failed = live.filter((product) => product.model && this.productModelErrors.has(productModelUrl(product)!));
     this.options.onModelStatus?.({
       loading: [...this.productModelRequests.keys()].some((url) => urls.has(url)),
       error: failed.length ? `Could not load ${[...new Set(failed.map((product) => product.name))].join(', ')}. Check the model file or retry.` : null
@@ -4970,6 +5016,7 @@ export class PlannerScene {
   }
 
   private onPointerDown = (event: PointerEvent) => {
+    this.pointerMoves.clear();
     if (event.button !== 0) return;
     // A room selection takes keyboard focus away from the architecture inputs.
     this.renderer.domElement.focus?.({ preventScroll: true });
@@ -5042,6 +5089,18 @@ export class PlannerScene {
   };
 
   private onPointerMove = (event: PointerEvent) => {
+    if (this.openingDragging) {
+      if (this.moveHint) this.moveHint.hidden = true;
+      if (event.pointerId === this.openingDragging.pointerId) this.openingMoves.push(event);
+      return;
+    }
+    if (!this.dragging && event.target !== this.renderer.domElement) return;
+    // High-frequency mice can emit many samples per rendered frame. Resolve
+    // placement and perform mesh picking only for the latest sample.
+    this.pointerMoves.push(event);
+  };
+
+  private movePointer(event: PointerEvent) {
     if (this.openingDragging) {
       if (this.moveHint) this.moveHint.hidden = true;
       if (event.pointerId === this.openingDragging.pointerId) this.openingMoves.push(event);
@@ -5121,7 +5180,7 @@ export class PlannerScene {
       this.showMoveHint(event, !!furnitureId);
       this.renderer.domElement.style.cursor = furnitureId ? 'move' : '';
     }
-  };
+  }
 
   private showMoveHint(event: PointerEvent, visible: boolean) {
     if (!this.moveHint) return;
@@ -5131,6 +5190,7 @@ export class PlannerScene {
   }
 
   private onPointerLeave = () => {
+    if (!this.dragging) this.pointerMoves.clear();
     if (this.moveHint) this.moveHint.hidden = true;
     this.hoverOpeningId = null;
     this.syncOpeningHighlight(this.sceneSnapshot());
@@ -5138,6 +5198,7 @@ export class PlannerScene {
   };
 
   private onPointerUp = (event: PointerEvent) => {
+    this.pointerMoves.flush();
     if (this.wallClick?.pointerId === event.pointerId) {
       const click = this.wallClick;
       this.wallClick = null;
@@ -5246,6 +5307,15 @@ export class PlannerScene {
     this.renderFromState();
   }
 
+  private renderOpeningMove(event: PointerEvent) {
+    this.moveOpening(event);
+    if (!this.animationFrame) return;
+    // The pointer queue already runs in RAF. Draw its latest position now,
+    // instead of waiting another frame for the render requested by the update.
+    cancelAnimationFrame(this.animationFrame);
+    this.renderSafely();
+  }
+
   private moveOpeningOnVisibleWalls(snapshot: SceneSnapshot, opening: RoomOpening, patch: Pick<RoomOpening, 'wallId' | 'offset'>) {
     const walls = getPhysicalWalls(snapshot.room, snapshot.dividers);
     const allowed = (candidate: RoomOpening) => {
@@ -5268,6 +5338,7 @@ export class PlannerScene {
     const fitted = fitOpening(snapshot.room, snapshot.dividers, candidate,
       snapshot.openings.filter((other) => other.id !== opening.id), allowed);
     if (!fitted) return false;
+    if (fitted.wallId === opening.wallId && Math.abs(fitted.offset - opening.offset) < 1e-6) return false;
     this.bridge.updateOpening(opening.id, { wallId: fitted.wallId, offset: fitted.offset }, false);
     return true;
   }
@@ -5291,6 +5362,7 @@ export class PlannerScene {
   };
 
   private onWindowBlur = () => {
+    this.pointerMoves.flush();
     this.wallClick = null;
     this.spaceClick = null;
     this.finishOpeningDrag();
@@ -5374,6 +5446,11 @@ export class PlannerScene {
     this.animationFrame = requestAnimationFrame(this.animate);
   };
 
+  scheduleStateSync() {
+    this.stateSyncPending = true;
+    this.requestRender();
+  }
+
   private onContextLost = () => {
     if (!this.disposed) this.options.onError?.(new Error('The WebGL context was lost.'));
   };
@@ -5389,9 +5466,19 @@ export class PlannerScene {
   }
 
   private renderFrame() {
-    this.animationFrame = 0;
     if (this.disposed) return;
+    // Consume store changes before drawing. Immediate opening updates clear this
+    // flag, avoiding a second geometry/shadow update from the subscription.
+    if (this.stateSyncPending) this.renderFromState();
+    this.animationFrame = 0;
     const controlsChanged = this.controls.update();
+    const moving = !!(this.dragging || this.openingDragging || this.controlsInteracting || controlsChanged);
+    const pixelRatio = moving ? Math.min(1, this.restingPixelRatio) : this.restingPixelRatio;
+    if (this.renderer.getPixelRatio() !== pixelRatio) {
+      // Spend fewer pixels during motion, then restore a crisp stationary frame.
+      this.renderer.setPixelRatio(pixelRatio);
+      this.composer.setPixelRatio(pixelRatio);
+    }
     this.updateCameraClipping();
     this.updateCeilingVisibility();
     this.updateCutawayWalls();

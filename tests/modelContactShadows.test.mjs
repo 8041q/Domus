@@ -8,6 +8,7 @@ after(async () => vite.close());
 const { ModelContactShadows } = await vite.ssrLoadModule('/src/renderer/modelContactShadows.ts');
 const { createFloorCastShadow } = await vite.ssrLoadModule('/src/renderer/floorCastShadow.ts');
 const { PlannerScene } = await vite.ssrLoadModule('/src/renderer/PlannerScene.ts');
+const { emptyRoomSnapshot } = await vite.ssrLoadModule('/src/store.ts');
 
 function renderer() {
   return {
@@ -173,4 +174,59 @@ test('a failed cast-shadow filter restores rendering and hides its incomplete ma
   assert.equal(receiver.material.uniforms.ready.value, 0);
   assert.equal(gpu.target, previousTarget); assert.equal(gpu.autoClear, false); assert.equal(gpu.shadowMap.enabled, true);
   receiver.geometry.dispose(); receiver.material.dispose(); light.shadow.map.dispose(); previousTarget.dispose();
+});
+
+test('camera and outline passes reuse the floor mask while changed geometry or light refreshes it', () => {
+  const light = new THREE.DirectionalLight();
+  light.shadow.map = new THREE.WebGLRenderTarget(16, 16);
+  const receiver = createFloorCastShadow([{ x: 0, z: 0 }, { x: 2, z: 0 }, { x: 0, z: 2 }], light);
+  const gpu = renderer();
+  receiver.onBeforeRender(gpu);
+  assert.equal(gpu.renders, 3);
+  for (let i = 0; i < 30; i++) receiver.onBeforeRender(gpu);
+  assert.equal(gpu.renders, 3, 'Camera movement does not rerun the decode and two blur passes');
+  light.userData.castShadowVersion = 1;
+  receiver.onBeforeRender(gpu, { overrideMaterial: new THREE.MeshDepthMaterial() });
+  assert.equal(gpu.renders, 3, 'Selection depth/mask passes must not filter shadows');
+  receiver.onBeforeRender(gpu);
+  assert.equal(gpu.renders, 6, 'A moved model refreshes the floor shadow in the same frame');
+  light.shadow.matrix.makeTranslation(.2, 0, 0);
+  receiver.onBeforeRender(gpu);
+  assert.equal(gpu.renders, 9, 'Changing the light projection invalidates its filtered mask');
+  light.shadow.bias = -.001;
+  receiver.onBeforeRender(gpu);
+  assert.equal(gpu.renders, 12);
+  light.shadow.map.setSize(32, 32);
+  receiver.onBeforeRender(gpu);
+  assert.equal(gpu.renders, 15);
+  receiver.geometry.dispose(); receiver.material.dispose(); light.shadow.map.dispose(); gpu.target.dispose();
+});
+
+test('moving a glazed window retains sun lights and allocated shadow maps until the final pane is removed', () => {
+  const snapshot = emptyRoomSnapshot();
+  const opening = { id: 'window', type: 'window', variant: 'double-window', wallId: 'wall-v0-v1',
+    offset: 2, width: 1.4, height: 1.2, sillHeight: .85 };
+  snapshot.openings = [opening];
+  const scene = Object.create(PlannerScene.prototype);
+  Object.assign(scene, { options: { sunRays: true }, sunsetGroup: new THREE.Group(), sunsetLights: null });
+  scene.rebuildSunset(snapshot);
+  const lights = [...scene.sunsetLights];
+  const maps = lights.map(light => light.shadow.map = new THREE.WebGLRenderTarget(8, 8));
+  let releases = 0;
+  for (const map of maps) map.addEventListener('dispose', () => releases++);
+  const material = scene.sunsetGroup.children.find(node => node.isMesh).material;
+  let materialReleases = 0;
+  material.addEventListener('dispose', () => materialReleases++);
+  for (let i = 1; i <= 8; i++) {
+    snapshot.openings = [{ ...opening, offset: opening.offset + i * .02 }];
+    scene.rebuildSunset(snapshot);
+    assert.deepEqual(scene.sunsetLights, lights);
+    lights.forEach((light, index) => assert.equal(light.shadow.map, maps[index]));
+  }
+  assert.equal(releases, 0, 'A drag must not destroy and allocate shadow-map textures');
+  assert.equal(materialReleases, 0, 'Materials shared by retained masks must remain compiled');
+  snapshot.openings = [];
+  scene.rebuildSunset(snapshot);
+  assert.equal(scene.sunsetLights, null);
+  assert.equal(releases, 2);
 });

@@ -121,6 +121,11 @@ if (import.meta.hot) {
   import.meta.hot.dispose((data) => { data.catalogue = state; import.meta.hot?.off('domus:catalogue', updateCatalogue); });
 }
 
+/** Runtime derivatives retain the source URL for catalogue identity and dimensions. */
+export function productModelUrl(product: ProductDefinition) {
+  return product.model?.runtimeUrl ?? product.model?.url;
+}
+
 export function rotatedFootprint(product: ProductDefinition, rotationY: number) {
   const c = Math.abs(Math.cos(rotationY));
   const s = Math.abs(Math.sin(rotationY));

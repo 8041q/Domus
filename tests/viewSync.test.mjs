@@ -150,7 +150,7 @@ test('existing and remounted 3D scenes retain edited shell and divider geometry 
   disposeScene(scene);
 });
 
-test('moving an opening rebuilds only its affected wall while retaining floors and other walls', () => {
+test('moving an opening retains its GPU buffers and materials while matching freshly built wall geometry', () => {
   const store = module.usePlannerStore;
   store.getState().resetProject();
   const scene = createGeometryScene(store);
@@ -159,11 +159,29 @@ test('moving an opening rebuilds only its affected wall while retaining floors a
   const floor = scene.floorGroup.children[0];
   const unrelated = scene.wallsGroup.children.filter((mesh) => mesh.userData.cutawayWallId !== opening.wallId);
   const affected = scene.wallsGroup.children.filter((mesh) => mesh.userData.cutawayWallId === opening.wallId);
+  const frames = affected.filter(mesh => mesh.userData.openingId === opening.id);
+  const resources = frames.map(mesh => ({ mesh, geometry: mesh.geometry, material: mesh.material, positions: mesh.geometry.attributes.position.array }));
   store.getState().updateOpening(opening.id, { offset: opening.offset + 0.2 }, false);
   scene.renderFromState();
   assert.equal(scene.floorGroup.children[0], floor);
   for (const mesh of unrelated) assert.equal(mesh.parent, scene.wallsGroup);
-  for (const mesh of affected) assert.equal(mesh.parent, null);
+  for (const { mesh, geometry, material, positions } of resources) {
+    assert.equal(mesh.parent, scene.wallsGroup);
+    assert.equal(mesh.geometry, geometry);
+    assert.equal(mesh.material, material);
+    assert.equal(mesh.geometry.attributes.position.array, positions);
+  }
+  for (let i = 0; i < 20; i++) {
+    store.getState().updateOpening(opening.id, { offset: opening.offset + .2 + i * .01 }, false);
+    scene.renderFromState();
+  }
+  for (const { mesh, material } of resources) { assert.equal(mesh.parent, scene.wallsGroup); assert.equal(mesh.material, material); }
+  const fresh = createGeometryScene(store);
+  fresh.renderFromState();
+  const shape = group => group.children.map(mesh => JSON.stringify([mesh.name, mesh.position.toArray(), mesh.rotation.y,
+    [...mesh.geometry.attributes.position.array], mesh.geometry.groups])).sort();
+  assert.deepEqual(shape(scene.wallsGroup), shape(fresh.wallsGroup));
+  disposeScene(fresh);
   store.getState().updateOpening(opening.id, { wallId: 'wall-v3-v0', offset: 1.5 }, false);
   scene.renderFromState();
   assert.ok(scene.wallsGroup.children.some((mesh) => mesh.userData.openingId === opening.id && mesh.userData.cutawayWallId === 'wall-v3-v0'));

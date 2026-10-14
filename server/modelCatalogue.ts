@@ -7,6 +7,8 @@ import * as THREE from 'three';
 import type { Plugin, ViteDevServer } from 'vite';
 import type { ProductDefinition } from '../src/core/types';
 import { normalizeProductCategory, PRODUCT_METADATA_VERSION } from '../src/core/productSchema';
+import { ModelOptimizationQueue } from './modelOptimization';
+import { MODEL_CACHE_TTL_MS, modelCacheExpired } from '../scripts/model-cache.mjs';
 
 export interface CatalogueIssue { file: string; message: string }
 export interface ModelCatalogueData { products: ProductDefinition[]; aliases: Record<string, string>; issues: CatalogueIssue[] }
@@ -153,6 +155,9 @@ export class ModelCatalogue {
   private initialized = false;
   private queue: Promise<unknown> = Promise.resolve();
   data: ModelCatalogueData = { products: [], aliases: {}, issues: [] };
+  requiresOptimization = false;
+  nextCacheExpiry: number | undefined;
+  cacheGeneration = '';
   constructor(private root: string) {}
   get modelsDirectory() { return path.join(this.root, 'public', 'models'); }
   private get registryFile() { return path.join(this.root, 'model-catalogue.json'); }
@@ -228,8 +233,35 @@ export class ModelCatalogue {
         await rename(temporary, this.registryFile);
       } catch (error) { this.registry = JSON.parse(before); throw error; }
     }
+    // Optimized copies live outside the source folder, so they cannot create new
+    // catalogue IDs. Never use a derivative belonging to an older Blender export.
+    let optimized: { version?: number; models?: Record<string, { sourceFingerprint?: string; url?: string; after?: { bytes?: number } }> } = {};
+    try {
+      const parsed = JSON.parse(await readFile(path.join(this.root, 'public', 'optimized-models', 'manifest.json'), 'utf8'));
+      if (parsed && typeof parsed === 'object' && parsed.models && typeof parsed.models === 'object') optimized = parsed;
+    }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error; }
+    const cacheStamps: Record<string, number> = {};
+    this.nextCacheExpiry = undefined;
+    const products = await Promise.all(this.registry.entries.map(async (entry) => {
+      const derivative = optimized.models?.[entry.file];
+      if (entry.product.available === false || !entry.product.model || derivative?.sourceFingerprint !== entry.fingerprint
+        || typeof derivative.url !== 'string' || !/^\/optimized-models\/[a-f0-9]{64}-v\d+\.glb$/.test(derivative.url)
+        || !derivative.url.startsWith(`/optimized-models/${entry.fingerprint}-v`)) return entry.product;
+      try {
+        const info = await stat(path.join(this.root, 'public', derivative.url.slice(1)));
+        if (!info.isFile() || info.size !== derivative.after?.bytes) return entry.product;
+        cacheStamps[entry.file] = info.mtimeMs;
+        if (modelCacheExpired(info.mtimeMs)) return entry.product;
+        this.nextCacheExpiry = Math.min(this.nextCacheExpiry ?? Infinity, info.mtimeMs + MODEL_CACHE_TTL_MS);
+      } catch { return entry.product; }
+      return { ...entry.product, model: { ...entry.product.model, runtimeUrl: derivative.url } };
+    }));
+    this.cacheGeneration = JSON.stringify(Object.entries(cacheStamps).sort(([a], [b]) => a.localeCompare(b)));
+    this.requiresOptimization = products.some(product => product.available !== false && product.model && !product.model.runtimeUrl)
+      || Object.keys(optimized.models ?? {}).some(file => !present.has(file));
     this.data = {
-      products: this.registry.entries.map((entry) => entry.product),
+      products,
       aliases: Object.fromEntries(this.registry.entries.flatMap((entry) => (entry.aliases ?? []).map((alias) => [alias, entry.id]))), issues
     };
     return this.data;
@@ -240,10 +272,38 @@ export function automaticModelCatalogue(): Plugin {
   let catalogue: ModelCatalogue;
   let ready: Promise<ModelCatalogueData>;
   let publish: ((data: ModelCatalogueData) => void) | undefined;
+  let optimization: ModelOptimizationQueue | undefined;
+  let projectRoot = '';
+  let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+  let reportExpiryError: ((message: string) => void) | undefined;
+  const scheduleExpiry = () => {
+    clearTimeout(expiryTimer);
+    if (!optimization || catalogue.nextCacheExpiry === undefined) return;
+    expiryTimer = setTimeout(() => {
+      void refresh().catch(error => reportExpiryError?.(error.message));
+    }, Math.max(1, catalogue.nextCacheExpiry - Date.now()));
+    expiryTimer.unref();
+  };
+  const optimizationKey = (data: ModelCatalogueData) => JSON.stringify(data.products.filter(product => product.model && product.available !== false)
+    .map(product => [product.id, product.model!.url])) + catalogue.cacheGeneration;
   const refresh = async (force = false) => {
     const data = await catalogue.scan(force);
     publish?.(data);
+    if (catalogue.requiresOptimization) optimization?.request(optimizationKey(data));
+    scheduleExpiry();
     return data;
+  };
+  const startOptimization = (report: (message: string) => void) => {
+    reportExpiryError = report;
+    optimization = new ModelOptimizationQueue(projectRoot, async () => {
+      const before = JSON.stringify(catalogue.data);
+      const data = await catalogue.scan();
+      if (JSON.stringify(data) !== before) publish?.(data);
+      if (catalogue.requiresOptimization) optimization?.request(optimizationKey(data));
+      scheduleExpiry();
+    }, report);
+    if (catalogue.requiresOptimization) optimization.request(optimizationKey(catalogue.data));
+    scheduleExpiry();
   };
   const middleware = (request: IncomingMessage, response: ServerResponse, next: () => void) => {
     const requested = new URL(request.url ?? '/', 'http://localhost');
@@ -266,18 +326,27 @@ export function automaticModelCatalogue(): Plugin {
       }).catch((error) => { response.statusCode = 500; response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ error: error.message })); });
       return;
     }
-    if (!requested.pathname.startsWith('/models/') || !/\.glb$/i.test(requested.pathname)) { next(); return; }
+    const runtimeAsset = requested.pathname.startsWith('/optimized-models/');
+    if ((!requested.pathname.startsWith('/models/') && !runtimeAsset) || !/\.glb$/i.test(requested.pathname)) { next(); return; }
     void ready.then(async () => {
-      const product = catalogue.data.products.find((item) => item.available !== false && item.model && new URL(item.model.url, 'http://localhost').pathname === requested.pathname);
+      const product = catalogue.data.products.find((item) => item.available !== false && item.model
+        && new URL(runtimeAsset ? item.model.runtimeUrl ?? '/' : item.model.url, 'http://localhost').pathname === requested.pathname);
       if (!product?.model) { response.statusCode = 404; response.end('Model unavailable'); return; }
       const expected = new URL(product.model.url, 'http://localhost').searchParams.get('v');
       if (requested.searchParams.has('v') && requested.searchParams.get('v') !== expected) { response.statusCode = 409; response.end('Model changed; reload the catalogue'); return; }
-      const relative = decodeURIComponent(requested.pathname.slice('/models/'.length));
-      const filename = path.resolve(catalogue.modelsDirectory, relative);
-      const inside = path.relative(catalogue.modelsDirectory, filename);
+      const directory = runtimeAsset ? path.join(catalogue.modelsDirectory, '..', 'optimized-models') : catalogue.modelsDirectory;
+      const relative = decodeURIComponent(requested.pathname.slice(runtimeAsset ? '/optimized-models/'.length : '/models/'.length));
+      const filename = path.resolve(directory, relative);
+      const inside = path.relative(directory, filename);
       if (inside.startsWith('..') || path.isAbsolute(inside)) { response.statusCode = 404; response.end(); return; }
       const info = await stat(filename);
-      response.setHeader('Content-Type', 'model/gltf-binary'); response.setHeader('Content-Length', info.size); response.setHeader('Cache-Control', 'no-cache');
+      if (runtimeAsset && modelCacheExpired(info.mtimeMs)) {
+        void refresh().catch(error => reportExpiryError?.(error.message));
+        response.statusCode = 404; response.end('Model cache expired; reload the catalogue'); return;
+      }
+      response.setHeader('Content-Type', 'model/gltf-binary'); response.setHeader('Content-Length', info.size);
+      const maxAge = Math.max(0, Math.floor((info.mtimeMs + MODEL_CACHE_TTL_MS - Date.now()) / 1000));
+      response.setHeader('Cache-Control', runtimeAsset ? `public, max-age=${maxAge}, must-revalidate` : 'no-cache');
       if (request.method === 'HEAD') { response.end(); return; }
       const stream = createReadStream(filename);
       stream.on('error', () => response.destroy());
@@ -287,8 +356,9 @@ export function automaticModelCatalogue(): Plugin {
   };
   return {
     name: 'domus-model-catalogue',
-    configResolved(config) { catalogue = new ModelCatalogue(config.root); ready = catalogue.scan(); },
+    configResolved(config) { projectRoot = config.root; catalogue = new ModelCatalogue(config.root); ready = catalogue.scan(); },
     async buildStart() { await ready; },
+    async closeBundle() { clearTimeout(expiryTimer); await optimization?.dispose(); },
     resolveId(id) { if (id === PUBLIC_ID) return MODULE_ID; },
     hotUpdate(context) {
       const relative = path.relative(catalogue.modelsDirectory, context.file);
@@ -303,6 +373,7 @@ export function automaticModelCatalogue(): Plugin {
         server.ws.send({ type: 'custom', event: 'domus:catalogue', data });
       };
       server.middlewares.use(middleware);
+      startOptimization(message => server.config.logger.warn(`Model optimization: ${message}`));
       let timer: ReturnType<typeof setTimeout> | undefined;
       const change = (filename: string) => {
         const relative = path.relative(catalogue.modelsDirectory, filename);
@@ -315,11 +386,18 @@ export function automaticModelCatalogue(): Plugin {
       server.watcher.add(catalogue.modelsDirectory);
       for (const event of ['add', 'change', 'unlink', 'addDir', 'unlinkDir'] as const) server.watcher.on(event, change);
       server.httpServer?.once('close', () => {
+        clearTimeout(expiryTimer);
         clearTimeout(timer);
         publish = undefined;
+        optimization?.dispose();
         for (const event of ['add', 'change', 'unlink', 'addDir', 'unlinkDir'] as const) server.watcher.off(event, change);
       });
     },
-    async configurePreviewServer(server) { await ready; server.middlewares.use(middleware); }
+    async configurePreviewServer(server) {
+      await ready;
+      server.middlewares.use(middleware);
+      startOptimization(message => server.config.logger.warn(`Model optimization: ${message}`));
+      server.httpServer?.once('close', () => { clearTimeout(expiryTimer); optimization?.dispose(); });
+    }
   };
 }

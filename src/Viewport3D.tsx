@@ -63,7 +63,6 @@ export function Viewport3D({
   useEffect(() => {
     if (!ref.current) return;
     let scene: PlannerScene | null = null;
-    let syncFrame = 0;
     let unsubscribe = () => {};
     let unsubscribeCatalogue = () => {};
     let stopped = false;
@@ -73,7 +72,6 @@ export function Viewport3D({
       console.error('Could not render 3D view', error);
       unsubscribe();
       unsubscribeCatalogue();
-      if (syncFrame) cancelAnimationFrame(syncFrame);
       scene?.dispose();
       sceneRef.current = null;
       onExportReady?.(null);
@@ -154,18 +152,14 @@ export function Viewport3D({
             || state.showSpacingDimensions !== previous.showSpacingDimensions
           ))
           || state.measurementSystem !== previous.measurementSystem;
-        if (stopped || !sceneStateChanged || syncFrame) return;
-        syncFrame = requestAnimationFrame(() => {
-          syncFrame = 0;
-          try { scene?.renderFromState(); } catch (error) { fail(error); }
-        });
+        if (stopped || !sceneStateChanged) return;
+        scene?.scheduleStateSync();
       });
     } catch (error) { fail(error); }
     return () => {
       stopped = true;
       unsubscribe();
       unsubscribeCatalogue();
-      if (syncFrame) cancelAnimationFrame(syncFrame);
       scene?.dispose();
       sceneRef.current = null;
     };

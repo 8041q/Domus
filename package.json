@@ -4,10 +4,14 @@
   "version": "0.8.0",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/optimize-models.mjs --optional",
     "dev": "node node_modules/vite/bin/vite.js",
+    "prebuild": "node scripts/optimize-models.mjs --optional",
     "build": "node node_modules/typescript/bin/tsc -b && node node_modules/vite/bin/vite.js build",
     "preview": "node node_modules/vite/bin/vite.js preview",
     "models:rescan": "node scripts/rescan-models.mjs",
+    "models:optimize": "node scripts/optimize-models.mjs",
+    "models:benchmark": "node scripts/benchmark-models.mjs",
     "test": "node --test"
   },
   "dependencies": {
@@ -15,13 +19,18 @@
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "three": "^0.180.0",
+    "three-mesh-bvh": "^0.9.16",
     "zustand": "^5.0.8"
   },
   "devDependencies": {
+    "@gltf-transform/core": "^4.5.1",
+    "@gltf-transform/extensions": "^4.5.1",
+    "@gltf-transform/functions": "^4.5.1",
     "@types/node": "^26.6.2",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@types/three": "^0.180.0",
+    "meshoptimizer": "^1.3.0",
     "typescript": "^5.8.3",
     "vite": "^7.1.0"
   }
