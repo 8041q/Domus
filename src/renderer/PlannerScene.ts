@@ -28,6 +28,8 @@ import { createFloorSurfaceGeometry } from './floorGeometry';
 import { createPerimeterShade } from './perimeterShading';
 import { createFrameQueue } from '../core/frameQueue';
 import { ProductModelLibrary } from './productModels';
+import { ModelContactShadows } from './modelContactShadows';
+import { createFloorCastShadow } from './floorCastShadow';
 import { renderRoomReport, roomReportData } from '../core/roomReport';
 import { roomViewSummary } from '../core/roomReportGeometry';
 import { renderRoomViewPages, type ReportViewCapture } from '../core/roomReportViews';
@@ -163,6 +165,7 @@ export class PlannerScene {
   private helperGroup = new THREE.Group();
   private objectModels = new Map<string, THREE.Group>();
   private productModels = new ProductModelLibrary();
+  private modelContactShadows?: ModelContactShadows;
   private productModelRequests = new Map<string, Promise<void>>();
   private productModelTemplates = new Map<string, THREE.Group>();
   private productModelErrors = new Set<string>();
@@ -378,6 +381,7 @@ export class PlannerScene {
     this.disposeSunsetRig();
     this.disposeGroup(this.contactShadowGroup);
     this.disposeGroup(this.objectGroup);
+    this.modelContactShadows?.dispose();
     this.productModels?.dispose();
     this.disposeGroup(this.helperGroup);
     for (const texture of this.floorMapAssets) texture.dispose();
@@ -1554,6 +1558,9 @@ export class PlannerScene {
       this.floorGroup.add(mesh);
     }
     this.addFloorPerimeterShade(snapshot);
+    if (this.options?.showFurniture && this.mainLight) {
+      this.architecturalShadeGroup.add(createFloorCastShadow(floorTopVertices, this.mainLight));
+    }
 
     this.rebuildWalls(snapshot);
     this.rebuildCeiling(snapshot);
@@ -3033,10 +3040,10 @@ export class PlannerScene {
         group.traverse((node) => { node.userData.objectId = object.id; });
         this.objectModels.set(object.id, group);
         this.objectGroup.add(group);
-        if (product.model) this.syncProductModel(object.productId, group);
         const contact = this.createContactShadow(object.productId);
         this.contactShadows.set(object.id, contact);
         this.contactShadowGroup.add(contact);
+        if (product.model) this.syncProductModel(object.productId, group);
       }
       group.position.set(object.x, 0, object.z);
       group.rotation.y = object.rotationY;
@@ -3053,6 +3060,8 @@ export class PlannerScene {
     const catalogueUrls = new Set(PRODUCT_LIST.flatMap((product) => product.model ? [product.model.url] : []));
     for (const url of new Set([...this.productModelTemplates.keys(), ...this.productModelRequests.keys()])) {
       if (catalogueUrls.has(url)) continue;
+      const obsoleteTemplate = this.productModelTemplates.get(url);
+      if (obsoleteTemplate) this.modelContactShadows?.release(obsoleteTemplate);
       this.productModelTemplates.delete(url);
       this.productModelRequests.delete(url);
       this.productModelErrors.delete(url);
@@ -3071,6 +3080,16 @@ export class PlannerScene {
     model.traverse((node) => { node.userData.objectId = group.userData.objectId; });
     group.add(model);
     group.userData.productModelLoaded = true;
+    const previousContact = this.contactShadows.get(group.userData.objectId);
+    if (previousContact) {
+      const contact = this.createContactShadow(group.userData.productId, template);
+      contact.position.copy(group.position);
+      contact.rotation.copy(group.rotation);
+      this.disposeGroup(previousContact);
+      this.contactShadowGroup.remove(previousContact);
+      this.contactShadows.set(group.userData.objectId, contact);
+      this.contactShadowGroup.add(contact);
+    }
   }
 
   private syncProductModel(id: keyof typeof PRODUCTS, group: THREE.Group) {
@@ -3132,7 +3151,11 @@ export class PlannerScene {
 
   /** Soft floor occlusion follows the actual support points, independently of
    * the directional and window shadows. It never alters the model material. */
-  private createContactShadow(id: keyof typeof PRODUCTS) {
+  private createContactShadow(id: keyof typeof PRODUCTS, model?: THREE.Group) {
+    if (model) {
+      if (!this.modelContactShadows && this.renderer) this.modelContactShadows = new ModelContactShadows(this.renderer);
+      return this.modelContactShadows?.create(model) ?? new THREE.Group();
+    }
     const p = PRODUCTS[id];
     const group = new THREE.Group();
     const patch = (width: number, depth: number, x: number, z: number, feather: number, opacity: number, round = false) => {
@@ -3193,8 +3216,6 @@ export class PlannerScene {
       patch(p.width, p.depth, 0, 0, 0.03, 0.10);
     } else if (id === 'plant') {
       patch(0.31, 0.31, 0, 0, 0.03, 0.34, true);
-    } else if (p.model) {
-      patch(p.width * 0.85, p.depth * 0.85, 0, 0, 0.05, 0.18);
     }
     return group;
   }

@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { clone } from 'three/examples/jsm/utils/SkeletonUtils.js';
 
+// Model-only bounced light: keep pale finishes legible against the brighter shell.
+export const PRODUCT_ENVIRONMENT_INTENSITY = 0.85;
+
 /** Shared geometry/materials belong to this library, never to placed instances. */
 export class ProductModelLibrary {
   private requests = new Map<string, Promise<THREE.Group>>();
@@ -8,7 +11,7 @@ export class ProductModelLibrary {
   private templatesByUrl = new Map<string, THREE.Group>();
   private disposed = false;
   private environment: THREE.Texture | null = null;
-  private environmentIntensity = 0.28;
+  private environmentIntensity = PRODUCT_ENVIRONMENT_INTENSITY;
   private originalEnvironments = new WeakMap<THREE.MeshStandardMaterial, { map: THREE.Texture | null; intensity: number }>();
 
   constructor(private load = async (url: string) => {
@@ -40,7 +43,9 @@ export class ProductModelLibrary {
         template.traverse((node) => {
           node.userData.sharedProductAsset = true;
           if (node instanceof THREE.Mesh) {
-            node.castShadow = true;
+            const materials = Array.isArray(node.material) ? node.material : [node.material];
+            node.castShadow = materials.some((material) => material.visible && !material.transparent
+              && (!(material instanceof THREE.MeshPhysicalMaterial) || material.transmission === 0));
             node.receiveShadow = true;
           }
         });
@@ -61,7 +66,7 @@ export class ProductModelLibrary {
   retry(url: string) { this.requests.delete(url); }
 
   /** The renderer owns this texture; imported asset resources remain library-owned. */
-  setEnvironment(texture: THREE.Texture | null, intensity = 0.28) {
+  setEnvironment(texture: THREE.Texture | null, intensity = PRODUCT_ENVIRONMENT_INTENSITY) {
     if (this.environment === texture && this.environmentIntensity === intensity) return;
     this.environment = texture;
     this.environmentIntensity = intensity;

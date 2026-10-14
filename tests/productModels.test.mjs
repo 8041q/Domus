@@ -6,6 +6,7 @@ import * as THREE from 'three';
 const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: 'custom', logLevel: 'silent' });
 after(() => vite.close());
 const { ProductModelLibrary } = await vite.ssrLoadModule('/src/renderer/productModels.ts');
+const { ModelContactShadows } = await vite.ssrLoadModule('/src/renderer/modelContactShadows.ts');
 const { PlannerScene } = await vite.ssrLoadModule('/src/renderer/PlannerScene.ts');
 const { PRODUCTS } = await vite.ssrLoadModule('/src/core/products.ts');
 const { emptyRoomSnapshot, parseProjectSnapshot, usePlannerStore: store } = await vite.ssrLoadModule('/src/store.ts');
@@ -73,7 +74,8 @@ test('viewport environments follow late loads and mode switches without changing
   const instance = library.instantiate(template);
   assert.equal(instance.children[0].children[0].material, material);
   assert.equal(material.envMap, environment);
-  assert.equal(material.envMapIntensity, .28);
+  assert.equal(material.envMapIntensity, .85);
+  assert.equal(material.color.getHex(), 0xffffff, 'brighter lighting must not recolor the asset');
   assert.equal(material.roughness, .17);
   assert.equal(material.metalness, .6);
   const exported = library.cloneForExport(material);
@@ -198,6 +200,10 @@ test('a delayed GLB attaches only to current instances and retains moved/rotated
     floorGroup: new THREE.Group(), wallsGroup: new THREE.Group(), ceilingGroup: new THREE.Group(),
     contactShadowGroup: new THREE.Group(), outlinePass: { selectedObjects: [] },
     productModels: new ProductModelLibrary(() => new Promise((done) => { resolve = done; })),
+    modelContactShadows: new ModelContactShadows({
+      getRenderTarget: () => null, getClearColor: (color) => color.setHex(0), getClearAlpha: () => 1,
+      setRenderTarget() {}, setClearColor() {}, clear() {}, render() {}, autoClear: true, shadowMap: { enabled: true }
+    }),
     productModelRequests: new Map(), productModelTemplates: new Map(), productModelErrors: new Set(),
     disposed: false, requestRender() {}
   });
@@ -217,7 +223,20 @@ test('a delayed GLB attaches only to current instances and retains moved/rotated
   assert.equal(kept.userData.productModelLoaded, true);
   assert.deepEqual(kept.position.toArray(), [3, 0, -1]);
   assert.equal(kept.rotation.y, Math.PI / 2);
+  const contact = scene.contactShadows.get('kept');
+  assert.deepEqual(contact.position.toArray(), [3, 0, -1]);
+  assert.equal(contact.rotation.y, Math.PI / 2);
+  assert.equal(contact.children.length, 1);
+  assert.ok(Math.abs(contact.children[0].geometry.parameters.width - 1.06) < 1e-6,
+    'loaded mask follows source geometry, not catalogue dimensions');
+  assert.ok(Math.abs(contact.children[0].geometry.parameters.height - 2.06) < 1e-6);
   assert.equal(scene.objectModels.get('duplicate').userData.productModelLoaded, true);
+  snapshot.objects.push({ id: 'cached', productId: 'hospitalbed', x: -1, z: -2, rotationY: .3 });
+  scene.syncObjects(snapshot);
+  assert.equal(scene.objectModels.get('cached').userData.productModelLoaded, true);
+  assert.equal(scene.contactShadows.get('cached').children[0].material.uniforms.contactMask.value,
+    contact.children[0].material.uniforms.contactMask.value, 'cached models reuse their geometry mask on their first frame');
+  assert.deepEqual(scene.contactShadows.get('cached').position.toArray(), [-1, 0, -2]);
   assert.equal(scene.outlinePass.selectedObjects[0], kept);
   const item = scene.collectExportItems().find((item) => item.category === 'Furniture' && item.id === 'kept');
   assert.ok(item);
@@ -230,6 +249,7 @@ test('a delayed GLB attaches only to current instances and retains moved/rotated
   });
   scene.disposeGroup(scene.objectGroup);
   scene.disposeGroup(scene.contactShadowGroup);
+  scene.modelContactShadows.dispose();
   scene.productModels.dispose();
   environment.dispose();
 });
