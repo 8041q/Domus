@@ -28,7 +28,7 @@ export type FloorFinish =
   | 'terrazzo-005'
   | 'terrazzo-007'
   | 'wood-floor-020';
-export type RoomShapeKind = 'rectangle' | 'circle' | 'angled-corner' | 'l-shape' | 'recess' | 'custom';
+export type RoomShapeKind = 'rectangle' | 'rounded-rectangle' | 'circle' | 'angled-corner' | 'l-shape' | 'recess' | 'custom';
 export type SunStylePreset = 'paired-suns' | 'cinematic-shadows';
 export type BaseboardStyle = 'flat' | 'flush' | 'rounded' | 'stepped' | 'sculpted' | 'sculpted-tall' | 'floating' | 'flash-coving';
 export type BaseboardMaterial = 'paint' | 'materials';
@@ -76,6 +76,8 @@ export interface RoomState {
   floorFinish: FloorFinish;
   lighting: RoomLighting;
   shapeKind: RoomShapeKind;
+  /** Rounded rectangle corner radius in metres; zero gives square corners. */
+  cornerRadius?: number;
   /** Ordered simple room perimeter. Walls may be orthogonal or angled. */
   vertices: RoomVertex[];
 }
@@ -94,6 +96,8 @@ export interface RoomOpening {
   variant: OpeningVariant;
   /** Reverse the door's facing and hinge/latch direction; absent in older saves. */
   doorFlipped?: boolean;
+  /** Keep a curved aperture spanning perimeter sections after editing the room. */
+  wrapAround?: boolean;
 }
 
 export interface RoomWallSegment {

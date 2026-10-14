@@ -11,7 +11,7 @@ const { createFrameQueue } = await vite.ssrLoadModule('/src/core/frameQueue.ts')
 const { usePlannerStore, getSnapshot, parseProjectSnapshot } = await vite.ssrLoadModule('/src/store.ts');
 const { PlannerScene } = await vite.ssrLoadModule('/src/renderer/PlannerScene.ts');
 const { getPhysicalWalls } = await vite.ssrLoadModule('/src/core/spaces.ts');
-const { getRoomWalls, roomBounds, isValidRoom, openingsOnWall } = await vite.ssrLoadModule('/src/core/roomGeometry.ts');
+const { getRoomWalls, roomBounds, isValidRoom, openingsOnWall, roomTemplate, moveCorner, polygonArea } = await vite.ssrLoadModule('/src/core/roomGeometry.ts');
 const { buildRoomPdf, ROOM_PDF_VIEWS } = await vite.ssrLoadModule('/src/core/roomPdf.ts');
 const { wallCornerShading } = await vite.ssrLoadModule('/src/core/wallShading.ts');
 const { roomReportData } = await vite.ssrLoadModule('/src/core/roomReport.ts');
@@ -87,8 +87,9 @@ test('circle presets resize uniformly, retain real-size apertures across short s
   store.getState().setRoomTemplate('circle');
   const before = getSnapshot();
   const sizes = before.openings.map((opening) => opening.width);
-  for (const diameter of [2.2, 3, 8, 20]) {
-    store.getState().updateRoom({ width: diameter }, false);
+  for (const requested of [2.2, 3, 6, 8, 20]) {
+    const diameter = Math.max(6, requested);
+    store.getState().updateRoom({ width: requested }, false);
     const snapshot = getSnapshot();
     assert.ok(Math.abs(snapshot.room.width - diameter) < 1e-8);
     assert.ok(Math.abs(snapshot.room.depth - diameter) < 1e-8);
@@ -366,7 +367,7 @@ test('moving the selected opening to another wall keeps that wall active for the
   assert.equal(store.getState().openings.find((opening) => opening.id === store.getState().selectedOpeningId).wallId, 'wall-v3-v0');
 });
 
-test('a selected door is revealed on a cutaway wall in Build Room and the normal cutaway returns afterward', () => {
+test('selecting or inserting a door keeps the same foreground cutaway before and after remounting', () => {
   const store = usePlannerStore;
   store.getState().resetProject();
   const opening = store.getState().openings.find((opening) => opening.type === 'door');
@@ -383,7 +384,7 @@ test('a selected door is revealed on a cutaway wall in Build Room and the normal
   assert.equal(door.visible, false);
   store.getState().selectOpening(opening.id);
   scene.updateCutawayWalls(true);
-  assert.equal(door.visible, true);
+  assert.equal(door.visible, false, 'Selecting the door must not reveal the back face of its wall');
   scene.options.interactiveArchitecture = false;
   scene.updateCutawayWalls(true);
   assert.equal(door.visible, false, 'Plan Room keeps its normal cutaway');
@@ -391,4 +392,120 @@ test('a selected door is revealed on a cutaway wall in Build Room and the normal
   store.getState().selectOpening(null);
   scene.updateCutawayWalls(true);
   assert.equal(door.visible, false);
+});
+
+test('wall openings turn corners in either direction and retain their full width across the perimeter seam', () => {
+  const store = usePlannerStore;
+  for (const shape of ['rectangle', 'circle', 'rounded-rectangle', 'l-shape']) {
+    store.getState().resetProject(); store.getState().setRoomTemplate(shape);
+    const room = store.getState().room, walls = getRoomWalls(room);
+    for (const [wall, offset] of [[walls[0], 0.05], [walls[0], walls[0].length - 0.05], [walls.at(-1), walls.at(-1).length - 0.05]]) {
+      const opening = { id: 'corner-opening', type: 'opening', variant: 'wall-opening', wallId: wall.id,
+        offset, width: 1.8, height: 1.2, sillHeight: 0.75 };
+      const pieces = walls.flatMap((segment) => openingsOnWall(room, [opening], segment.id).map((piece) => ({ piece, segment })));
+      assert.ok(pieces.length >= 2);
+      assert.ok(Math.abs(pieces.reduce((sum, { piece }) => sum + piece.width, 0) - opening.width) < 1e-8);
+      for (const { piece, segment } of pieces) {
+        assert.equal(piece.id, opening.id);
+        assert.ok(piece.offset - piece.width / 2 >= -1e-8);
+        assert.ok(piece.offset + piece.width / 2 <= segment.length + 1e-8);
+      }
+      const scene = Object.create(PlannerScene.prototype);
+      scene.wallsGroup = new THREE.Group();
+      scene.addOpeningFrame(opening, { ...getSnapshot(), openings: [opening] }, 0.05);
+      assert.equal(scene.wallsGroup.children.length, pieces.length);
+      assert.ok(Math.abs(scene.wallsGroup.children.reduce((sum, mesh) => sum + mesh.geometry.parameters.width, 0) - opening.width) < 1e-8);
+      for (const mesh of scene.wallsGroup.children) {
+        assert.equal(mesh.userData.openingId, opening.id);
+        assert.equal(mesh.material.opacity, 0);
+        assert.ok(pieces.some(({ segment }) => segment.id === mesh.userData.cutawayWallId));
+      }
+      scene.disposeGroup(scene.wallsGroup);
+    }
+  }
+});
+
+test('editing circular dots and splitting sections preserves curved apertures, saved data and undo', () => {
+  const store = usePlannerStore;
+  store.getState().resetProject(); store.getState().setRoomTemplate('circle');
+  const before = getSnapshot(), sizes = before.openings.map((opening) => opening.width);
+  const vertex = before.room.vertices[3];
+  const edited = moveCorner(before.room, vertex.id, vertex.x + 0.3, vertex.z);
+  assert.ok(edited);
+  store.getState().setRoomVertices(edited);
+  store.getState().commitSnapshot(before);
+  assert.equal(store.getState().room.shapeKind, 'custom');
+  assert.deepEqual(store.getState().openings.map((opening) => opening.width), sizes);
+  const wall = getRoomWalls(store.getState().room).find((wall) => wall.id === store.getState().openings[1].wallId);
+  assert.equal(store.getState().splitWallById(wall.id), true);
+  const split = getSnapshot();
+  assert.equal(split.room.vertices.length, before.room.vertices.length + 1);
+  assert.deepEqual(split.openings.map((opening) => opening.width), sizes);
+  for (const opening of split.openings) {
+    const pieces = getRoomWalls(split.room).flatMap((wall) => openingsOnWall(split.room, [opening], wall.id));
+    assert.ok(Math.abs(pieces.reduce((sum, piece) => sum + piece.width, 0) - opening.width) < 1e-8);
+  }
+  assert.deepEqual(parseProjectSnapshot(JSON.parse(JSON.stringify(split))), split);
+  store.getState().undo(); assert.equal(store.getState().room.vertices.length, before.room.vertices.length);
+  store.getState().undo(); assert.deepEqual(getSnapshot(), before);
+  store.getState().redo(); store.getState().redo(); assert.deepEqual(getSnapshot(), split);
+});
+
+test('rounded rectangle templates have four straight sides, valid rounded corners and survive save/load', () => {
+  for (const [width, depth] of [[2.2, 2.2], [5.2, 3.8], [20, 20], [2.2, 20]]) {
+    const vertices = roomTemplate('rounded-rectangle', width, depth);
+    assert.equal(isValidRoom(vertices), true);
+    const bounds = roomBounds(vertices);
+    assert.ok(Math.abs(bounds.width - width) < 1e-8);
+    assert.ok(Math.abs(bounds.depth - depth) < 1e-8);
+    assert.ok(polygonArea(vertices) < width * depth);
+    const walls = getRoomWalls({ ...getSnapshot().room, vertices });
+    assert.equal(walls.filter((wall) => Math.abs(wall.tangent.x) < 1e-8 || Math.abs(wall.tangent.z) < 1e-8).length, 4);
+  }
+  usePlannerStore.getState().resetProject(); usePlannerStore.getState().setRoomTemplate('rounded-rectangle');
+  const snapshot = getSnapshot();
+  assert.equal(snapshot.room.shapeKind, 'rounded-rectangle');
+  assert.deepEqual(parseProjectSnapshot(JSON.parse(JSON.stringify(snapshot))), snapshot);
+});
+
+test('old circles smaller than six metres migrate uniformly without shrinking apertures or changing their perimeter position', () => {
+  usePlannerStore.getState().resetProject(); usePlannerStore.getState().setRoomTemplate('circle');
+  const snapshot = getSnapshot();
+  const legacy = structuredClone(snapshot);
+  legacy.room.width = 3; legacy.room.depth = 3;
+  legacy.room.vertices = legacy.room.vertices.map((vertex) => ({ ...vertex, x: vertex.x / 2, z: vertex.z / 2 }));
+  legacy.openings = legacy.openings.map((opening) => ({ ...opening, offset: opening.offset / 2 }));
+  const migrated = parseProjectSnapshot(legacy);
+  assert.ok(migrated);
+  assert.equal(migrated.room.width, 6); assert.equal(migrated.room.depth, 6);
+  assert.deepEqual(migrated.openings, snapshot.openings);
+  for (const requested of [1, 3, 5.9]) {
+    usePlannerStore.getState().updateRoom({ depth: requested });
+    assert.equal(usePlannerStore.getState().room.width, 6);
+    assert.equal(usePlannerStore.getState().room.depth, 6);
+  }
+});
+
+test('a wrapped opening can be dragged from its continuation on the next wall without jumping its centre', () => {
+  const store = usePlannerStore;
+  store.getState().resetProject();
+  const walls = getRoomWalls(store.getState().room);
+  const opening = { id: 'wrapped-drag', type: 'opening', variant: 'wall-opening', wallId: walls[0].id,
+    offset: walls[0].length - 0.2, width: 1.4, height: 1.2, sillHeight: 0.75 };
+  store.setState({ openings: [opening] });
+  const scene = Object.create(PlannerScene.prototype);
+  // Grab 0.25 m along the second wall, 0.45 m after the opening's centre.
+  const wall = walls[1], point = { x: wall.start.x + wall.tangent.x * 0.65, z: wall.start.z + wall.tangent.z * 0.65 };
+  Object.assign(scene, {
+    bridge: { getSnapshot: () => store.getState(), updateOpening: (id, patch) => store.getState().updateOpening(id, patch, false) },
+    openingDragging: { id: opening.id, before: getSnapshot(), grabOffset: -0.45, grabWallId: wall.id, pointerId: 7 },
+    raycaster: new THREE.Raycaster(new THREE.Vector3(point.x + wall.inward.x, 1.2, point.z + wall.inward.z),
+      new THREE.Vector3(-wall.inward.x, 0, -wall.inward.z)),
+    setPointer: () => {}, renderFromState: () => {}
+  });
+  scene.moveOpening({ pointerId: 7 });
+  const moved = store.getState().openings[0];
+  assert.equal(moved.wallId, wall.id);
+  assert.ok(Math.abs(moved.offset - 0.2) < 1e-8);
+  assert.equal(moved.width, opening.width);
 });

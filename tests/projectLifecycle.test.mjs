@@ -24,7 +24,7 @@ function harness(values = new Map()) {
 }
 
 test('new presets include permitted apertures and no furniture or divisions', () => {
-  for (const shape of ['rectangle', 'circle', 'angled-corner', 'l-shape', 'recess']) {
+  for (const shape of ['rectangle', 'rounded-rectangle', 'circle', 'angled-corner', 'l-shape', 'recess']) {
     const h = harness(); h.session.newRoom('  Office  ', shape);
     assert.equal(h.session.getState().name, 'Office');
     assert.equal(h.session.getState().dirty, true);

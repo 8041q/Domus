@@ -148,9 +148,11 @@ export function Viewport3D({
           || (architectureInteractive && state.selectedOpeningId !== previous.selectedOpeningId)
           || (furniture && state.activeSnap !== previous.activeSnap)
           || state.showClearance !== previous.showClearance
-          || state.showRoomDimensions !== previous.showRoomDimensions
-          || state.showProductDimensions !== previous.showProductDimensions
-          || state.showSpacingDimensions !== previous.showSpacingDimensions
+          || (!architectureInteractive && (
+            state.showRoomDimensions !== previous.showRoomDimensions
+            || state.showProductDimensions !== previous.showProductDimensions
+            || state.showSpacingDimensions !== previous.showSpacingDimensions
+          ))
           || state.measurementSystem !== previous.measurementSystem;
         if (stopped || !sceneStateChanged || syncFrame) return;
         syncFrame = requestAnimationFrame(() => {

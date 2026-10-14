@@ -2,6 +2,16 @@ import type { BaseboardStyle, RoomOpening } from './types';
 
 /** Existing door leaf finish, also used by thresholds between floor finishes. */
 export const DOOR_LEAF_COLOR = 0xcbbca7;
+export const DOOR_FRAME_WIDTH = 0.075;
+export const WINDOW_FRAME_WIDTH = 0.04;
+export const WINDOW_SILL_OVERHANG = 0.05;
+export const DOOR_CORNICE_WIDTH_FACTOR = 1.55;
+
+/** Outer trim footprint, so spacing guides stop clear of the visible frame. */
+export function openingFrameOverhang(opening: RoomOpening) {
+  return opening.type === 'door' ? DOOR_FRAME_WIDTH * DOOR_CORNICE_WIDTH_FACTOR / 2
+    : opening.type === 'window' ? WINDOW_SILL_OVERHANG : 0;
+}
 
 export type GlazingArea = { left: number; right: number; bottom: number; top: number };
 

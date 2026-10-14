@@ -3,19 +3,35 @@ import type { RoomOpening, RoomShapeKind, RoomState, RoomVertex, RoomWallSegment
 
 const EPS = 1e-6;
 export const MIN_WALL_LENGTH = 0.20;
+export const MIN_CIRCLE_DIAMETER = 6;
 
 export function wallId(start: RoomVertex, end: RoomVertex) {
   return `wall-${start.id}-${end.id}`;
 }
 
-export function roomTemplate(kind: Exclude<RoomShapeKind, 'custom'>, width: number, depth: number): RoomVertex[] {
-  const w = Math.max(2.2, width);
+export function roomTemplate(kind: Exclude<RoomShapeKind, 'custom'>, width: number, depth: number, cornerRadius = Math.min(width, depth) * 0.25): RoomVertex[] {
+  const w = Math.max(kind === 'circle' ? MIN_CIRCLE_DIAMETER : 2.2, width);
   const d = Math.max(2.2, depth);
   if (kind === 'circle') {
     return Array.from({ length: 32 }, (_, index) => {
       const angle = index * Math.PI / 16 - Math.PI / 2;
       return { id: `v${index}`, x: w / 2 + Math.cos(angle) * w / 2, z: w / 2 + Math.sin(angle) * w / 2 };
     });
+  }
+  if (kind === 'rounded-rectangle' && cornerRadius >= MIN_WALL_LENGTH / Math.SQRT2) {
+    const radius = Math.min(cornerRadius, (Math.min(w, d) - MIN_WALL_LENGTH) / 2);
+    // Four straight sides joined by quarter circles. Keep even the smallest
+    // template's sections above the editable wall-length limit.
+    const steps = Math.max(1, Math.min(16, Math.floor(Math.PI / (4 * Math.asin(Math.min(1, 0.35 / (2 * radius)))))));
+    return [
+      { x: w - radius, z: radius, angle: -Math.PI / 2 },
+      { x: w - radius, z: d - radius, angle: 0 },
+      { x: radius, z: d - radius, angle: Math.PI / 2 },
+      { x: radius, z: radius, angle: Math.PI }
+    ].flatMap((corner, cornerIndex) => Array.from({ length: steps + 1 }, (_, index) => {
+      const angle = corner.angle + index * Math.PI / (2 * steps);
+      return { id: `v${cornerIndex * (steps + 1) + index}`, x: corner.x + Math.cos(angle) * radius, z: corner.z + Math.sin(angle) * radius };
+    }));
   }
   if (kind === 'angled-corner') {
     const cut = Math.min(w, d) * 0.22;
@@ -113,9 +129,34 @@ export function scaleRoom(room: RoomState, width: number, depth: number): RoomSt
   })));
 }
 
-/** Curved apertures span short wall segments, but retain one frame and ID. */
+export function openingFollowsPerimeter(room: RoomState, opening: Pick<RoomOpening, 'type' | 'wallId' | 'wrapAround'>) {
+  void room;
+  return !opening.wallId.startsWith('divider-');
+}
+
+export function perimeterDistance(room: RoomState, id: string, offset: number) {
+  let distance = 0;
+  for (const wall of getRoomWalls(room)) {
+    if (wall.id === id) return distance + offset;
+    distance += wall.length;
+  }
+  return null;
+}
+
+export function perimeterLocation(room: RoomState, distance: number) {
+  const walls = getRoomWalls(room);
+  const length = walls.reduce((sum, wall) => sum + wall.length, 0);
+  let offset = ((distance % length) + length) % length;
+  for (const wall of walls) {
+    if (offset <= wall.length) return { wallId: wall.id, offset };
+    offset -= wall.length;
+  }
+  return { wallId: walls[0].id, offset: 0 };
+}
+
+/** Continuous apertures turn corners and span short sections with one ID. */
 export function openingsOnWall(room: RoomState, openings: RoomOpening[], wallId: string): RoomOpening[] {
-  if (room.shapeKind !== 'circle' || wallId.startsWith('divider-')) return openings.filter((opening) => opening.wallId === wallId);
+  if (wallId.startsWith('divider-')) return openings.filter((opening) => opening.wallId === wallId);
   const walls = getRoomWalls(room);
   const perimeter = walls.reduce((sum, wall) => sum + wall.length, 0);
   const starts = new Map<string, number>();
@@ -125,6 +166,7 @@ export function openingsOnWall(room: RoomState, openings: RoomOpening[], wallId:
   if (!wall) return [];
   const start = starts.get(wallId)!;
   return openings.flatMap((opening) => {
+    if (!openingFollowsPerimeter(room, opening)) return opening.wallId === wallId ? [opening] : [];
     const anchor = starts.get(opening.wallId);
     if (anchor == null) return [];
     const centre = anchor + opening.offset;
@@ -281,7 +323,7 @@ export function isValidRoom(vertices: RoomVertex[]) {
   for (let i = 0; i < vertices.length; i += 1) {
     const a = vertices[i];
     const b = vertices[(i + 1) % vertices.length];
-    if (Math.hypot(b.x - a.x, b.z - a.z) < MIN_WALL_LENGTH) return false;
+    if (Math.hypot(b.x - a.x, b.z - a.z) < MIN_WALL_LENGTH - EPS) return false;
   }
   for (let i = 0; i < vertices.length; i += 1) {
     const a1 = vertices[i];

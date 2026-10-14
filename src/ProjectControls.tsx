@@ -158,7 +158,7 @@ export function ProjectControls({ canExport, onExport, onExportPdf }: { canExpor
         <p>{dialog === 'new' ? 'Choose a name and starting shape. Adjust dimensions in the 2D builder.' : 'Keep the current name to update this room, or choose a new name to save a separate copy.'}</p>
         <label className="project-field">Room name<input data-project-focus autoFocus required maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Living room" /></label>
         {dialog === 'new' && <label className="project-field">Starting shape<select value={shape} onChange={(event) => setShape(event.target.value as typeof shape)}>
-          <option value="rectangle">Rectangle</option><option value="circle">Circle</option><option value="angled-corner">Angled corner</option><option value="l-shape">L shape</option><option value="recess">Recess</option>
+          <option value="rectangle">Rectangle</option><option value="rounded-rectangle">Rounded rectangle</option><option value="circle">Circle</option><option value="angled-corner">Angled corner</option><option value="l-shape">L shape</option><option value="recess">Recess</option>
         </select></label>}
         {error && <p className="project-error" role="alert">{error}</p>}
         <footer><Button variant="outline" onClick={cancel}>Cancel</Button><Button type="submit"><Icon name={dialog === 'new' ? 'plus' : 'save'} />{dialog === 'new' ? 'Create room' : 'Save as'}</Button></footer>

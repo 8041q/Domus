@@ -34,6 +34,7 @@ function createGeometryScene(store) {
   Object.assign(scene, {
     bridge: { getSnapshot: () => store.getState() }, options: { showFurniture: false, sunRays: false },
     camera: new THREE.PerspectiveCamera(), controls: { target: new THREE.Vector3() },
+    container: { clientWidth: 1200, clientHeight: 800 },
     currentCameraView: 'free', wallHiddenState: new Map(), interiorViewKey: '',
     lastRoomKey: '', lastFloorFinish: null, lastOpeningsKey: '', lastHelperKey: '', lastSnapHelperKey: '', lastSpacingHelperKey: '',
     helperGroup: new THREE.Group(), lightFixtureGroup: new THREE.Group(), floorGroup: new THREE.Group(), wallsGroup: new THREE.Group(), ceilingGroup: new THREE.Group(),
@@ -43,6 +44,12 @@ function createGeometryScene(store) {
     loadFloorFinishMaps: async () => ({ color: null, normal: null, height: null, roughness: null }),
     requestRender: () => {}, helperStateKey: () => '', snapHelperStateKey: () => '', spacingHelperStateKey: () => ''
   });
+  scene.createDynamicSpacingLabel = (text) => {
+    const label = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial());
+    label.userData.dynamicSpacingText = text;
+    return label;
+  };
+  scene.updateDynamicSpacingLabel = (label, text) => { label.userData.dynamicSpacingText = text; };
   for (const method of ['addFloorPerimeterShade', 'rebuildCeilingLighting', 'rebuildWindowDaylighting',
     'rebuildSunset', 'syncSunsetAngles', 'applyRoomLighting', 'updateShadowBounds', 'syncObjects',
     'syncOpeningHighlight', 'syncHelperTransforms', 'updateLightFixtureVisibility']) scene[method] = () => {};
@@ -190,4 +197,81 @@ test('interior door moves and flips replace one threshold without rebuilding oth
   }
   assert.equal(original.parent, null);
   disposeScene(scene);
+});
+
+test('live corner openings update every touched wall and match a fresh 3D scene without stale pick planes', () => {
+  const store = module.usePlannerStore;
+  for (const shape of ['rectangle', 'circle', 'rounded-rectangle']) {
+    store.getState().resetProject(); store.getState().setRoomTemplate(shape);
+    const walls = geometry.getRoomWalls(store.getState().room);
+    const opening = { id: 'wrapped', type: 'opening', variant: 'wall-opening', wallId: walls[0].id,
+      offset: 0.1, width: 1.7, height: 1.2, sillHeight: 0.75 };
+    store.setState({ openings: [opening] });
+    const live = createGeometryScene(store);
+    live.options.interactiveArchitecture = true;
+    live.renderFromState();
+    const describe = (scene) => scene.wallsGroup.children.map((mesh) => ({
+      wall: mesh.userData.cutawayWallId, opening: mesh.userData.openingId,
+      position: mesh.position.toArray(), rotation: mesh.rotation.y,
+      size: mesh.geometry?.parameters, visible: mesh.visible
+    })).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+    for (const patch of [{ offset: walls[0].length - 0.05, width: 2.1 }, { wallId: walls.at(-1).id, offset: 0.05, width: 1.3 }]) {
+      store.getState().selectOpening(opening.id);
+      store.getState().updateOpening(opening.id, patch, false);
+      live.renderFromState();
+      const remounted = createGeometryScene(store);
+      remounted.options.interactiveArchitecture = true;
+      remounted.renderFromState();
+      assert.deepEqual(describe(live), describe(remounted));
+      disposeScene(remounted);
+    }
+    store.getState().removeOpening(opening.id); live.renderFromState();
+    assert.ok(!live.wallsGroup.children.some((mesh) => mesh.userData.openingId === opening.id));
+    disposeScene(live);
+  }
+});
+
+test('Plan Room dimension toggles cannot change Build Room helpers or automatic aperture spacing', () => {
+  const store = module.usePlannerStore;
+  store.getState().resetProject();
+  const opening = store.getState().openings[0];
+  store.getState().selectOpening(opening.id);
+  const build = createGeometryScene(store);
+  build.options.interactiveArchitecture = true;
+  // Use the real helper keys and rebuild path, with the text drawing isolated.
+  delete build.helperStateKey;
+  delete build.spacingHelperStateKey;
+  let roomDimensions = 0;
+  build.addRoomDimensions = () => { roomDimensions++; };
+  build.spacingDimensionLabels = new Map();
+  let key, labels;
+  for (let flags = 0; flags < 8; flags++) {
+    store.setState({ showRoomDimensions: !!(flags & 1), showProductDimensions: !!(flags & 2), showSpacingDimensions: !!(flags & 4) });
+    const snapshot = build.sceneSnapshot();
+    for (const field of ['showRoomDimensions', 'showProductDimensions', 'showSpacingDimensions']) assert.equal(snapshot[field], false);
+    const nextKey = build.helperStateKey(snapshot);
+    if (key === undefined) {
+      key = nextKey;
+      build.rebuildHelpers(snapshot);
+    } else assert.equal(nextKey, key, 'Plan toggles cannot invalidate Build helpers');
+    build.syncArchitectureSpacing(snapshot);
+    assert.equal(build.architectureSpacingGroup.visible, true);
+    assert.equal(build.spacingHelperStateKey(snapshot), 'off');
+    assert.equal(roomDimensions, 0, 'Optional Plan room dimensions cannot appear in Build');
+    const currentLabels = [...build.architectureSpacingLabels.values()];
+    if (!labels) labels = currentLabels;
+    else assert.deepEqual(currentLabels, labels, 'Automatic aperture guides retain their meshes');
+    const plan = Object.create(PlannerScene.prototype);
+    Object.assign(plan, { bridge: build.bridge, options: { interactiveArchitecture: false, showFurniture: true } });
+    for (const field of ['showRoomDimensions', 'showProductDimensions', 'showSpacingDimensions']) {
+      assert.equal(plan.sceneSnapshot()[field], store.getState()[field], 'Plan Room retains its own preferences');
+    }
+  }
+  // A newly mounted Build view is isolated even when every Plan toggle is on.
+  const remounted = createGeometryScene(store);
+  remounted.options.interactiveArchitecture = true;
+  assert.equal(remounted.sceneSnapshot().showRoomDimensions, false);
+  assert.equal(build.helperStateKey(remounted.sceneSnapshot()), key);
+  build.disposeGroup(build.helperGroup);
+  disposeScene(build); disposeScene(remounted);
 });

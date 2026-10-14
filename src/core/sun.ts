@@ -1,7 +1,7 @@
 export const SUN_AZIMUTH_MIN = 0;
 export const SUN_AZIMUTH_MAX = 360;
 export const SUN_SINGLE_WINDOW_LIMIT = 89;
-export const SUN_ELEVATION_MIN = 12;
+export const SUN_ELEVATION_MIN = 5;
 export const SUN_ELEVATION_MAX = 82;
 export const SUN_DEFAULT_AZIMUTH = 0;
 export const SUN_DEFAULT_ELEVATION = 19;

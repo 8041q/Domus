@@ -7,6 +7,7 @@ import { applyAiProposal as executeAiProposal, snapshotRevision } from './core/a
 import { PRODUCTS, rotatedFootprint, subscribeProductCatalogue } from './core/products';
 import { isPlacementValid, objectsOverlap, overlapsInteriorWall, resolvePlacement, resolveRotationPlacement } from './core/placement';
 import { SnapshotHistory } from './core/history';
+import { fitOpening, openingFitsBoundary, openingPlacementValid } from './core/openingPlacement';
 import { architectureRoom, deriveSpaces, resolveDividers, spaceAtPoint, validateDividers, validateInteriorOpenings } from './core/spaces';
 import { normalizeFloorFinish } from './core/roomFinishes';
 import { BASEBOARD_STYLES } from './core/architecturalStyles';
@@ -20,7 +21,10 @@ import {
   splitWall,
   roomBounds,
   roomTemplate,
-  openingsOnWall,
+  openingFollowsPerimeter,
+  MIN_CIRCLE_DIAMETER,
+  wallPoint,
+  wallProjectionDistance,
   scaleRoom,
   syncRoomBounds
 } from './core/roomGeometry';
@@ -45,6 +49,7 @@ import type {
   RoomLighting,
   SunStylePreset,
   InteriorDivider,
+  Vec2,
   NamedSpace,
   DividerAnchor
 } from './core/types';
@@ -90,7 +95,7 @@ interface PlannerStore extends PlannerSnapshot {
   setRoom: (room: RoomState) => void;
   setRoomVertices: (vertices: RoomVertex[], shapeKind?: RoomShapeKind) => void;
   setRoomTemplate: (shape: Exclude<RoomShapeKind, 'custom'>) => void;
-  updateRoom: (patch: Partial<RoomState>, recordHistory?: boolean) => void;
+  updateRoom: (patch: Partial<RoomState>, recordHistory?: boolean) => boolean;
   updateProjectDetails: (details: ProjectDetails) => void;
   resizeWallById: (wallId: string, length: number, recordHistory?: boolean) => boolean;
   splitWallById: (wallId: string) => boolean;
@@ -108,7 +113,7 @@ interface PlannerStore extends PlannerSnapshot {
 
   addOpening: (type: OpeningType) => boolean;
   selectOpening: (id: string | null) => void;
-  updateOpening: (id: string, patch: Partial<RoomOpening>, recordHistory?: boolean) => void;
+  updateOpening: (id: string, patch: Partial<RoomOpening>, recordHistory?: boolean) => boolean;
   removeOpening: (id: string) => void;
 
   setFeedback: (snap: SnapFeedback, collisionId?: string | null, collisionPush?: boolean) => void;
@@ -219,8 +224,15 @@ function ensureRoom(raw: Partial<RoomState>): RoomState {
       sunElevation: clampSunAngle(raw.lighting?.sunElevation, SUN_DEFAULT_ELEVATION, SUN_ELEVATION_MIN, SUN_ELEVATION_MAX)
     },
     shapeKind: raw.shapeKind ?? (vertices.length === 4 ? 'rectangle' : 'custom'),
+    ...(raw.shapeKind === 'rounded-rectangle' ? { cornerRadius: Math.max(0, Math.min(
+      Number.isFinite(raw.cornerRadius) ? raw.cornerRadius! : Math.min(width, depth) * 0.25,
+      (Math.min(width, depth) - 0.2) / 2)) } : {}),
     vertices
   } as RoomState, vertices);
+  if (room.cornerRadius === undefined) delete room.cornerRadius;
+  if (room.shapeKind === 'circle' && (room.width < MIN_CIRCLE_DIAMETER || room.depth < MIN_CIRCLE_DIAMETER)) {
+    return scaleRoom(room, MIN_CIRCLE_DIAMETER, MIN_CIRCLE_DIAMETER);
+  }
   if (room.width > 20 || room.depth > 20) return scaleRoom(room, Math.min(room.width, 20), Math.min(room.depth, 20));
   return room;
 }
@@ -256,11 +268,12 @@ function normalizeOpening(opening: RoomOpening & { wall?: RoomWall }, room: Room
     wall = [...getRoomWalls(room)].sort((a, b) => b.length - a.length)[0] ?? null;
     wallId = wall?.id ?? '';
   }
-  const curved = room.shapeKind === 'circle' && !wallId.startsWith('divider-');
-  const maxLen = curved ? getRoomWalls(room).reduce((sum, wall) => sum + wall.length, 0) / 4 : wall?.length ?? 1;
+  const curved = openingFollowsPerimeter(room, { ...opening, wallId });
+  const perimeter = getRoomWalls(room).reduce((sum, wall) => sum + wall.length, 0);
+  const maxLen = curved ? (opening.type === 'opening' ? perimeter : perimeter / 4) : wall?.length ?? 1;
   const minWidth = opening.type === 'opening' ? 0.10 : 0.45;
   const minHeight = opening.type === 'opening' ? 0.10 : 0.40;
-  const width = Math.max(minWidth, Math.min(opening.width, Math.max(minWidth, maxLen - 0.2)));
+  const width = Math.max(minWidth, opening.type === 'opening' ? Math.min(opening.width, Math.max(minWidth, maxLen - 0.2)) : opening.width);
   const offset = curved ? Math.max(0, Math.min(opening.offset, wall?.length ?? 1))
     : Math.max(width / 2 + 0.05, Math.min(opening.offset, maxLen - width / 2 - 0.05));
   const variant = opening.variant ?? defaultOpeningVariant(opening.type);
@@ -270,20 +283,28 @@ function normalizeOpening(opening: RoomOpening & { wall?: RoomWall }, room: Room
   const maxHeight = Math.max(minHeight, room.height - sillHeight);
   const height = Math.max(minHeight, Math.min(opening.height, maxHeight));
   return { id: opening.id, type: opening.type, variant, wallId, width, offset, height, sillHeight,
+    ...(opening.type === 'door' && (room.shapeKind === 'circle' || opening.wrapAround) ? { wrapAround: true } : {}),
     ...(opening.type === 'door' && opening.doorFlipped != null ? { doorFlipped: opening.doorFlipped === true } : {}) };
 }
 
 function normalizeSnapshot(snapshot: Omit<PlannerSnapshot, 'dividers' | 'spaces'> & Partial<Pick<PlannerSnapshot, 'dividers' | 'spaces'>>): PlannerSnapshot {
   const room = ensureRoom(snapshot.room);
+  const circleScale = room.shapeKind === 'circle' && snapshot.room.width > 0 ? room.width / snapshot.room.width : 1;
   const dividers = (snapshot.dividers ?? usePlannerStore.getState()?.dividers ?? []).filter((divider) => divider && (divider.kind === 'wall' || divider.kind === 'open'));
   const spaces = (snapshot.spaces ?? usePlannerStore.getState()?.spaces ?? defaultSpaces).map((space) => ({
     id: space.id, name: space.name || 'Space', seed: space.seed, boundaryKey: space.boundaryKey,
     floorFinish: normalizeFloorFinish(space.floorFinish), wallColor: /^#[0-9a-f]{6}$/i.test(space.wallColor) ? space.wallColor : room.wallColor
   }));
   const wallIds = new Set([...getRoomWalls(room).map((wall) => wall.id), ...dividers.filter((divider) => divider.kind === 'wall').map((divider) => divider.id)]);
-  const openings = snapshot.openings.filter((opening) => (wallIds.has(opening.wallId) || (!opening.wallId && (opening as RoomOpening & { wall?: RoomWall }).wall)) && (opening.type !== 'window' || !opening.wallId?.startsWith('divider-')))
+  let openings = snapshot.openings.filter((opening) => (wallIds.has(opening.wallId) || (!opening.wallId && (opening as RoomOpening & { wall?: RoomWall }).wall)) && (opening.type !== 'window' || !opening.wallId?.startsWith('divider-')))
     .map((o) => normalizeOpening((room.shapeKind === 'circle' && o.type === 'window'
-      ? { ...o, type: 'opening', variant: 'wall-opening' } : o) as RoomOpening & { wall?: RoomWall }, room, dividers));
+      ? { ...o, type: 'opening', variant: 'wall-opening', offset: o.offset * circleScale }
+      : { ...o, offset: o.wallId?.startsWith('divider-') ? o.offset : o.offset * circleScale }) as RoomOpening & { wall?: RoomWall }, room, dividers));
+  const fittedOpenings: RoomOpening[] = [];
+  for (const opening of openings) {
+    fittedOpenings.push(fitOpening(room, dividers, opening, fittedOpenings) ?? opening);
+  }
+  openings = fittedOpenings;
   const objects = snapshot.objects.filter((object) => Object.hasOwn(PRODUCTS, object.productId)).map((o) => {
     const product = PRODUCTS[o.productId];
     if (!product) return o;
@@ -296,6 +317,8 @@ function normalizeSnapshot(snapshot: Omit<PlannerSnapshot, 'dividers' | 'spaces'
 
 function validInteriorArchitecture(snapshot: PlannerSnapshot) {
   return validateInteriorOpenings(snapshot.room, snapshot.dividers, snapshot.openings)
+    && snapshot.openings.every((opening) => openingPlacementValid(snapshot.room, snapshot.dividers, opening,
+      snapshot.openings.filter((other) => other.id !== opening.id)))
     && snapshot.objects.every((object) => isPlacementValid(object, architectureRoom(snapshot), []));
 }
 
@@ -350,6 +373,7 @@ export function parseProjectSnapshot(value: unknown): PlannerSnapshot | null {
       const number = parsed.room[dimension];
       if (number != null && (!Number.isFinite(number) || number <= 0)) return null;
     }
+    if (parsed.room.cornerRadius != null && (!Number.isFinite(parsed.room.cornerRadius) || parsed.room.cornerRadius < 0)) return null;
     if (parsed.spaces != null && (!Array.isArray(parsed.spaces) || !parsed.spaces.every((space) => space
       && typeof space.id === 'string' && typeof space.name === 'string' && space.seed
       && Number.isFinite(space.seed.x) && Number.isFinite(space.seed.z))
@@ -358,7 +382,8 @@ export function parseProjectSnapshot(value: unknown): PlannerSnapshot | null {
       && typeof opening.id === 'string' && opening.id.length > 0 && ['door', 'window', 'opening'].includes(opening.type)
       && Number.isFinite(opening.width) && opening.width > 0 && Number.isFinite(opening.height) && opening.height > 0
       && Number.isFinite(opening.offset) && Number.isFinite(opening.sillHeight) && opening.sillHeight >= 0
-      && (opening.doorFlipped == null || typeof opening.doorFlipped === 'boolean'))
+      && (opening.doorFlipped == null || typeof opening.doorFlipped === 'boolean')
+      && (opening.wrapAround == null || typeof opening.wrapAround === 'boolean'))
       || new Set(parsed.openings.map((opening) => opening.id)).size !== parsed.openings.length)) return null;
     const migratedObjects = parsed.objects
       .map((object) => {
@@ -374,9 +399,12 @@ export function parseProjectSnapshot(value: unknown): PlannerSnapshot | null {
           && !migratedObjects.some((placed) => placed.id === object.id))
       : [];
     const room = ensureRoom(parsed.room);
+    const originalWidth = parsed.room.vertices ? roomBounds(parsed.room.vertices).width : parsed.room.width;
+    const circleScale = room.shapeKind === 'circle' && originalWidth ? room.width / originalWidth : 1;
     const upgraded: PlannerSnapshot = {
       room,
-      openings: Array.isArray(parsed.openings) ? parsed.openings : [],
+      openings: Array.isArray(parsed.openings) ? parsed.openings.map((opening) => ({ ...opening,
+        offset: opening.wallId?.startsWith('divider-') ? opening.offset : opening.offset * circleScale })) : [],
       dividers: Array.isArray(parsed.dividers) ? parsed.dividers : [],
       spaces: Array.isArray(parsed.spaces) && parsed.spaces.length ? parsed.spaces : [{ ...defaultSpaces[0], seed: { x: (roomBounds(room.vertices).minX + roomBounds(room.vertices).maxX) / 2, z: (roomBounds(room.vertices).minZ + roomBounds(room.vertices).maxZ) / 2 }, floorFinish: room.floorFinish, wallColor: room.wallColor }],
       objects: migratedObjects,
@@ -407,6 +435,7 @@ function presetOpenings(room: RoomState): RoomOpening[] {
 
 export function emptyRoomSnapshot(shape: Exclude<RoomShapeKind, 'custom'> = 'rectangle'): PlannerSnapshot {
   const room = ensureRoom({ ...structuredClone(defaultRoom), shapeKind: shape,
+    cornerRadius: shape === 'rounded-rectangle' ? Math.min(defaultRoom.width, defaultRoom.depth) * 0.25 : undefined,
     vertices: roomTemplate(shape, defaultRoom.width, defaultRoom.depth) });
   const snapshot: PlannerSnapshot = { room, openings: presetOpenings(room), dividers: [], spaces: [], objects: [], unplacedObjects: [] };
   snapshot.spaces = [{ ...defaultSpaces[0], seed: deriveSpaces(snapshot)[0].seed }];
@@ -571,7 +600,8 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
   setRoomTemplate: (shape) => {
     const before = snapshotOf(get());
     const current = get().room;
-    const room = ensureRoom({ ...current, shapeKind: shape, vertices: roomTemplate(shape, current.width, current.depth) });
+    const cornerRadius = shape === 'rounded-rectangle' ? Math.min(current.width, current.depth) * 0.25 : undefined;
+    const room = ensureRoom({ ...current, shapeKind: shape, cornerRadius, vertices: roomTemplate(shape, current.width, current.depth, cornerRadius) });
     const currentObjects = get().objects;
     const normalized = normalizeSnapshot({
       room,
@@ -596,22 +626,57 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
   updateRoom: (patch, recordHistory = true) => {
     const before = snapshotOf(get());
     let room = get().room;
-    const nextWidth = patch.width == null ? room.width : Math.max(2.2, Math.min(patch.width, 20));
-    const nextDepth = patch.depth == null ? room.depth : Math.max(2.2, Math.min(patch.depth, 20));
+    const minimum = room.shapeKind === 'circle' ? MIN_CIRCLE_DIAMETER : 2.2;
+    const nextWidth = patch.width == null ? room.width : Math.max(minimum, Math.min(patch.width, 20));
+    const nextDepth = patch.depth == null ? room.depth : Math.max(minimum, Math.min(patch.depth, 20));
     if (patch.width != null || patch.depth != null) {
       const diameter = patch.width != null ? nextWidth : nextDepth;
       room = scaleRoom(room, room.shapeKind === 'circle' ? diameter : nextWidth, room.shapeKind === 'circle' ? diameter : nextDepth);
     }
-    room = ensureRoom({ ...room, ...patch, width: room.width, depth: room.depth, vertices: room.vertices });
-    if (!validateDividers(room, get().dividers)) return;
-    const openings = room.shapeKind === 'circle' && (patch.width != null || patch.depth != null)
+    let openings = room.shapeKind === 'circle' && (patch.width != null || patch.depth != null)
       ? get().openings.map((opening) => ({ ...opening, offset: opening.offset * room.width / before.room.width })) : get().openings;
-    const normalized = normalizeSnapshot({ room, openings, objects: get().objects, unplacedObjects: get().unplacedObjects });
-    if (!validInteriorArchitecture(normalized)) return;
-    if (!normalized.objects.every((object) => isPlacementValid(object, architectureRoom(normalized), normalized.objects.filter((other) => other.id !== object.id)))) return;
+    let dividers = get().dividers;
+    if (room.shapeKind === 'rounded-rectangle' && (patch.cornerRadius != null || patch.width != null || patch.depth != null)) {
+      const radius = Math.max(0, Math.min(patch.cornerRadius ?? room.cornerRadius ?? Math.min(room.width, room.depth) * 0.25,
+        (Math.min(room.width, room.depth) - 0.2) / 2));
+      const cornerRadius = radius < 0.2 / Math.SQRT2 ? 0 : radius;
+      const bounds = roomBounds(room.vertices);
+      const vertices = roomTemplate('rounded-rectangle', room.width, room.depth, cornerRadius)
+        .map((vertex) => ({ ...vertex, x: vertex.x + bounds.minX, z: vertex.z + bounds.minZ }));
+      const nextRoom = syncRoomBounds({ ...room, cornerRadius }, vertices);
+      const previousWalls = getRoomWalls(room), nextWalls = getRoomWalls(nextRoom);
+      const project = (point: Vec2) => nextWalls.map((wall) => {
+        const offset = Math.max(0, Math.min(wall.length, wallProjectionDistance(wall, point)));
+        const position = wallPoint(wall, offset);
+        return { wall, offset, distance: Math.hypot(point.x - position.x, point.z - position.z) };
+      }).sort((a, b) => a.distance - b.distance)[0];
+      openings = openings.map((opening) => {
+        const wall = previousWalls.find((wall) => wall.id === opening.wallId);
+        if (!wall) return opening;
+        const target = project(wallPoint(wall, opening.offset));
+        return { ...opening, wallId: target.wall.id, offset: target.offset };
+      });
+      dividers = dividers.map((divider) => {
+        const remap = (anchor: DividerAnchor): DividerAnchor => {
+          if (anchor.kind !== 'perimeter') return anchor;
+          const wall = previousWalls.find((wall) => wall.id === anchor.id);
+          if (!wall) return anchor;
+          const target = project(wallPoint(wall, wall.length * anchor.t));
+          return { ...anchor, id: target.wall.id, t: target.offset / target.wall.length };
+        };
+        return { ...divider, start: remap(divider.start), end: remap(divider.end) };
+      });
+      room = nextRoom;
+    }
+    room = ensureRoom({ ...room, ...patch, cornerRadius: room.cornerRadius, width: room.width, depth: room.depth, vertices: room.vertices });
+    if (!validateDividers(room, dividers)) return false;
+    const normalized = normalizeSnapshot({ room, openings, dividers, spaces: get().spaces, objects: get().objects, unplacedObjects: get().unplacedObjects });
+    if (!validInteriorArchitecture(normalized)) return false;
+    if (!normalized.objects.every((object) => isPlacementValid(object, architectureRoom(normalized), normalized.objects.filter((other) => other.id !== object.id)))) return false;
     set(normalized);
-    if (patch.width != null || patch.depth != null) get().syncSpaces(before, recordHistory);
+    if (patch.width != null || patch.depth != null || patch.cornerRadius != null) get().syncSpaces(before, recordHistory);
     else if (recordHistory) history.push(before);
+    return true;
   },
   resizeWallById: (id, length, recordHistory = true) => {
     const before = recordHistory ? snapshotOf(get()) : null;
@@ -796,14 +861,14 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
       offset: wall.length / 2,
       ...preset
     }, get().room, get().dividers);
-    if (get().room.shapeKind === 'circle' && !wall.id.startsWith('divider-')) {
+    if (openingFollowsPerimeter(get().room, opening)) {
       const walls = getRoomWalls(get().room);
       const occupied = get().openings;
       const candidates = [walls.find((candidate) => candidate.id === wall!.id)!, ...walls.filter((candidate) => candidate.id !== wall!.id)];
-      const candidate = candidates.map((wall) => ({ ...opening, wallId: wall.id, offset: wall.length / 2 }))
-        .find((candidate) => walls.every((wall) => openingsOnWall(get().room, [candidate], wall.id).every((piece) =>
-          openingsOnWall(get().room, occupied, wall.id).every((other) =>
-            Math.abs(piece.offset - other.offset) >= (piece.width + other.width) / 2 + 0.01))));
+      const candidate = candidates.flatMap((wall) => [wall.length / 2,
+        ...Array.from({ length: Math.ceil(wall.length / 0.05) }, (_, index) => index * 0.05)]
+        .map((offset) => ({ ...opening, wallId: wall.id, offset })))
+        .find((candidate) => openingPlacementValid(get().room, get().dividers, candidate, occupied));
       if (!candidate) return false;
       set((state) => ({ openings: [...state.openings, candidate], selectedOpeningId: candidate.id,
         selectedWallId: candidate.wallId, selectedDividerId: null, selectedId: null }));
@@ -823,7 +888,7 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
       .sort((a, b) => Math.abs(a - wall!.length / 2) - Math.abs(b - wall!.length / 2));
     const offset = possible.find((value) => existing.every((candidate) =>
       Math.abs(value - candidate.offset) >= halfWidth + candidate.width / 2 + 0.05)
-      && validateInteriorOpenings(get().room, get().dividers, [...get().openings, { ...opening, offset: value }]));
+      && openingPlacementValid(get().room, get().dividers, { ...opening, offset: value }, get().openings));
     if (offset == null) return false;
     opening.offset = offset;
     set((state) => ({ openings: [...state.openings, opening], selectedOpeningId: opening.id, selectedWallId: wall!.id, selectedId: null }));
@@ -838,13 +903,14 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
       selectedDividerId: opening?.wallId.startsWith('divider-') ? opening.wallId : null, selectedSpaceId: null, selectedId: null });
   },
   updateOpening: (id, patch, recordHistory = true) => {
-    if (patch.type === 'window' && get().room.shapeKind === 'circle') return;
-    if (!FEATURES.interiorWalls && (get().openings.find((opening) => opening.id === id)?.wallId.startsWith('divider-') || patch.wallId?.startsWith('divider-'))) return;
+    if (patch.type === 'window' && get().room.shapeKind === 'circle') return false;
+    if (!FEATURES.interiorWalls && (get().openings.find((opening) => opening.id === id)?.wallId.startsWith('divider-') || patch.wallId?.startsWith('divider-'))) return false;
     // Live opening drags/sliders call this with recordHistory=false. Avoid cloning the
     // complete project on every pointer event; the interaction already captured one
     // snapshot at drag start and commits it once on pointer-up.
     const before = recordHistory ? snapshotOf(get()) : null;
     const state = get();
+    let accepted = false;
     const openings = state.openings.map((o) => {
       if (o.id !== id) return o;
       const nextType = patch.type ?? o.type;
@@ -856,25 +922,30 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
         preset.height = Math.min(state.room.height, 2.1);
         preset.sillHeight = 0;
       }
-      return normalizeOpening({ ...o, ...preset, ...patch, type: nextType, variant: nextVariant }, state.room, state.dividers);
+      const candidate = normalizeOpening({ ...o, ...preset, ...patch, type: nextType, variant: nextVariant }, state.room, state.dividers);
+      const fitted = fitOpening(state.room, state.dividers, candidate, state.openings.filter((opening) => opening.id !== id));
+      accepted = fitted != null;
+      return fitted ?? o;
     });
+    if (!accepted) return false;
     if (openings.every((opening, index) => {
       const previous = state.openings[index];
       return Object.entries(opening).every(([key, value]) => value === previous[key as keyof RoomOpening])
         && Object.entries(previous).every(([key, value]) => value === opening[key as keyof RoomOpening]);
-    })) return;
+    })) return true;
     // Moving an aperture cannot change the divider network or furniture bounds.
-    if (!validateInteriorOpenings(state.room, state.dividers, openings)) return;
+    if (!validateInteriorOpenings(state.room, state.dividers, openings)) return false;
     const selected = openings.find((opening) => opening.id === get().selectedOpeningId);
     set({ openings, ...(selected ? { selectedWallId: selected.wallId,
       selectedDividerId: selected.wallId.startsWith('divider-') ? selected.wallId : null } : {}) });
     if (before) history.push(before);
+    return true;
   },
   removeOpening: (id) => {
     if (!FEATURES.interiorWalls && get().openings.find((opening) => opening.id === id)?.wallId.startsWith('divider-')) return;
     const before = snapshotOf(get());
     const openings = get().openings.filter((o) => o.id !== id);
-    if (!validInteriorArchitecture({ ...before, openings })) return;
+    if (!validateInteriorOpenings(before.room, before.dividers, openings)) return;
     set((state) => ({ openings, selectedOpeningId: state.selectedOpeningId === id ? null : state.selectedOpeningId }));
     history.push(before);
   },
@@ -953,9 +1024,13 @@ const pruneDeletedProducts = () => {
 };
 pruneDeletedProducts();
 const currentCircle = usePlannerStore.getState();
-if (currentCircle.room.shapeKind === 'circle' && currentCircle.openings.some((opening) => opening.type === 'window')) {
-  usePlannerStore.setState({ openings: currentCircle.openings.map((opening) => opening.type === 'window'
-    ? { ...opening, type: 'opening', variant: 'wall-opening' } : opening) });
+if (currentCircle.room.shapeKind === 'circle' && (currentCircle.room.width < MIN_CIRCLE_DIAMETER
+  || currentCircle.openings.some((opening) => opening.type === 'window' || opening.type === 'door' && !opening.wrapAround))) {
+  usePlannerStore.setState(normalizeSnapshot(snapshotOf(currentCircle)));
+}
+const currentArchitecture = usePlannerStore.getState();
+if (currentArchitecture.openings.some((opening) => !openingFitsBoundary(currentArchitecture.room, currentArchitecture.dividers, opening))) {
+  usePlannerStore.setState(normalizeSnapshot(snapshotOf(currentArchitecture)));
 }
 const unsubscribeCatalogue = subscribeProductCatalogue(pruneDeletedProducts, true);
 

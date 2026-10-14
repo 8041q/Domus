@@ -1,4 +1,5 @@
 import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode, SVGProps } from 'react';
+import { MOVE_ICON_PATH } from './core/moveHint';
 
 export function cn(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(' ');
@@ -56,6 +57,7 @@ export function Icon({ name, ...props }: SVGProps<SVGSVGElement> & { name: IconN
     palette: <><path d="M12 3a9 9 0 1 0 0 18h1.5a2 2 0 0 0 0-4h-1a1.5 1.5 0 0 1 0-3H15a6 6 0 0 0 0-12z"/><circle cx="7.5" cy="10" r=".8" fill="currentColor" stroke="none"/><circle cx="10" cy="6.8" r=".8" fill="currentColor" stroke="none"/><circle cx="14" cy="6.8" r=".8" fill="currentColor" stroke="none"/><circle cx="17" cy="10" r=".8" fill="currentColor" stroke="none"/></>,
     ruler: <><path d="M4 15 15 4l5 5L9 20H4z"/><path d="m13 6 2 2M10 9l2 2M7 12l2 2"/></>,
     cube: <><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/></>,
+    move: <path d={MOVE_ICON_PATH} />,
     plus: <><path d="M12 5v14M5 12h14"/></>,
     x: <><path d="m6 6 12 12M18 6 6 18"/></>,
     trash: <><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></>,
@@ -77,4 +79,4 @@ export function Icon({ name, ...props }: SVGProps<SVGSVGElement> & { name: IconN
 export type IconName =
   | 'undo' | 'redo' | 'save' | 'folder' | 'more' | 'search' | 'settings' | 'palette'
   | 'ruler' | 'cube' | 'plus' | 'x' | 'copy' | 'rotateLeft' | 'rotateRight'
-  | 'chevronRight' | 'chevronDown' | 'download' | 'check' | 'arrowLeft' | 'eye' | 'grid' | 'box' | 'trash';
+  | 'chevronRight' | 'chevronDown' | 'download' | 'check' | 'arrowLeft' | 'eye' | 'grid' | 'box' | 'trash' | 'move';
