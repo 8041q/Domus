@@ -5,6 +5,7 @@ import { usePlannerStore } from './store';
 import { Button, Icon } from './ui';
 import { ProjectControls } from './ProjectControls';
 import { handlePlannerShortcut } from './core/plannerShortcuts';
+import { LoadingStatus } from './LoadingStatus';
 
 const PlanRoom = lazy(() => import('./PlanRoom').then((module) => ({ default: module.PlanRoom })));
 
@@ -67,7 +68,7 @@ export default function App() {
       <main className="app-main">
         <ViewErrorBoundary key={`${mode}-${buildView}`}>
           {mode === 'build' ? <BuildRoom /> : (
-            <Suspense fallback={<div className="mode-loading">Loading room planner…</div>}>
+            <Suspense fallback={<div className="mode-loading"><LoadingStatus blocking label="Opening room planner…" detail="Getting your workspace ready" /></div>}>
               <PlanRoom onExportReady={registerExport} onPdfExportReady={registerPdfExport} />
             </Suspense>
           )}

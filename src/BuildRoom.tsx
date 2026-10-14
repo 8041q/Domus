@@ -10,6 +10,7 @@ import { getSnapshot, usePlannerStore } from './store';
 import { Icon } from './ui';
 import { openingVisibleInActiveView, openingVisibilityRevision, subscribeOpeningVisibility } from './core/openingVisibility';
 import { openingSliderRange } from './core/openingSliderRange';
+import { LoadingStatus } from './LoadingStatus';
 
 const Viewport3D = lazy(() => import('./Viewport3D').then((module) => ({ default: module.Viewport3D })));
 
@@ -630,7 +631,7 @@ export function BuildRoom() {
 
           {buildView === 'plan' ? <Plan2D purpose="build" dividerTool={FEATURES.interiorWalls ? dividerTool : null} onDividerAdded={() => setDividerTool(null)} /> : (
             <div className="builder-3d-selection-surface">
-              <Suspense fallback={<div className="viewport-loading">Loading 3D preview…</div>}>
+              <Suspense fallback={<div className="viewport-loading"><LoadingStatus blocking label="Preparing 3D preview…" detail="Building your room view" /></div>}>
                 <Viewport3D furniture={false} interactive={false} architectureInteractive sunRays={false} resetViewRequest={resetViewRequest} />
               </Suspense>
             </div>

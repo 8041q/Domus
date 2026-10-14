@@ -15,6 +15,7 @@ import { getSnapshot, usePlannerStore } from './store';
 import { Icon } from './ui';
 import { FloatingPanel } from './FloatingPanel';
 import { EditingSpaceSelector } from './EditingSpaceSelector';
+import { LoadingStatus } from './LoadingStatus';
 
 const Viewport3D = lazy(() => import('./Viewport3D').then((module) => ({ default: module.Viewport3D })));
 const AIExperimentPanel = lazy(() => import('./ai/AIExperimentPanel').then((module) => ({ default: module.AIExperimentPanel })));
@@ -479,10 +480,10 @@ export function PlanRoom({ onExportReady, onPdfExportReady }: {
             </div>
           </div>
 
-          <Suspense fallback={<div className="viewport-loading">Loading 3D room…</div>}>
+          <Suspense fallback={<div className="viewport-loading"><LoadingStatus blocking label="Preparing your room…" detail="Opening the 3D view" /></div>}>
             <Viewport3D furniture interactive sunRays={sunRaysEnabled} view={planView} resetViewRequest={resetViewRequest} onExportReady={onExportReady} onPdfExportReady={onPdfExportReady} />
           </Suspense>
-          {FEATURES.aiExperiment && showAi && <Suspense fallback={<div className="ai-panel-loading">Loading AI assistant…</div>}><AIExperimentPanel onClose={() => setShowAi(false)} /></Suspense>}
+          {FEATURES.aiExperiment && showAi && <Suspense fallback={<div className="ai-panel-loading"><LoadingStatus label="Opening assistant…" detail="Getting things ready" /></div>}><AIExperimentPanel onClose={() => setShowAi(false)} /></Suspense>}
           {showFinishes && <FinishesPanel onClose={() => setShowFinishes(false)} />}
           {showViewOptions && <DesignPanel onClose={() => setShowViewOptions(false)} />}
           {selectedId && !(FEATURES.aiExperiment && showAi) && <SelectionPanel />}

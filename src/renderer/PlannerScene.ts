@@ -68,13 +68,15 @@ export interface SceneBridge {
   cameraViewChanged?: (view: PlanCameraView) => void;
 }
 
+export interface ModelLoadStatus { loading: boolean; error: string | null; completed: number; total: number }
+
 interface SceneOptions {
   showFurniture: boolean;
   interactiveFurniture: boolean;
   interactiveArchitecture: boolean;
   sunRays: boolean;
   onError?: (error: unknown) => void;
-  onModelStatus?: (status: { loading: boolean; error: string | null }) => void;
+  onModelStatus?: (status: ModelLoadStatus) => void;
 }
 
 const DIMENSION_COLOR = themeHex('dimension-line');
@@ -3150,10 +3152,12 @@ export class PlannerScene {
 
   private notifyProductModelStatus() {
     const live = this.bridge.getSnapshot().objects.map((object) => PRODUCTS[object.productId]);
-    const urls = new Set(live.map(productModelUrl));
+    const urls = new Set(live.filter(product => product.model).map(productModelUrl).filter((url): url is string => !!url));
     const failed = live.filter((product) => product.model && this.productModelErrors.has(productModelUrl(product)!));
     this.options.onModelStatus?.({
       loading: [...this.productModelRequests.keys()].some((url) => urls.has(url)),
+      completed: [...urls].filter(url => this.productModelTemplates.has(url)).length,
+      total: urls.size,
       error: failed.length ? `Could not load ${[...new Set(failed.map((product) => product.name))].join(', ')}. Check the model file or retry.` : null
     });
   }

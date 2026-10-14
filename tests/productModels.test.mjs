@@ -239,13 +239,14 @@ test('replaced model versions release their resources and a late superseded requ
 
 test('a delayed GLB attaches only to current instances and retains moved/rotated placements', async () => {
   let resolve;
+  const statuses = [];
   let snapshot = { objects: [
     { id: 'removed', productId: 'hospitalbed', x: 0, z: 0, rotationY: 0 },
     { id: 'kept', productId: 'hospitalbed', x: 1, z: 2, rotationY: 0 }
   ], selectedId: 'kept' };
   const scene = Object.create(PlannerScene.prototype);
   Object.assign(scene, {
-    options: { showFurniture: true }, bridge: { getSnapshot: () => snapshot },
+    options: { showFurniture: true, onModelStatus: status => statuses.push(status) }, bridge: { getSnapshot: () => snapshot },
     objectModels: new Map(), contactShadows: new Map(), objectGroup: new THREE.Group(),
     floorGroup: new THREE.Group(), wallsGroup: new THREE.Group(), ceilingGroup: new THREE.Group(),
     contactShadowGroup: new THREE.Group(), outlinePass: { selectedObjects: [] },
@@ -261,6 +262,7 @@ test('a delayed GLB attaches only to current instances and retains moved/rotated
   const environment = new THREE.Texture();
   scene.productModels.setEnvironment(environment);
   assert.equal(scene.productModelRequests.size, 1);
+  assert.deepEqual(statuses.at(-1), { loading: true, error: null, completed: 0, total: 1 }, 'Duplicate instances count as one actual model load');
   snapshot = { ...snapshot, objects: [
     { id: 'kept', productId: 'hospitalbed', x: 3, z: -1, rotationY: Math.PI / 2 },
     { id: 'duplicate', productId: 'hospitalbed', x: -2, z: 1, rotationY: 0 }
@@ -268,6 +270,7 @@ test('a delayed GLB attaches only to current instances and retains moved/rotated
   scene.syncObjects(snapshot);
   resolve(asset().scene);
   await Promise.all(scene.productModelRequests.values());
+  assert.deepEqual(statuses.at(-1), { loading: false, error: null, completed: 1, total: 1 });
   assert.equal(scene.objectModels.has('removed'), false);
   const kept = scene.objectModels.get('kept');
   assert.equal(kept.userData.productModelLoaded, true);

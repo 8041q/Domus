@@ -1,6 +1,7 @@
 import { returnToLayout } from './ViewErrorBoundary';
 import { useEffect, useRef, useState } from 'react';
-import { PlannerScene } from './renderer/PlannerScene';
+import { PlannerScene, type ModelLoadStatus } from './renderer/PlannerScene';
+import { LoadingStatus } from './LoadingStatus';
 import type { PlanCameraView } from './core/types';
 import { usePlannerStore } from './store';
 import { subscribeProductCatalogue } from './core/products';
@@ -28,12 +29,13 @@ export function Viewport3D({
 }) {
   const [failure, setFailure] = useState(false);
   const [attempt, setAttempt] = useState(0);
-  const [modelStatus, setModelStatus] = useState<{ loading: boolean; error: string | null }>({ loading: false, error: null });
+  const [modelStatus, setModelStatus] = useState<ModelLoadStatus>({ loading: false, error: null, completed: 0, total: 0 });
   const ref = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<PlannerScene | null>(null);
   const internallyChangedViewRef = useRef<PlanCameraView | null>(null);
   const exportingRef = useRef(false);
   const [exportingPdf, setExportingPdf] = useState(false);
+  const [exportingGlb, setExportingGlb] = useState(false);
   const exportPDF = async () => {
     if (!sceneRef.current || exportingRef.current) return;
     exportingRef.current = true; setExportingPdf(true);
@@ -44,7 +46,7 @@ export function Viewport3D({
 
   const exportGLB = async () => {
     if (!sceneRef.current || exportingRef.current) return;
-    exportingRef.current = true;
+    exportingRef.current = true; setExportingGlb(true);
     try {
       await sceneRef.current.exportGLB();
     } catch (error) {
@@ -52,6 +54,7 @@ export function Viewport3D({
       window.alert('Could not export the room. See the browser console for details.');
     } finally {
       exportingRef.current = false;
+      setExportingGlb(false);
     }
   };
 
@@ -194,12 +197,14 @@ export function Viewport3D({
 
   return (
     <div className="viewport-stage">
-      {exportingPdf && <div className="model-load-status" role="status">Preparing five room snapshots…</div>}
+      <LoadingStatus active={exportingPdf || exportingGlb} blocking label={exportingPdf ? 'Preparing room report…' : 'Preparing 3D export…'}
+        detail={exportingPdf ? 'Capturing room views and measurements' : 'Gathering room geometry and materials'} />
       <div className="viewport" ref={ref} hidden={failure} />
-      {!failure && (modelStatus.loading || modelStatus.error) && <div className="model-load-status" role={modelStatus.error ? 'alert' : 'status'}>
-        {modelStatus.error ? <>{modelStatus.error} <button type="button" onClick={() => sceneRef.current?.retryProductModels()}>Retry model</button></>
-          : 'Loading furniture model…'}
-      </div>}
+      <LoadingStatus active={!failure && !exportingPdf && !exportingGlb && (modelStatus.loading || !!modelStatus.error)}
+        label={modelStatus.error ? 'Some furniture could not load' : 'Loading furniture…'}
+        detail={modelStatus.error ?? (modelStatus.total > 1 ? undefined : 'Preparing the model for your room')}
+        progress={{ ...modelStatus, unit: 'models' }} error={!!modelStatus.error}
+        action={modelStatus.error ? <button type="button" onClick={() => sceneRef.current?.retryProductModels()}>Retry</button> : undefined} />
       {failure && <div className="view-error" role="alert">
         <h2>Could not open 3D</h2>
         <p>Your layout is still available. Try again or continue in 2D.</p>
