@@ -23,6 +23,7 @@ import type { DividerAnchor, PlannerSnapshot, RoomOpening, RoomVertex, SnapFeedb
 import { getSnapshot, usePlannerStore } from './store';
 import { themeColor, themeMetric, themeRgba } from './theme';
 import { createFrameQueue } from './core/frameQueue';
+import { APP_FONT_FAMILY, setCanvasFont } from './core/reportFonts';
 
 const PAD = 64;
 const MIN_VIEW_SCALE = 6;
@@ -456,7 +457,7 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
       ctx.globalAlpha = 1;
       const label = toPx(space.seed.x, space.seed.z);
       ctx.fillStyle = '#52525b';
-      ctx.font = '600 11px system-ui, sans-serif';
+      setCanvasFont(ctx, 11, 600);
       ctx.textAlign = 'center';
       ctx.fillText(space.name, label.x, label.y);
     }
@@ -492,7 +493,7 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
         ctx.roundRect(x, y, w, h, Math.min(7, w * 0.12, h * 0.12));
         ctx.fill(); ctx.stroke();
         ctx.fillStyle = '#27272a';
-        ctx.font = '600 11px system-ui, sans-serif';
+        setCanvasFont(ctx, 11, 600);
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         if (w > 52 && h > 30) ctx.fillText(p.name, x + w / 2, y + h / 2, Math.max(24, w - 10));
       }
@@ -569,7 +570,7 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
         const openingNumber = sameType.findIndex((item) => item.id === opening.id) + 1;
         const labelWorld = { x: points.centre.x + points.wall.inward.x * 0.23, z: points.centre.z + points.wall.inward.z * 0.23 };
         const label = toPx(labelWorld.x, labelWorld.z);
-        ctx.font = '500 9px system-ui, sans-serif';
+        setCanvasFont(ctx, 9, 500);
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = '#71717a';
@@ -655,11 +656,11 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
         const midpoint = toPx((wall.start.x + wall.end.x) / 2, (wall.start.z + wall.end.z) / 2);
         const text = formatLength(wall.length, measurementSystem);
         const idText = `Wall ${wall.index + 1}`;
-        ctx.font = `600 ${themeMetric('builder-wall-length-font-px')}px system-ui, sans-serif`;
+        setCanvasFont(ctx, themeMetric('builder-wall-length-font-px'), 600);
         const lengthMetrics = ctx.measureText(text);
         const lengthWidth = lengthMetrics.width;
         const lengthHeight = (lengthMetrics.actualBoundingBoxAscent || 8) + (lengthMetrics.actualBoundingBoxDescent || 3);
-        ctx.font = `500 ${themeMetric('builder-wall-id-font-px')}px system-ui, sans-serif`;
+        setCanvasFont(ctx, themeMetric('builder-wall-id-font-px'), 500);
         const idMetrics = ctx.measureText(idText);
         const idWidth = idMetrics.width;
         const idHeight = (idMetrics.actualBoundingBoxAscent || 7) + (idMetrics.actualBoundingBoxDescent || 2);
@@ -874,10 +875,10 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
         ctx.strokeStyle = label.wall.id === selectedWallId ? themeRgba('interaction-strong', .88) : 'rgba(24,24,27,.13)';
         ctx.lineWidth = 1;
         ctx.stroke();
-        ctx.font = `650 ${themeMetric('builder-wall-length-font-px')}px system-ui, sans-serif`;
+        setCanvasFont(ctx, themeMetric('builder-wall-length-font-px'), 650);
         ctx.fillStyle = dimensionText;
         ctx.fillText(label.text, label.x, label.y - 5);
-        ctx.font = `500 ${themeMetric('builder-wall-id-font-px')}px system-ui, sans-serif`;
+        setCanvasFont(ctx, themeMetric('builder-wall-id-font-px'), 500);
         ctx.fillStyle = label.wall.id === selectedWallId ? dimensionText : '#71717a';
         ctx.fillText(label.idText, label.x, label.y + 10);
         ctx.restore();
@@ -971,7 +972,7 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
         ctx.strokeStyle = active ? interaction : 'rgba(24,24,27,.10)';
         ctx.lineWidth = 1;
         ctx.stroke();
-        ctx.font = active ? '700 10px system-ui, sans-serif' : '600 9px system-ui, sans-serif';
+        setCanvasFont(ctx, active ? 10 : 9, active ? 700 : 600);
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = active ? dimensionText : '#52525b';
@@ -985,7 +986,7 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
       const right = toPx(bounds.maxX, (bounds.minZ + bounds.maxZ) / 2);
       ctx.save(); ctx.strokeStyle = '#71717a'; ctx.lineWidth = 1; ctx.setLineDash([5, 5]);
       ctx.beginPath(); ctx.moveTo(left.x, left.y); ctx.lineTo(right.x, right.y); ctx.stroke();
-      ctx.setLineDash([]); ctx.fillStyle = '#52525b'; ctx.font = '600 12px system-ui'; ctx.textAlign = 'center';
+      ctx.setLineDash([]); ctx.fillStyle = '#52525b'; setCanvasFont(ctx, 12, 600); ctx.textAlign = 'center';
       ctx.fillText(`Diameter ${formatLength(room.width, measurementSystem)}`, (left.x + right.x) / 2, left.y - 12);
       ctx.restore();
     }
@@ -1313,7 +1314,8 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
             borderRadius: 5,
             zIndex: 4,
             pointerEvents: 'auto',
-            font: `650 ${themeMetric('builder-wall-length-font-px')}px system-ui, sans-serif`,
+            font: `650 ${themeMetric('builder-wall-length-font-px')}px ${APP_FONT_FAMILY}`,
+            letterSpacing: 'var(--font-strong-spacing)',
             color: themeColor('dimension-text')
           }}
           onPointerDown={(e) => e.stopPropagation()}

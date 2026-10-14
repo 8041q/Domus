@@ -11,6 +11,7 @@ const { roomViewSummary, coverageArea, roomWallMeasurements } = await vite.ssrLo
 const { getRoomWalls, roomBounds } = await vite.ssrLoadModule('/src/core/roomGeometry.ts');
 const { normalizeProjectDetails } = await vite.ssrLoadModule('/src/core/projectDetails.ts');
 const { ReportDocument, wrapReportText } = await vite.ssrLoadModule('/src/core/reportLayout.ts');
+const { loadReportFonts, loadInterfaceFonts } = await vite.ssrLoadModule('/src/core/reportFonts.ts');
 const { drawReportPlanKey, renderRoomViewPages } = await vite.ssrLoadModule('/src/core/roomReportViews.ts');
 const { PlannerScene } = await vite.ssrLoadModule('/src/renderer/PlannerScene.ts');
 
@@ -300,8 +301,8 @@ test('plan keys keep the front marker fixed and match side labels to legend colo
         const keyLabel = text.find(op => op.text === side), legendLabel = text.find(op => op.text === side && op.x === 1390);
         assert.ok(keyLabel && legendLabel); assert.equal(keyLabel.fill, legendLabel.fill);
         assert.equal(keyLabel.fill, side === 'Side 1' ? '#0e7490' : '#7c3aed');
-        assert.equal(keyLabel.font, '600 24px system-ui');
-        assert.equal(legendLabel.font, '600 30px system-ui');
+        assert.equal(keyLabel.font, '500 24px "IBM Plex Sans", sans-serif');
+        assert.equal(legendLabel.font, '500 30px "IBM Plex Sans", sans-serif');
         const separator = text.find(op => op.text === '·' && op.y === legendLabel.y);
         const length = text.find(op => /^\d+\.\d{2} m$/.test(op.text) && op.y === legendLabel.y);
         const separatorX = 1390 + Math.ceil(page.getContext().measureText('Side 99').width) + 4;
@@ -317,6 +318,72 @@ test('plan keys keep the front marker fixed and match side labels to legend colo
       assert.ok(text.every(op => op.y < 1180 || op.y === 1200), 'key explanation stays above the footer');
     }
   } finally { globalThis.document = previousDocument; }
+});
+
+test('report fonts finish loading once before text can be measured or drawn', async () => {
+  const previousDocument = globalThis.document, previousFontFace = globalThis.FontFace;
+  const fonts = new Set(), created = [];
+  let release;
+  const ready = new Promise(resolve => { release = resolve; });
+  globalThis.document = { fonts };
+  globalThis.FontFace = class {
+    constructor(family, source, descriptors) { Object.assign(this, { family, source, weight: descriptors.weight }); created.push(this); }
+    async load() { await ready; return this; }
+  };
+  try {
+    const first = loadReportFonts(), second = loadReportFonts();
+    assert.equal(first, second);
+    assert.equal(fonts.size, 0);
+    assert.deepEqual(created.map(face => face.weight), ['400', '500']);
+    assert.ok(created.every(face => face.family === 'IBM Plex Sans' && face.source.includes('/assets/fonts/ibm-plex-sans/')));
+    release(); await first;
+    assert.equal(fonts.size, 2);
+    await loadReportFonts(); assert.equal(created.length, 2);
+  } finally { globalThis.document = previousDocument; globalThis.FontFace = previousFontFace; }
+});
+
+test('interface waits for bold labels and reuses the already loaded report faces', async () => {
+  const previousDocument = globalThis.document, previousFontFace = globalThis.FontFace;
+  const fonts = new Set(), created = [];
+  let release;
+  const boldReady = new Promise(resolve => { release = resolve; });
+  globalThis.document = { fonts };
+  globalThis.FontFace = class {
+    constructor(_family, _source, { weight }) { this.weight = weight; created.push(this); }
+    async load() { if (this.weight === '700') await boldReady; return this; }
+  };
+  try {
+    const pending = loadInterfaceFonts();
+    assert.equal(loadInterfaceFonts(), pending);
+    await loadReportFonts();
+    assert.equal(fonts.size, 2);
+    assert.deepEqual(created.map(face => face.weight).sort(), ['400', '500', '600', '700']);
+    let settled = false; pending.then(() => { settled = true; });
+    await Promise.resolve(); assert.equal(settled, false);
+    release(); await pending;
+    assert.equal(fonts.size, 4);
+    await Promise.all([loadReportFonts(), loadInterfaceFonts()]); assert.equal(created.length, 4);
+  } finally { globalThis.document = previousDocument; globalThis.FontFace = previousFontFace; }
+});
+
+test('a font failure blocks PDF capture and allows the next export to retry', async () => {
+  const previousDocument = globalThis.document, previousFontFace = globalThis.FontFace;
+  const fonts = new Set();
+  let fail = true, created = 0, touchedRenderer = false;
+  globalThis.document = { fonts };
+  globalThis.FontFace = class {
+    constructor(_family, _source, { weight }) { this.weight = weight; created++; }
+    async load() { if (fail && this.weight === '500') throw new Error('Font download failed'); return this; }
+  };
+  const scene = Object.create(PlannerScene.prototype);
+  Object.assign(scene, { floorTextureReady: Promise.resolve(), spaceFloorReady: [] });
+  Object.defineProperty(scene, 'renderer', { get() { touchedRenderer = true; throw new Error('Unexpected capture'); } });
+  try {
+    await assert.rejects(scene.exportPDF('Font failure'), /Could not load the PDF report font/);
+    assert.equal(touchedRenderer, false); assert.equal(fonts.size, 0);
+    fail = false; await loadReportFonts();
+    assert.equal(fonts.size, 2); assert.equal(created, 4);
+  } finally { globalThis.document = previousDocument; globalThis.FontFace = previousFontFace; }
 });
 
 test('a failed PDF capture restores camera, render size, helper visibility and controls', async () => {

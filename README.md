@@ -149,6 +149,9 @@ recovery drafts and draft imports/exports; use Save as to persist changes.
 
 **Project → Export to PDF** starts with a room summary, project details,
 furniture quantities and entered real-life dimensions, opening sizes and notes.
+The interface and its 2D/3D labels use bundled IBM Plex Sans, loaded before the
+planner renders. Reports use Regular and Medium; export waits for both
+faces to load before measuring text, with no external font service required.
 Furniture appears in one inventory with quantities, dimensions, size source and
 placement status. Missing real-life sizes use measured geometry and are labelled.
 Long lists use banded rows and repeated headers; unplaced furniture is listed separately.

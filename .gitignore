@@ -6,3 +6,12 @@ __pycache__/
 *.pyc
 
 /public*
+
+# Keep the bundled font license while ignoring local model/material assets.
+!/public/
+/public/*
+!/public/fonts/
+/public/fonts/*
+!/public/fonts/ibm-plex-sans/
+/public/fonts/ibm-plex-sans/*
+!/public/fonts/ibm-plex-sans/OFL.txt

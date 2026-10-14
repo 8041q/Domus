@@ -30,6 +30,7 @@ import { renderRoomReport, roomReportData } from '../core/roomReport';
 import { roomViewSummary } from '../core/roomReportGeometry';
 import { renderRoomViewPages, type ReportViewCapture } from '../core/roomReportViews';
 import { buildRoomPdf, ROOM_PDF_VIEWS } from '../core/roomPdf';
+import { loadReportFonts, setCanvasFont } from '../core/reportFonts';
 import { wallCornerShading } from '../core/wallShading';
 
 export interface SceneSnapshot extends PlannerSnapshot {
@@ -726,7 +727,7 @@ export class PlannerScene {
   }
 
   async exportPDF(roomName: string) {
-    await Promise.all([this.floorTextureReady, ...this.spaceFloorReady]);
+    await Promise.all([loadReportFonts(), this.floorTextureReady, ...this.spaceFloorReady]);
     while (this.productModelRequests.size) await Promise.all(this.productModelRequests.values());
     if (this.disposed) throw new Error('The 3D view closed while preparing the PDF.');
     if (this.bridge.getSnapshot().objects.some((object) => this.productModelErrors.has(PRODUCTS[object.productId]?.model?.url ?? ''))) {
@@ -4005,7 +4006,7 @@ export class PlannerScene {
     const fontPx = themeMetric('dimension-texture-font-px');
     const textureScale = 2;
     const probe = document.createElement('canvas').getContext('2d')!;
-    probe.font = `${fontWeight} ${fontPx}px Inter, system-ui, sans-serif`;
+    setCanvasFont(probe, fontPx, fontWeight);
     const measuredWidth = Math.ceil(probe.measureText(text).width);
     const paddingX = 14 + outlinePx * 2;
     const paddingY = 10 + outlinePx * 2;
@@ -4018,7 +4019,7 @@ export class PlannerScene {
     const ctx = canvas.getContext('2d')!;
     ctx.scale(textureScale, textureScale);
     ctx.clearRect(0, 0, logicalWidth, logicalHeight);
-    ctx.font = `${fontWeight} ${fontPx}px Inter, system-ui, sans-serif`;
+    setCanvasFont(ctx, fontPx, fontWeight);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.lineJoin = 'round';
@@ -4058,7 +4059,7 @@ export class PlannerScene {
     const paddingY = themeMetric('product-dimension-card-padding-y-px');
     const radius = themeMetric('product-dimension-card-radius-px');
     const probe = document.createElement('canvas').getContext('2d')!;
-    probe.font = `700 ${fontPx}px Inter, system-ui, sans-serif`;
+    setCanvasFont(probe, fontPx, 700);
     const measuredWidth = Math.ceil(probe.measureText(text).width);
     const logicalWidth = Math.max(88, measuredWidth + paddingX * 2 + outlinePx * 2);
     const logicalHeight = Math.max(84, fontPx + paddingY * 2 + outlinePx * 2);
@@ -4078,7 +4079,7 @@ export class PlannerScene {
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    ctx.font = `700 ${fontPx}px Inter, system-ui, sans-serif`;
+    setCanvasFont(ctx, fontPx, 700);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.lineJoin = 'round';
@@ -4593,7 +4594,7 @@ export class PlannerScene {
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     const fontPx = 58;
-    ctx.font = `700 ${fontPx}px Inter, system-ui, sans-serif`;
+    setCanvasFont(ctx, fontPx, 700);
     const measuredTextWidth = ctx.measureText(text).width;
     label.userData.dynamicSpacingTextAspect = Math.min(
       canvas.width / canvas.height,

@@ -1,3 +1,5 @@
+import { setCanvasFont } from './reportFonts';
+
 /** Word wrapping with a character fallback for long, unbroken identifiers. */
 export function wrapReportText(ctx: Pick<CanvasRenderingContext2D, 'measureText'>, text: string, width: number): string[] {
   const result: string[] = [];
@@ -17,7 +19,7 @@ export function wrapReportText(ctx: Pick<CanvasRenderingContext2D, 'measureText'
 }
 
 export function reportFont(ctx: CanvasRenderingContext2D, size = 24, bold = false) {
-  ctx.font = `${bold ? '600' : '400'} ${size}px system-ui`; ctx.fillStyle = '#27272a';
+  setCanvasFont(ctx, size, bold ? 500 : 400, bold); ctx.fillStyle = '#27272a';
   ctx.textAlign = 'left'; ctx.textBaseline = 'top';
 }
 
