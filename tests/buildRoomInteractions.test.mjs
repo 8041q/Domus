@@ -10,6 +10,10 @@ FEATURES.interiorWalls = true;
 const { createFrameQueue } = await vite.ssrLoadModule('/src/core/frameQueue.ts');
 const { usePlannerStore, getSnapshot, parseProjectSnapshot } = await vite.ssrLoadModule('/src/store.ts');
 const { PlannerScene } = await vite.ssrLoadModule('/src/renderer/PlannerScene.ts');
+const { registerOpeningVisibility, openingVisibleInActiveView } = await vite.ssrLoadModule('/src/core/openingVisibility.ts');
+const { openingSliderRange } = await vite.ssrLoadModule('/src/core/openingSliderRange.ts');
+const { openingFrameOverhang } = await vite.ssrLoadModule('/src/core/architecturalStyles.ts');
+const { openingFitsBoundary, openingClearance } = await vite.ssrLoadModule('/src/core/openingPlacement.ts');
 const { getPhysicalWalls } = await vite.ssrLoadModule('/src/core/spaces.ts');
 const { getRoomWalls, roomBounds, isValidRoom, openingsOnWall, roomTemplate, moveCorner, polygonArea } = await vite.ssrLoadModule('/src/core/roomGeometry.ts');
 const { buildRoomPdf, ROOM_PDF_VIEWS } = await vite.ssrLoadModule('/src/core/roomPdf.ts');
@@ -600,4 +604,89 @@ test('3D collision fitting cannot relocate a dragged door onto a cutaway wall', 
     bridge: { updateOpening: (id, patch) => store.getState().updateOpening(id, patch, false) } });
   assert.equal(scene.moveOpeningOnVisibleWalls(store.getState(), door, { wallId: walls[0].id, offset: 2.6 }), true);
   assert.equal(store.getState().openings[0].wallId, walls[2].id, 'Only the opposite visible wall has room for the frame');
+});
+
+test('opening controls use live viewport visibility for every kind and release it when leaving 3D', () => {
+  const store = usePlannerStore;
+  for (const type of ['window', 'door', 'opening']) {
+    store.getState().resetProject();
+    const walls = getRoomWalls(store.getState().room);
+    const opening = { id: 'slider-opening', type,
+      variant: type === 'window' ? 'single-window' : type === 'door' ? 'single-door' : 'wall-opening',
+      wallId: walls[0].id, offset: 2, width: .9, height: 1.2, sillHeight: type === 'door' ? 0 : .75 };
+    store.setState({ openings: [opening] });
+    const scene = Object.create(PlannerScene.prototype);
+    Object.assign(scene, { wallHiddenState: new Map([[walls[1].id, true]]), bridge: { getSnapshot: () => store.getState() } });
+    const release = registerOpeningVisibility(candidate => scene.openingAllowedOnVisibleWalls(candidate));
+    try {
+      for (const recordHistory of [true, false]) {
+        const before = getSnapshot();
+        assert.equal(store.getState().updateOpening(opening.id, { wallId: walls[1].id, offset: 2 }, recordHistory, openingVisibleInActiveView), false);
+        assert.deepEqual(getSnapshot(), before, 'Blocked slider and typed changes leave the entire layout intact');
+      }
+      assert.equal(store.getState().updateOpening(opening.id, { offset: 2.2 }, false, openingVisibleInActiveView), true);
+      scene.wallHiddenState.set(walls[1].id, false);
+      assert.equal(store.getState().updateOpening(opening.id, { wallId: walls[1].id, offset: 2 }, false, openingVisibleInActiveView), true);
+      scene.wallHiddenState.set(walls[1].id, true);
+    } finally { release(); }
+    assert.equal(openingVisibleInActiveView({ ...opening, wallId: walls[1].id }), true, 'Unmounting restores unrestricted 2D editing');
+  }
+});
+
+test('slider changes reject hidden wrapped sections and constrain collision fallback to visible walls', () => {
+  const store = usePlannerStore;
+  store.getState().resetProject();
+  const walls = getRoomWalls(store.getState().room);
+  const scene = Object.create(PlannerScene.prototype);
+  Object.assign(scene, { wallHiddenState: new Map([[walls[1].id, true], [walls[3].id, true]]), bridge: { getSnapshot: () => store.getState() } });
+  const allowed = candidate => scene.openingAllowedOnVisibleWalls(candidate);
+  const opening = { id: 'wrap-slider', type: 'opening', variant: 'wall-opening', wallId: walls[0].id,
+    offset: walls[0].length - .3, width: .4, height: 1.2, sillHeight: .75 };
+  store.setState({ openings: [opening] });
+  assert.equal(store.getState().updateOpening(opening.id, { offset: walls[0].length - .1 }, false, allowed), false);
+  assert.equal(store.getState().updateOpening(opening.id, { width: 1.4 }, false, allowed), false);
+  assert.deepEqual(store.getState().openings[0], opening);
+  const door = { ...opening, id: 'slider-door', type: 'door', variant: 'single-door', wallId: walls[2].id, offset: 2.6, width: .9, height: 2.08, sillHeight: 0 };
+  store.setState({ openings: [door, { ...opening, id: 'occupied', offset: 2.6, width: 4.8, height: 2.1, sillHeight: 0 }] });
+  assert.equal(store.getState().updateOpening(door.id, { wallId: walls[0].id, offset: 2.6 }, false, allowed), true);
+  assert.equal(store.getState().openings[0].wallId, walls[2].id);
+});
+
+test('position slider endpoints match the visible stretch and reach the frame boundary for every opening kind', () => {
+  usePlannerStore.getState().resetProject();
+  const room = usePlannerStore.getState().room, walls = getRoomWalls(room);
+  const perimeter = walls.reduce((sum, wall) => sum + wall.length, 0);
+  for (const type of ['window', 'door', 'opening']) {
+    const opening = { id: 'range', type, wallId: walls[0].id, offset: 2, width: .9, height: 1.2, sillHeight: 0 };
+    const scene = Object.create(PlannerScene.prototype);
+    Object.assign(scene, { wallHiddenState: new Map([[walls[1].id, true], [walls[3].id, true]]),
+      bridge: { getSnapshot: () => ({ room, dividers: [] }) } });
+    const allowed = candidate => scene.openingAllowedOnVisibleWalls(candidate) && openingFitsBoundary(room, [], candidate);
+    const range = openingSliderRange(room, opening, 0, perimeter, allowed);
+    const half = opening.width / 2 + Math.max(openingFrameOverhang(opening), type === 'opening' ? 0 : openingClearance(opening));
+    assert.ok(Math.abs(range.min - half) < .00001);
+    assert.ok(Math.abs(range.max - (walls[0].length - half)) < .00001);
+    const atEnd = { ...opening, offset: range.max };
+    assert.ok(allowed(atEnd));
+    assert.equal(allowed({ ...atEnd, offset: atEnd.offset + .001 }), false);
+    const endRange = openingSliderRange(room, atEnd, 0, perimeter, allowed);
+    assert.ok(Math.abs(endRange.min - range.min) < 1e-6 && Math.abs(endRange.max - range.max) < 1e-6, 'The thumb stays at the end as the opening reaches its boundary');
+    scene.wallHiddenState.clear();
+    if (type === 'opening') assert.deepEqual(openingSliderRange(room, opening, 0, perimeter, allowed), { min: 0, max: perimeter });
+  }
+});
+
+test('position slider continues across the perimeter seam without including a separate visible stretch', () => {
+  usePlannerStore.getState().resetProject();
+  const room = usePlannerStore.getState().room, walls = getRoomWalls(room);
+  const perimeter = walls.reduce((sum, wall) => sum + wall.length, 0);
+  const opening = { id: 'seam-range', type: 'opening', wallId: walls[0].id, offset: 1, width: .8, height: 1.2, sillHeight: 0 };
+  const scene = Object.create(PlannerScene.prototype);
+  Object.assign(scene, { wallHiddenState: new Map([[walls[1].id, true], [walls[2].id, true]]),
+    bridge: { getSnapshot: () => ({ room, dividers: [] }) } });
+  const range = openingSliderRange(room, opening, 0, perimeter, candidate => scene.openingAllowedOnVisibleWalls(candidate));
+  assert.ok(Math.abs(range.min - (-walls[3].length + .4)) < .00001);
+  assert.ok(Math.abs(range.max - (walls[0].length - .4)) < .00001);
+  assert.deepEqual(openingSliderRange(room, { ...opening, wallId: walls[1].id }, 0, perimeter,
+    candidate => scene.openingAllowedOnVisibleWalls(candidate)), { min: walls[0].length + 1, max: walls[0].length + 1 });
 });

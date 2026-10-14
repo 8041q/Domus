@@ -1,6 +1,6 @@
 import { FEATURES } from './config/features';
 import { activeArchitecture } from './core/activeArchitecture';
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEvent } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type KeyboardEvent } from 'react';
 import { Plan2D } from './Plan2D';
 import { getRoomWalls, getWall, MIN_WALL_LENGTH, MIN_CIRCLE_DIAMETER, openingFollowsPerimeter, perimeterLocation, polygonArea } from './core/roomGeometry';
 import { deriveSpaces, getPhysicalWalls, resolveDividers } from './core/spaces';
@@ -8,6 +8,8 @@ import { dimensionStepMetres, displayLengthValue, displayValueToMetres, formatAr
 import type { MeasurementSystem, OpeningVariant, RoomOpening, RoomShapeKind } from './core/types';
 import { getSnapshot, usePlannerStore } from './store';
 import { Icon } from './ui';
+import { openingVisibleInActiveView, openingVisibilityRevision, subscribeOpeningVisibility } from './core/openingVisibility';
+import { openingSliderRange } from './core/openingSliderRange';
 
 const Viewport3D = lazy(() => import('./Viewport3D').then((module) => ({ default: module.Viewport3D })));
 
@@ -166,10 +168,13 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
   const openings = useMemo(() => FEATURES.interiorWalls ? savedOpenings : savedOpenings.filter((opening) => !opening.wallId.startsWith('divider-')), [savedOpenings]);
   const system = usePlannerStore((s) => s.measurementSystem);
   const updateOpeningState = usePlannerStore((s) => s.updateOpening);
+  const buildView = usePlannerStore((s) => s.buildView);
+  const visibilityRevision = useSyncExternalStore(subscribeOpeningVisibility, openingVisibilityRevision);
+  const interiorWallView = usePlannerStore((s) => s.interiorWallView);
   const [fitWarning, setFitWarning] = useState('');
   const updateOpening = (id: string, patch: Partial<RoomOpening>, recordHistory = true) => {
-    const accepted = updateOpeningState(id, patch, recordHistory);
-    setFitWarning(accepted ? '' : 'This size needs more clear wall space. Move another opening or choose a smaller size.');
+    const accepted = updateOpeningState(id, patch, recordHistory, buildView === '3d' ? openingVisibleInActiveView : undefined);
+    setFitWarning(accepted ? '' : 'This change needs enough clear, visible wall space. Choose another position or a smaller size.');
     return accepted;
   };
   const removeOpening = usePlannerStore((s) => s.removeOpening);
@@ -189,8 +194,11 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
     if (!curved) return { offset };
     return perimeterLocation(room, offset);
   };
-  const minOffset = curved ? 0 : opening.width / 2 + 0.05;
-  const endOffset = curved ? perimeter : Math.max(minOffset, maxOffset - opening.width / 2 - 0.05);
+  const baseMinOffset = curved ? 0 : opening.width / 2 + 0.05;
+  const baseEndOffset = curved ? perimeter : Math.max(baseMinOffset, maxOffset - opening.width / 2 - 0.05);
+  const { min: minOffset, max: endOffset } = useMemo(() => buildView === '3d'
+    ? openingSliderRange(room, opening, baseMinOffset, baseEndOffset, openingVisibleInActiveView, FEATURES.interiorWalls ? dividers : [])
+    : { min: baseMinOffset, max: baseEndOffset }, [room, opening, buildView, baseMinOffset, baseEndOffset, visibilityRevision, dividers, interiorWallView]);
   const maxWidth = curved ? (opening.type === 'opening' ? perimeter : perimeter / 4) - 0.2 : maxOffset - 0.2;
   const minOpeningWidth = opening.type === 'opening' ? 0.10 : 0.45;
   const minOpeningHeight = opening.type === 'opening' ? 0.10 : 0.40;
@@ -282,6 +290,7 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
         <input
           className="range"
           type="range"
+          disabled={endOffset - minOffset < 0.0001}
           min={minOffset}
           max={endOffset}
           step={system === 'metric' ? 0.01 : 0.0254}

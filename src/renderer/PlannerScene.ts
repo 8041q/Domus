@@ -16,6 +16,7 @@ import { floorFinishDefinition, type FloorFinishDefinition } from '../core/roomF
 import { clearanceIssues, clearanceRegions, resolvePlacement, spacingMeasurements, type SpacingMeasurement } from '../core/placement';
 import { BASEBOARD_STYLES, DOOR_LEAF_COLOR, DOOR_FRAME_WIDTH, WINDOW_FRAME_WIDTH, WINDOW_SILL_OVERHANG, DOOR_CORNICE_WIDTH_FACTOR, glazingAreas, isSunGlazedOpening, openingFrameOverhang } from '../core/architecturalStyles';
 import { fitOpening } from '../core/openingPlacement';
+import { notifyOpeningVisibilityChanged } from '../core/openingVisibility';
 import { getRoomWalls, openingFollowsPerimeter, openingsOnWall, perimeterDistance, perimeterLocation, pointInRoom, roomBounds, wallPoint, wallProjectionDistance } from '../core/roomGeometry';
 import { architectureRoom, deriveSpaces, dividerJunctionDistances, getPhysicalWalls, interiorDoorHasThreshold, resolveDividers, wallAdjacentSpaces } from '../core/spaces';
 import { effectiveSunAzimuth } from '../core/sun';
@@ -2952,6 +2953,7 @@ export class PlannerScene {
       || this.wallHiddenState.size !== nextState.size;
     if (cutawayChanged || force) this.invalidateShadows();
     this.wallHiddenState = nextState;
+    if (cutawayChanged && this.options?.interactiveArchitecture) notifyOpeningVisibilityChanged();
     for (const group of [this.wallsGroup, this.floorGroup, this.architecturalShadeGroup]) group.traverse((object) => {
       const wallId = typeof object.userData.cutawayWallId === 'string' ? object.userData.cutawayWallId : null;
       if (wallId?.startsWith('divider-')) return;
@@ -5316,22 +5318,27 @@ export class PlannerScene {
     this.renderSafely();
   }
 
-  private moveOpeningOnVisibleWalls(snapshot: SceneSnapshot, opening: RoomOpening, patch: Pick<RoomOpening, 'wallId' | 'offset'>) {
+  openingAllowedOnVisibleWalls(candidate: RoomOpening, snapshot = this.bridge.getSnapshot()) {
     const walls = getPhysicalWalls(snapshot.room, snapshot.dividers);
-    const allowed = (candidate: RoomOpening) => {
-      if (this.wallHiddenState?.get(candidate.wallId)) return false;
-      const footprint = { ...candidate, width: candidate.width + openingFrameOverhang(candidate) * 2 };
-      // Wrapped apertures must remain on visible sections in their entirety.
-      return walls.every((wall) => {
-        const pieces = openingsOnWall(snapshot.room, [footprint], wall.id);
-        if (!pieces.length) return true;
-        if (this.wallHiddenState?.get(wall.id)) return false;
-        if (!wall.id.startsWith('divider-')) return true;
-        const profile = interiorWallProfile(wall, snapshot.room.height, snapshot.interiorWallView ?? 'up');
-        return pieces.every((piece) => Math.min(profileHeight(profile, piece.offset - piece.width / 2),
-          profileHeight(profile, piece.offset + piece.width / 2)) >= piece.sillHeight + piece.height - 0.003);
-      });
-    };
+    if (this.wallHiddenState?.get(candidate.wallId)) return false;
+    const footprint = { ...candidate, width: candidate.width + openingFrameOverhang(candidate) * 2 };
+    // Wrapped apertures must remain on visible sections in their entirety.
+    return walls.every((wall) => {
+      // Visible perimeter sections impose no extra constraint. Avoid projecting
+      // the aperture repeatedly onto every short section of curved rooms.
+      if (!wall.id.startsWith('divider-') && !this.wallHiddenState?.get(wall.id)) return true;
+      const pieces = openingsOnWall(snapshot.room, [footprint], wall.id);
+      if (!pieces.length) return true;
+      if (this.wallHiddenState?.get(wall.id)) return false;
+      if (!wall.id.startsWith('divider-')) return true;
+      const profile = interiorWallProfile(wall, snapshot.room.height, snapshot.interiorWallView ?? 'up');
+      return pieces.every((piece) => Math.min(profileHeight(profile, piece.offset - piece.width / 2),
+        profileHeight(profile, piece.offset + piece.width / 2)) >= piece.sillHeight + piece.height - 0.003);
+    });
+  }
+
+  private moveOpeningOnVisibleWalls(snapshot: SceneSnapshot, opening: RoomOpening, patch: Pick<RoomOpening, 'wallId' | 'offset'>) {
+    const allowed = (candidate: RoomOpening) => this.openingAllowedOnVisibleWalls(candidate, snapshot);
     const candidate = { ...opening, ...patch };
     if (!allowed(candidate)) return false;
     // Restrict the fallback too: collision/frame fitting may change the wall.

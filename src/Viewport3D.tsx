@@ -5,6 +5,7 @@ import type { PlanCameraView } from './core/types';
 import { usePlannerStore } from './store';
 import { subscribeProductCatalogue } from './core/products';
 import { roomProjects } from './roomProjects';
+import { registerOpeningVisibility } from './core/openingVisibility';
 
 export function Viewport3D({
   furniture = true,
@@ -65,6 +66,7 @@ export function Viewport3D({
     let scene: PlannerScene | null = null;
     let unsubscribe = () => {};
     let unsubscribeCatalogue = () => {};
+    let unregisterOpeningVisibility = () => {};
     let stopped = false;
     const fail = (error: unknown) => {
       if (stopped) return;
@@ -72,6 +74,7 @@ export function Viewport3D({
       console.error('Could not render 3D view', error);
       unsubscribe();
       unsubscribeCatalogue();
+      unregisterOpeningVisibility();
       scene?.dispose();
       sceneRef.current = null;
       onExportReady?.(null);
@@ -129,6 +132,10 @@ export function Viewport3D({
         onError: fail
       });
       sceneRef.current = scene;
+      if (architectureInteractive) {
+        const viewport = scene;
+        unregisterOpeningVisibility = registerOpeningVisibility(opening => viewport.openingAllowedOnVisibleWalls(opening));
+      }
       unsubscribeCatalogue = subscribeProductCatalogue(() => {
         if (stopped) return;
         try { scene?.refreshProductCatalogue(); } catch (error) { fail(error); }
@@ -160,6 +167,7 @@ export function Viewport3D({
       stopped = true;
       unsubscribe();
       unsubscribeCatalogue();
+      unregisterOpeningVisibility();
       scene?.dispose();
       sceneRef.current = null;
     };

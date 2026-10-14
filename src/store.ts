@@ -113,7 +113,7 @@ interface PlannerStore extends PlannerSnapshot {
 
   addOpening: (type: OpeningType) => boolean;
   selectOpening: (id: string | null) => void;
-  updateOpening: (id: string, patch: Partial<RoomOpening>, recordHistory?: boolean) => boolean;
+  updateOpening: (id: string, patch: Partial<RoomOpening>, recordHistory?: boolean, allowed?: (candidate: RoomOpening) => boolean) => boolean;
   removeOpening: (id: string) => void;
 
   setFeedback: (snap: SnapFeedback, collisionId?: string | null, collisionPush?: boolean) => void;
@@ -907,7 +907,7 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
     set({ selectedOpeningId: id, selectedWallId: opening?.wallId ?? null,
       selectedDividerId: opening?.wallId.startsWith('divider-') ? opening.wallId : null, selectedSpaceId: null, selectedId: null });
   },
-  updateOpening: (id, patch, recordHistory = true) => {
+  updateOpening: (id, patch, recordHistory = true, allowed = () => true) => {
     if (patch.type === 'window' && get().room.shapeKind === 'circle') return false;
     if (!FEATURES.interiorWalls && (get().openings.find((opening) => opening.id === id)?.wallId.startsWith('divider-') || patch.wallId?.startsWith('divider-'))) return false;
     // Live opening drags/sliders call this with recordHistory=false. Avoid cloning the
@@ -928,7 +928,8 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
         preset.sillHeight = 0;
       }
       const candidate = normalizeOpening({ ...o, ...preset, ...patch, type: nextType, variant: nextVariant }, state.room, state.dividers);
-      const fitted = fitOpening(state.room, state.dividers, candidate, state.openings.filter((opening) => opening.id !== id));
+      if (!allowed(candidate)) return o;
+      const fitted = fitOpening(state.room, state.dividers, candidate, state.openings.filter((opening) => opening.id !== id), allowed);
       accepted = fitted != null;
       return fitted ?? o;
     });
