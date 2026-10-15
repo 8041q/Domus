@@ -2,6 +2,7 @@ import { createContext, Suspense, useContext, useEffect, useLayoutEffect, useMem
 import { createPortal } from 'react-dom';
 import { cn } from './ui';
 import { createLoadingCoordinator, type LoadingPhase, type LoadingTask } from './core/loadingCoordinator';
+import { lockLoadingInteraction } from './core/loadingInteraction';
 
 type Coordinator = ReturnType<typeof createLoadingCoordinator<ReactNode>>;
 const LoadingContext = createContext<{ coordinator: Coordinator; setSurface: (surface: HTMLElement | null) => void } | null>(null);
@@ -47,10 +48,15 @@ export function LoadingStatus({ active = true, label, detail, progress, blocking
 function LoadingPresenter({ coordinator }: { coordinator: Coordinator }) {
   const state = useSyncExternalStore(coordinator.subscribe, coordinator.getSnapshot, coordinator.getSnapshot);
   const message = state.message;
+  const locked = state.visible && !message?.error;
+  useLayoutEffect(() => {
+    const root = document.querySelector<HTMLElement>('.app-shell');
+    if (locked && root) return lockLoadingInteraction(root);
+  }, [locked]);
   if (!state.visible || !message) return null;
   const counted = message.progress && message.progress.total > 1;
   const completed = counted ? Math.max(0, Math.min(message.progress!.completed, message.progress!.total)) : 0;
-  return <div className={cn('loading-status', state.blocking && 'loading-status-blocking', state.leaving && 'is-leaving')}
+  return <div className={cn('loading-status', locked && 'loading-status-blocking', state.leaving && 'is-leaving')}
     aria-busy={state.pending > 0}>
     <div className={cn('loading-status-card', message.error && 'is-error')} role={message.error ? 'alert' : 'status'} aria-atomic="true">
       <span className={cn('loading-status-symbol', !message.error && 'loading-status-spinner')} aria-hidden="true">{message.error ? '!' : null}</span>

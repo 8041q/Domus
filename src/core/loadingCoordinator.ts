@@ -62,8 +62,8 @@ export function createLoadingCoordinator<Action = unknown>(clock = {
       return;
     }
     if (!snapshot.visible) return;
-    // Release interaction immediately. A new phase cancels the presentation
-    // timers and replaces the message rather than creating another card.
+    // Work has finished; retain the message for the presentation minimum.
+    // A new phase cancels these timers and replaces the existing card.
     publish({ ...snapshot, pending: 0, blocking: false });
     hold = clock.schedule(() => {
       publish({ ...snapshot, leaving: true });

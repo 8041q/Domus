@@ -11,5 +11,5 @@
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "include": ["vite.config.ts", "server", "src/config/features.ts", "src/core/types.ts", "src/core/productSchema.ts", "blender_addon/catalogue_schema.json"]
+  "include": ["vite.config.ts", "server", "src/config/features.ts", "src/core/types.ts", "src/core/productSchema.ts", "src/ai/removalIntent.ts", "src/ai/types.ts", "blender_addon/catalogue_schema.json"]
 }

@@ -4,6 +4,7 @@ import { PRODUCTS } from './products';
 import { isPlacementValid } from './placement';
 import { architectureRoom } from './spaces';
 import type { PlacedObject, PlannerSnapshot, ProductKind } from './types';
+import { MAX_AI_REMOVALS } from '../ai/removalIntent';
 
 export function snapshotRevision(snapshot: PlannerSnapshot) {
   const value = JSON.stringify(snapshot);
@@ -32,10 +33,12 @@ function validateCandidate(candidate: PlacedObject, snapshot: PlannerSnapshot) {
 
 function applyOperation(snapshot: PlannerSnapshot, operation: AiOperation, index: number): string | null {
   const prefix = `Operation ${index + 1}`;
-  if (!finite(operation.x) || !finite(operation.z) || !finite(operation.rotationDegrees)) return `${prefix} contains an invalid number.`;
+  if (!['add-object', 'remove-object', 'move-object', 'rotate-object'].includes(operation.type)) return `${prefix} has an unsupported action.`;
+  if (operation.type !== 'remove-object' && (!finite(operation.rotationDegrees)
+    || (operation.type !== 'rotate-object' && (!finite(operation.x) || !finite(operation.z))))) return `${prefix} contains an invalid number.`;
 
   if (operation.type === 'add-object') {
-    if (!operation.productId || !(operation.productId in PRODUCTS)) return `${prefix} uses an unknown catalogue product.`;
+    if (!operation.productId || !Object.hasOwn(PRODUCTS, operation.productId)) return `${prefix} uses an unknown catalogue product.`;
     const candidate: PlacedObject = {
       id: `ai-${operation.productId}-${createId()}`,
       productId: operation.productId as ProductKind,
@@ -43,36 +46,45 @@ function applyOperation(snapshot: PlannerSnapshot, operation: AiOperation, index
       z: operation.z,
       rotationY: radians(operation.rotationDegrees)
     };
-    const error = validateCandidate(candidate, snapshot);
-    if (error) return `${prefix}: ${error}`;
     snapshot.objects.push(candidate);
     return null;
   }
 
   const objectIndex = snapshot.objects.findIndex((object) => object.id === operation.objectId);
-  if (objectIndex < 0) return `${prefix} references an item that no longer exists.`;
   if (operation.type === 'remove-object') {
-    snapshot.objects.splice(objectIndex, 1);
+    const unplacedIndex = snapshot.unplacedObjects.findIndex(object => object.id === operation.objectId);
+    if (objectIndex < 0 && unplacedIndex < 0) return `${prefix} references an item that no longer exists.`;
+    if (objectIndex >= 0) snapshot.objects.splice(objectIndex, 1);
+    if (unplacedIndex >= 0) snapshot.unplacedObjects.splice(unplacedIndex, 1);
     return null;
   }
+  if (objectIndex < 0) return `${prefix} references an item that no longer exists.`;
 
   const current = snapshot.objects[objectIndex];
   const candidate: PlacedObject = operation.type === 'move-object'
     ? { ...current, x: operation.x, z: operation.z, rotationY: radians(operation.rotationDegrees) }
     : { ...current, rotationY: radians(operation.rotationDegrees) };
-  const error = validateCandidate(candidate, snapshot);
-  if (error) return `${prefix}: ${error}`;
   snapshot.objects[objectIndex] = candidate;
   return null;
 }
 
 export function applyAiProposal(snapshot: PlannerSnapshot, proposal: AiProposal) {
   if (!proposal.operations.length) return { snapshot, error: 'The proposal does not contain any changes.' };
-  if (proposal.operations.length > 8) return { snapshot, error: 'The experimental limit is eight operations per proposal.' };
+  if (proposal.operations.length > (proposal.operations.every(operation => operation.type === 'remove-object') ? MAX_AI_REMOVALS : 8)) return { snapshot, error: 'This proposal has too many changes. Ask for a smaller group of changes.' };
   const next = structuredClone(snapshot) as PlannerSnapshot;
   for (const [index, operation] of proposal.operations.entries()) {
     const error = applyOperation(next, operation, index);
     if (error) return { snapshot, error };
+  }
+  const originalIds = new Set(snapshot.objects.map(object => object.id));
+  const changedIds = new Set(proposal.operations.filter(operation => operation.type !== 'remove-object').map(operation => operation.objectId));
+  // Validate the final arrangement rather than temporary intermediate positions.
+  // This permits swaps and moves into a position another operation clears.
+  for (const object of next.objects) {
+    if (!originalIds.has(object.id) || changedIds.has(object.id)) {
+      const error = validateCandidate(object, next);
+      if (error) return { snapshot, error };
+    }
   }
   return { snapshot: next, error: null };
 }

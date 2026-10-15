@@ -1,5 +1,5 @@
 import { FEATURES } from './config/features';
-import { lazy, memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ChangeEvent } from 'react';
+import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ChangeEvent } from 'react';
 import { PRODUCT_LIST, PRODUCTS, displayProductDimensions, getProductCatalogueIssues, getProductCatalogueVersion, subscribeProductCatalogue } from './core/products';
 import { PRODUCT_CATEGORIES } from './core/productSchema';
 import { clearanceIssues } from './core/placement';
@@ -16,6 +16,7 @@ import { Icon } from './ui';
 import { FloatingPanel } from './FloatingPanel';
 import { EditingSpaceSelector } from './EditingSpaceSelector';
 import { LoadingBoundary, useLoadingSurface } from './LoadingStatus';
+import { AssistantOpening } from './ai/AssistantWaiting';
 
 const Viewport3D = lazy(() => import('./Viewport3D').then((module) => ({ default: module.Viewport3D })));
 const AIExperimentPanel = lazy(() => import('./ai/AIExperimentPanel').then((module) => ({ default: module.AIExperimentPanel })));
@@ -490,7 +491,7 @@ export function PlanRoom({ onExportReady, onPdfExportReady }: {
           <LoadingBoundary label="Preparing your room…" detail="Opening the 3D view">
             <Viewport3D furniture interactive sunRays={sunRaysEnabled} view={planView} resetViewRequest={resetViewRequest} onExportReady={onExportReady} onPdfExportReady={onPdfExportReady} />
           </LoadingBoundary>
-          {FEATURES.aiExperiment && showAi && <LoadingBoundary label="Opening assistant…" detail="Getting things ready" phase="assistant"><AIExperimentPanel onClose={() => setShowAi(false)} /></LoadingBoundary>}
+          {FEATURES.aiExperiment && showAi && <Suspense fallback={<AssistantOpening onClose={() => setShowAi(false)} />}><AIExperimentPanel onClose={() => setShowAi(false)} /></Suspense>}
           {showFinishes && <FinishesPanel onClose={() => setShowFinishes(false)} />}
           {showViewOptions && <DesignPanel onClose={() => setShowViewOptions(false)} />}
           {selectedId && !(FEATURES.aiExperiment && showAi) && <SelectionPanel />}
