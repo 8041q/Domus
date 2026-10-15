@@ -40,18 +40,15 @@ export default function App() {
       <header className="app-header">
         <div className="brand-block" aria-label="Domus room planner">
           <div className="brand-mark">D</div>
-          <div><strong>Domus</strong><span>Room planning workspace</span></div>
+          <div><strong>Domus</strong></div>
         </div>
 
         <nav className="mode-stepper" aria-label="Planning workflow">
           <button type="button" className={mode === 'build' ? 'active' : ''} aria-current={mode === 'build' ? 'step' : undefined} onClick={() => setMode('build')}>
-            <span className="step-number">1</span>
-            <div><strong>Build room</strong><small>Shape & architecture</small></div>
+            <Icon name="ruler" /><strong>Build room</strong>
           </button>
-          <span className="step-line" aria-hidden="true" />
           <button type="button" className={mode === 'plan' ? 'active' : ''} aria-current={mode === 'plan' ? 'step' : undefined} onClick={() => setMode('plan')}>
-            <span className="step-number">2</span>
-            <div><strong>Plan room</strong><small>Products & layout</small></div>
+            <Icon name="cube" /><strong>Plan room</strong>
           </button>
         </nav>
 

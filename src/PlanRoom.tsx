@@ -464,8 +464,9 @@ export function PlanRoom({ onExportReady, onPdfExportReady }: {
                 className={`ai-experiment-toggle ${showAi ? 'active' : ''}`}
                 onClick={() => { setShowFinishes(false); setShowViewOptions(false); setShowAi((value) => !value); }}
                 aria-label="Experimental AI room assistant"
+                title="Room assistant · Experimental"
                 aria-expanded={showAi}
-              ><span>AI</span><small>Experimental</small></button>}
+              ><span>Assistant</span></button>}
               <div className="view-options-wrap">
                 <button
                   type="button"

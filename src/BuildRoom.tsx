@@ -453,19 +453,18 @@ export function BuildRoom() {
       <aside className="tool-panel builder-panel">
         <div className="builder-scroll-content">
         <div className="panel-intro">
-          <span className="eyebrow">Step 1</span>
-          <h1>Build your room</h1>
+          <h1>Room builder</h1>
           <p>{buildView === 'plan' ? (FEATURES.interiorWalls ? 'Arrange outer walls and interior divisions in 2D.' : 'Arrange outer walls in 2D.') : room.shapeKind === 'circle' ? 'Add and adjust doors and openings in 3D.' : 'Add and adjust doors, windows and openings in 3D.'}</p>
         </div>
 
         {buildView === 'plan' && <><section className="tool-section">
           <div className="section-title-row">
-            <div><span className="section-step">1</span><h2>Room shape</h2></div>
+            <div><h2>Room shape</h2></div>
             {room.shapeKind === 'custom' && <span className="quiet-pill">Custom</span>}
           </div>
           <div className="shape-options">
             {SHAPES.map((shape) => (
-              <button key={shape.id} type="button" className={room.shapeKind === shape.id ? 'selected' : ''} onClick={() => changeShape(shape.id)}>
+              <button key={shape.id} type="button" title={shape.description} aria-pressed={room.shapeKind === shape.id} className={room.shapeKind === shape.id ? 'selected' : ''} onClick={() => changeShape(shape.id)}>
                 <span className={`shape-glyph shape-${shape.id}`} aria-hidden="true" />
                 <span><strong>{shape.name}</strong><small>{shape.description}</small></span>
               </button>
@@ -495,7 +494,7 @@ export function BuildRoom() {
         </section>
 
         {FEATURES.interiorWalls && <section className="tool-section">
-          <div className="section-title-row"><div><span className="section-step">2</span><h2>Interior divisions</h2></div></div>
+          <div className="section-title-row"><div><h2>Interior divisions</h2></div></div>
           <div className="opening-quick-add" aria-label="Draw a division">
             <button type="button" className={dividerTool === 'wall' ? 'selected' : ''} onClick={() => setDividerTool(dividerTool === 'wall' ? null : 'wall')}>Wall</button>
             <button type="button" className={dividerTool === 'open' ? 'selected' : ''} onClick={() => setDividerTool(dividerTool === 'open' ? null : 'open')}>Open boundary</button>
@@ -509,7 +508,7 @@ export function BuildRoom() {
         </>}
 
         <section className="tool-section opening-section">
-          <div className="section-title-row"><div><span className="section-step">{buildView === '3d' ? '1' : FEATURES.interiorWalls ? '3' : '2'}</span><h2>{room.shapeKind === 'circle' ? 'Doors & openings' : 'Doors, windows & openings'}</h2></div></div>
+          <div className="section-title-row"><div><h2>{room.shapeKind === 'circle' ? 'Doors & openings' : 'Doors, windows & openings'}</h2></div></div>
           <div className={`opening-quick-add ${room.shapeKind === 'circle' ? 'circle-openings' : ''}`} aria-label="Add an opening">
             <button type="button" disabled={selectedDivider?.kind === 'open'} onClick={() => insertOpening('door')}><span className="opening-add-mark" aria-hidden="true">+</span><span>Door</span></button>
             {room.shapeKind !== 'circle' && <button type="button" disabled={!!selectedDivider} title={selectedDivider ? 'Windows belong on exterior walls' : undefined}
@@ -542,7 +541,7 @@ export function BuildRoom() {
 
         {buildView === 'plan' && <section className="tool-section">
           <div className="section-title-row">
-            <div><span className="section-step">{FEATURES.interiorWalls ? '4' : '3'}</span><h2>Dimensions</h2></div>
+            <div><h2>Dimensions</h2></div>
             <div className="dimension-tools">
               <div className="unit-toggle" role="group" aria-label="Measurement units">
                 <button type="button" className={system === 'metric' ? 'active' : ''} onClick={() => setMeasurementSystem('metric')}>Metric</button>

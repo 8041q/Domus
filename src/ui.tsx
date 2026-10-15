@@ -15,7 +15,7 @@ export function Button({
   type = 'button',
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant; size?: ButtonSize }) {
-  return <button type={type} className={cn('ui-button', `ui-button-${variant}`, `ui-button-${size}`, className)} {...props} />;
+  return <button type={type} className={cn('ui-button', `ui-button-${variant}`, `ui-button-size-${size}`, className)} {...props} />;
 }
 
 export function Card({ className, ...props }: HTMLAttributes<HTMLDivElement>) {
@@ -41,7 +41,7 @@ export function Icon({ name, ...props }: SVGProps<SVGSVGElement> & { name: IconN
     viewBox: '0 0 24 24',
     fill: 'none',
     stroke: 'currentColor',
-    strokeWidth: 2,
+    strokeWidth: 1.7,
     strokeLinecap: 'round' as const,
     strokeLinejoin: 'round' as const,
     'aria-hidden': true
