@@ -283,7 +283,13 @@ export class PlannerScene {
       // of their materials. Only highlighted items need the off-screen path. The ordinary
       // room uses the renderer's native MSAA, avoiding a fullscreen filter and its
       // softened texture detail on every camera movement.
-      this.composer = new EffectComposer(this.renderer);
+      // A canvas' antialias flag does not antialias off-screen composer targets.
+      // Match native MSAA only on the selected/hovered-item path; keep the same
+      // pixel budget and direct render path for ordinary room interaction.
+      const selectionTarget = new THREE.WebGLRenderTarget(1, 1, {
+        type: THREE.HalfFloatType, samples: Math.min(4, this.renderer.capabilities.maxSamples)
+      });
+      this.composer = new EffectComposer(this.renderer, selectionTarget);
       this.composer.addPass(new RenderPass(this.scene, this.camera));
       this.outlinePass = new OutlinePass(new THREE.Vector2(1, 1), this.scene, this.camera);
       this.outlinePass.visibleEdgeColor.setHex(0xffffff);
@@ -2372,13 +2378,16 @@ export class PlannerScene {
   private addBaseboardRuns(wall: ReturnType<typeof getRoomWalls>[number], snapshot: PlannerSnapshot) {
     const blocked = openingsOnWall(snapshot.room, snapshot.openings, wall.id)
       .filter((opening) => opening.sillHeight <= 0.025)
-      .map((opening) => ({
-        // Stop at the outside of the casing, not the raw opening. The old run
-        // continued underneath half of the door frame, producing the little split
-        // at the jamb. This makes baseboard and casing meet edge-to-edge.
-        start: Math.max(0, opening.offset - opening.width / 2 - (opening.type === 'window' ? 0.04 : 0.075) / 2),
-        end: Math.min(wall.length, opening.offset + opening.width / 2 + (opening.type === 'window' ? 0.04 : 0.075) / 2)
-      }))
+      .map((opening) => {
+        // Follow the assembly actually on this wall. Imported casings fit the
+        // aperture bounds; the generated fallback extends outside those bounds.
+        const overhang = this.openingModels?.frameOverhang(opening)
+          ?? (opening.type === 'window' ? WINDOW_FRAME_WIDTH / 2 : opening.type === 'door' ? DOOR_FRAME_WIDTH / 2 : 0);
+        return {
+          start: Math.max(0, opening.offset - opening.width / 2 - overhang),
+          end: Math.min(wall.length, opening.offset + opening.width / 2 + overhang)
+        };
+      })
       .sort((a, b) => a.start - b.start);
 
     const anchors = snapshot.dividers.flatMap((divider) => [divider.start, divider.end])
@@ -2914,6 +2923,9 @@ export class PlannerScene {
     this.wallsGroup.traverse((object) => {
       const openingId = typeof object.userData.openingId === 'string' ? object.userData.openingId : null;
       if (!openingId || !(object instanceof THREE.Mesh) || !object.visible) return;
+      // Glazing's exported boundary may sit behind the leaf. Outlining that
+      // transparent pane draws a floating rectangle through the solid panel.
+      if (object.userData.openingGlazing) return;
       if (openingId !== selected && openingId !== hovered) return;
       // Transparent pick planes provide the contour of empty wall openings in
       // the mask pass while remaining completely transparent in the scene.

@@ -141,7 +141,7 @@ export class ProductModelLibrary {
           material.needsUpdate = true;
         }
         material.envMapIntensity = !original.map && fallback
-          ? node.userData.architecturalModel ? 1.15 : this.environmentIntensity : original.intensity;
+          ? node.userData.architecturalModel ? 0.4 : this.environmentIntensity : original.intensity;
       }
     });
   }

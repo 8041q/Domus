@@ -45,6 +45,13 @@ export class OpeningModelLibrary {
 
   constructor(private models: ProductModelLibrary, private ready: (url: string) => void) {}
 
+  /** Imported frames fit INSIDE the aperture; generated casings straddle it. */
+  frameOverhang(opening: RoomOpening) {
+    const url = openingModelUrl(opening);
+    if (url && !this.disposed && this.templates.has(url) && !this.failed.has(url)) return 0;
+    return opening.type === 'window' ? .02 : opening.type === 'door' ? .0375 : 0;
+  }
+
   create(opening: RoomOpening, height = opening.height) {
     const url = openingModelUrl(opening);
     if (!url || this.disposed || this.failed.has(url)) return null;
