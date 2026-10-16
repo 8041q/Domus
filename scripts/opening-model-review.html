@@ -1,0 +1,39 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Domus opening model review</title>
+<style>body{margin:0;background:#d4d5d6;color:#202629;font:15px system-ui}header{padding:14px 24px;background:#fff}h1{font-size:20px;margin:0 0 10px}select,input,button{font:inherit;padding:6px;margin-right:12px}.columns{display:flex;width:1200px}.columns div{width:400px;padding:12px 0;text-align:center}canvas{display:block}#status{padding:8px 24px}#room{width:1200px;height:600px}label{margin-right:12px}</style>
+<header><h1>Door and window inspection</h1><label>Model <select id="model"></select></label><label>Width <input id="width" type="number" step=".05" min=".45" style="width:70px"></label><label>Height <input id="height" type="number" step=".05" min=".4" style="width:70px"></label><button id="back">Reverse view</button><button id="roomButton">Show room</button></header>
+<div id="status">Loading…</div><div class="columns"><div>Original proportions / materials</div><div>Previous stretched insert</div><div>Corrected insert</div></div><div id="studio"></div><p><a id="download" download="opening-comparison.png">Download this comparison</a> · <button id="sheet">Build comparison sheet for all nine models</button></p><div id="room"></div>
+<script type="module">
+import * as THREE from 'three';
+import {RoomEnvironment} from 'three/examples/jsm/environments/RoomEnvironment.js';
+import {ProductModelLibrary} from '../src/renderer/productModels.ts';
+import {OPENING_MODELS,fitOpeningModel} from '../src/renderer/openingModels.ts';
+import {prepareOpeningAsset} from '../src/renderer/openingMaterials.ts';
+import {PlannerScene} from '../src/renderer/PlannerScene.ts';
+import {emptyRoomSnapshot} from '../src/store.ts';
+const renderer=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});renderer.setSize(1200,430);renderer.toneMapping=THREE.NeutralToneMapping;renderer.toneMappingExposure=.98;document.querySelector('#studio').append(renderer.domElement);
+const pmrem=new THREE.PMREMGenerator(renderer),environment=pmrem.fromScene(new RoomEnvironment(),.04);
+const library=new ProductModelLibrary();library.setEnvironment(environment.texture);
+const correctedLibrary=new ProductModelLibrary(undefined,prepareOpeningAsset);correctedLibrary.setEnvironment(environment.texture);correctedLibrary.setOpeningEnvironment(environment.texture);
+const select=document.querySelector('#model'),width=document.querySelector('#width'),height=document.querySelector('#height');
+const presets={'single-window':[1.2,1.2],'double-window':[1.8,1.25],'single-hung-window':[1.2,1.35],'high-window':[1.35,.65],'sliding-window':[2.4,2.6],'single-door':[.9,2.08],'glass-door':[.9,2.08],'semi-glass-door':[.9,2.08],'glass-double-door':[1.6,2.08]};
+for(const [i,variant] of Object.keys(OPENING_MODELS).entries())select.add(new Option(`${i+1}. ${variant}`,variant));
+let flipped=false,roomScene,serial=0;
+function oldFit(model,variant,w,h){const oriented=new THREE.Group();oriented.rotation.y=OPENING_MODELS[variant].rotationY??0;oriented.add(model);oriented.updateMatrixWorld(true);const b=new THREE.Box3().setFromObject(oriented,true),s=b.getSize(new THREE.Vector3()),c=b.getCenter(new THREE.Vector3());oriented.position.set(-c.x,-b.min.y,-c.z);const root=new THREE.Group();root.add(oriented);root.scale.set(w/s.x,h/s.y,1);return root;}
+async function render(){const ticket=++serial,variant=select.value,definition=OPENING_MODELS[variant];document.querySelector('#status').textContent='Loading '+variant;const template=await library.loadModel('/internal/architecture/openings/'+definition.file);if(ticket!==serial)return;
+ const oriented=new THREE.Group();oriented.rotation.y=definition.rotationY??0;oriented.add(library.instantiate(template));oriented.updateMatrixWorld(true);const source=new THREE.Box3().setFromObject(oriented,true).getSize(new THREE.Vector3());
+ const w=+width.value,h=+height.value;
+ const correctedTemplate=await correctedLibrary.loadModel('/internal/architecture/openings/'+definition.file);
+ if(ticket!==serial)return;
+ const models=[oldFit(library.instantiate(template),variant,source.x,source.y),oldFit(library.instantiate(template),variant,w,h),fitOpeningModel(correctedLibrary.instantiate(correctedTemplate),variant,w,h)];
+ renderer.setScissorTest(true);for(const [i,model]of models.entries()){const scene=new THREE.Scene();scene.background=new THREE.Color('#d4d5d6');scene.add(model);scene.add(new THREE.HemisphereLight(0xf7f8fa,0xb8b4ae,1.15),new THREE.AmbientLight(0xffffff,.38));const key=new THREE.DirectionalLight(0xfff6eb,.82);key.position.set(4.2,7.2,4.8);scene.add(key);const fill=new THREE.DirectionalLight(0xe9edf0,.34);fill.position.set(-4.5,5.2,-4.2);scene.add(fill);const camera=new THREE.PerspectiveCamera(32,400/430,.01,50);camera.position.set(flipped?-1.2:1.2,1.5,flipped?-5.8:5.8);camera.lookAt(0,1.25,0);renderer.setViewport(i*400,0,400,430);renderer.setScissor(i*400,0,400,430);renderer.render(scene,camera);}
+ document.querySelector('#status').textContent=`${variant} — source ${source.x.toFixed(3)} × ${source.y.toFixed(3)} m; opening ${w.toFixed(2)} × ${h.toFixed(2)} m; ${flipped?'rear':'front'} view`;
+ const evidence=document.createElement('canvas');evidence.width=1200;evidence.height=500;const context=evidence.getContext('2d');context.fillStyle='#fff';context.fillRect(0,0,1200,500);context.fillStyle='#202629';context.font='18px system-ui';context.fillText(`${variant} — ${w.toFixed(2)} × ${h.toFixed(2)} m`,20,25);['Original proportions / materials','Previous stretched insert','Corrected insert'].forEach((label,i)=>context.fillText(label,i*400+20,57));context.drawImage(renderer.domElement,0,70);document.querySelector('#download').href=evidence.toDataURL();
+ for(const model of models)model.traverse(node=>{if(node.isMesh&&node.userData.openingInstanceGeometry)node.geometry.dispose();});
+ if(roomScene){roomScene.dispose();roomScene=null;await showRoom();}
+}
+async function showRoom(){const snapshot=emptyRoomSnapshot();snapshot.openings=[{id:'review',type:select.value.endsWith('window')?'window':'door',variant:select.value,wallId:'wall-v0-v1',offset:2.5,width:+width.value,height:+height.value,sillHeight:0}];snapshot.objects=[];snapshot.selectedOpeningId=null;roomScene=new PlannerScene(document.querySelector('#room'),{getSnapshot:()=>snapshot,select(){},selectOpening(){},updateObject(){},updateOpening(){},commitDrag(){},feedback(){}},{showFurniture:false,interactiveFurniture:false,interactiveArchitecture:false,sunRays:false});}
+select.onchange=()=>{[width.value,height.value]=presets[select.value];render();};width.oninput=height.oninput=width.onchange=height.onchange=render;document.querySelector('#back').onclick=()=>{flipped=!flipped;render();};document.querySelector('#roomButton').onclick=()=>{if(!roomScene)showRoom();};
+document.querySelector('#sheet').onclick=async()=>{const sheet=document.createElement('canvas');sheet.width=1200;sheet.height=9*500;const context=sheet.getContext('2d');for(const [i,variant]of Object.keys(OPENING_MODELS).entries()){select.value=variant;[width.value,height.value]=presets[variant];await render();const image=new Image();image.src=document.querySelector('#download').href;await image.decode();context.drawImage(image,0,i*500);}document.querySelector('#download').href=sheet.toDataURL();document.querySelector('#download').download='opening-model-comparisons.png';document.querySelector('#download').textContent='Download all nine comparisons';};
+await Promise.all(Object.values(OPENING_MODELS).flatMap(definition=>[library.loadModel('/internal/architecture/openings/'+definition.file),correctedLibrary.loadModel('/internal/architecture/openings/'+definition.file)]));
+select.onchange();
+</script></html>

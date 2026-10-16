@@ -15,6 +15,7 @@ export class ProductModelLibrary {
   private picking = new ModelPicking();
   private environment: THREE.Texture | null = null;
   private environmentIntensity = PRODUCT_ENVIRONMENT_INTENSITY;
+  private openingEnvironment: THREE.Texture | null = null;
   private originalEnvironments = new WeakMap<THREE.MeshStandardMaterial, { map: THREE.Texture | null; intensity: number }>();
 
   constructor(private load = async (url: string) => {
@@ -23,7 +24,7 @@ export class ProductModelLibrary {
       import('three/examples/jsm/libs/meshopt_decoder.module.js')
     ]);
     return (await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync(url)).scene;
-  }) {}
+  }, private prepare?: (scene: THREE.Group, url: string) => void) {}
 
   loadModel(url: string): Promise<THREE.Group> {
     let request = this.requests.get(url);
@@ -36,6 +37,8 @@ export class ProductModelLibrary {
           this.release(template);
           throw new Error('Model library was disposed or this asset was replaced.');
         }
+        try { this.prepare?.(scene, url); }
+        catch (error) { this.release(template); throw error; }
         scene.updateMatrixWorld(true);
         const bounds = new THREE.Box3().setFromObject(scene, true);
         if (bounds.isEmpty() || ![...bounds.min.toArray(), ...bounds.max.toArray()].every(Number.isFinite)) {
@@ -58,7 +61,7 @@ export class ProductModelLibrary {
             const triangleCount = (geometry.index?.count ?? geometry.getAttribute('position')?.count ?? 0) / 3;
             // Preserve authored index order and exports. Small procedural parts
             // do not benefit from paying the cost of building a tree.
-            if (!(node instanceof THREE.SkinnedMesh) && !Object.keys(geometry.morphAttributes).length && triangleCount >= 1000) {
+            if (!node.userData.architecturalModel && !(node instanceof THREE.SkinnedMesh) && !Object.keys(geometry.morphAttributes).length && triangleCount >= 1000) {
               pickingMeshes.push(node);
             }
           }
@@ -113,6 +116,13 @@ export class ProductModelLibrary {
     return exported;
   }
 
+  /** Architecture keeps neutral reflections when cinematic lighting dims the room. */
+  setOpeningEnvironment(texture: THREE.Texture | null) {
+    if (this.openingEnvironment === texture) return;
+    this.openingEnvironment = texture;
+    for (const template of this.templates) this.applyEnvironment(template);
+  }
+
   private applyEnvironment(template: THREE.Group) {
     template.traverse((node) => {
       if (!(node instanceof THREE.Mesh)) return;
@@ -124,12 +134,14 @@ export class ProductModelLibrary {
           this.originalEnvironments.set(material, original);
         }
         // Explicit asset environment maps take precedence over the viewport fallback.
-        const map = original.map ?? this.environment;
+        const fallback = node.userData.architecturalModel ? this.openingEnvironment ?? this.environment : this.environment;
+        const map = original.map ?? fallback;
         if (material.envMap !== map) {
           material.envMap = map;
           material.needsUpdate = true;
         }
-        material.envMapIntensity = !original.map && this.environment ? this.environmentIntensity : original.intensity;
+        material.envMapIntensity = !original.map && fallback
+          ? node.userData.architecturalModel ? 1.15 : this.environmentIntensity : original.intensity;
       }
     });
   }
@@ -147,6 +159,7 @@ export class ProductModelLibrary {
     this.requests.clear();
     this.templatesByUrl.clear();
     this.environment = null;
+    this.openingEnvironment = null;
   }
 
   private release(template: THREE.Group) {

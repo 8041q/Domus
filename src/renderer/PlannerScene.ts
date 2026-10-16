@@ -29,6 +29,8 @@ import { createFloorSurfaceGeometry } from './floorGeometry';
 import { createPerimeterShade } from './perimeterShading';
 import { createFrameQueue } from '../core/frameQueue';
 import { ProductModelLibrary } from './productModels';
+import { OpeningModelLibrary, openingModelUrl } from './openingModels';
+import { prepareOpeningAsset } from './openingMaterials';
 import { ModelContactShadows } from './modelContactShadows';
 import { createFloorCastShadow } from './floorCastShadow';
 import { reuseArchitectureMeshes } from './architectureReuse';
@@ -169,7 +171,18 @@ export class PlannerScene {
   private objectGroup = new THREE.Group();
   private helperGroup = new THREE.Group();
   private objectModels = new Map<string, THREE.Group>();
-  private productModels = new ProductModelLibrary();
+  private productModels = new ProductModelLibrary(undefined, prepareOpeningAsset);
+  private openingModels = new OpeningModelLibrary(this.productModels, (url) => {
+    if (this.disposed) return;
+    // Resolve against the current room: an opening may change while loading.
+    const snapshot = this.sceneSnapshot();
+    const affected = new Set(snapshot.openings.filter(opening => openingModelUrl(opening) === url).map(opening => opening.wallId));
+    if (!affected.size) return;
+    this.rebuildWalls(snapshot, affected);
+    this.updateCutawayWalls(true);
+    this.invalidateShadows();
+    this.requestRender();
+  });
   private modelContactShadows?: ModelContactShadows;
   private productModelRequests = new Map<string, Promise<void>>();
   private productModelTemplates = new Map<string, THREE.Group>();
@@ -395,6 +408,7 @@ export class PlannerScene {
     this.disposeGroup(this.contactShadowGroup);
     this.disposeGroup(this.objectGroup);
     this.modelContactShadows?.dispose();
+    this.openingModels?.dispose();
     this.productModels?.dispose();
     this.disposeGroup(this.helperGroup);
     for (const texture of this.floorMapAssets) texture.dispose();
@@ -1075,6 +1089,10 @@ export class PlannerScene {
     };
 
     group.traverse((obj) => {
+      if (obj instanceof THREE.Mesh && obj.userData.openingInstanceGeometry) {
+        obj.geometry.dispose();
+        return; // Materials/textures still belong to the shared asset library.
+      }
       if (obj.userData.sharedProductAsset) return;
       const renderable = obj as THREE.Object3D & {
         geometry?: THREE.BufferGeometry;
@@ -2135,9 +2153,9 @@ export class PlannerScene {
     this.fillLight.color.setHex(pairedSuns ? 0xbacfff : 0xe9edf0);
     this.scene.environment = pairedSuns ? this.pairedSunsEnvironment() : null;
     this.scene.environmentIntensity = pairedSuns ? 0.28 : 1;
-    if (this.options.showFurniture) {
-      this.productModels.setEnvironment(pairedSuns ? null : this.productEnvironment());
-    }
+    // Imported architectural finishes need reflections in the builder too.
+    this.productModels?.setEnvironment(pairedSuns ? null : this.productEnvironment());
+    this.productModels?.setOpeningEnvironment?.(this.productEnvironment());
     const glazedOpeningCount = snapshot.openings.filter((opening) => !opening.wallId.startsWith('divider-') && isSunGlazedOpening(opening)).length;
     const environmentAzimuth = effectiveSunAzimuth(snapshot.room.lighting.sunAzimuth, glazedOpeningCount);
     this.scene.environmentRotation.set(0, THREE.MathUtils.degToRad(environmentAzimuth), 0);
@@ -2764,6 +2782,22 @@ export class PlannerScene {
       return;
     }
 
+    const imported = this.openingModels?.create(opening, top - bottom);
+    if (imported) {
+      imported.position.set(centre.x, bottom, centre.z);
+      imported.rotation.y = yaw;
+      imported.name = exportName;
+      imported.traverse(node => {
+        this.tagCutawaySurface(node, wall);
+        node.userData.openingId = opening.id;
+        // Sun occlusion uses the existing glazing mask, as for generated inserts.
+        if (node instanceof THREE.Mesh) node.castShadow = false;
+      });
+      tag(imported);
+      return;
+    }
+
+    // The original generator is also the loading/error/missing-style fallback.
     // Door casings are wider and project farther into the room. Window frames
     // remain slim, with a separate projecting sill instead of a door header.
     alignedBox(opening.offset - opening.width / 2, (top + bottom) / 2, frame, top - bottom, frameDepth);

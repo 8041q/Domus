@@ -19,6 +19,8 @@ runs with Vite during local development and preview.
 - New spaces inherit their containing space’s finishes automatically; place doors in interior walls.
 - Set room height in 2D and work in metric or imperial units.
 - Add, position, resize, and restyle windows, doors, and custom openings.
+- Door/window GLBs use a separate internal asset folder with generated fallbacks;
+  see [architectural models](docs/architectural-models.md) for resizing limits.
 - Inspect the architecture in a neutral 3D preview. Direct sun light is
   intentionally disabled in this workspace.
 

@@ -40,5 +40,16 @@
         "hospitalbed"
       ]
     }
+  ],
+  "retiredIds": [
+    "model-d8343886-3ca4-4d54-ad80-dc633193feca",
+    "model-05c82742-a922-427f-b484-42b882213ddb",
+    "model-07580d01-49e7-494f-afd1-1b7021f26659",
+    "model-60c0a910-9957-4247-bed0-9651fd843a6c",
+    "model-7232c6a0-4bf0-4b4c-a531-a923c482c325",
+    "model-9f30da7a-ab46-4790-8034-19af513eda49",
+    "model-ea7cda57-3d71-441b-85b1-35a3eefb321f",
+    "model-454b44dd-581c-4c55-9881-b9f509fad534",
+    "model-65ff5786-e0c8-46a1-8be4-6d1615030025"
   ]
 }
