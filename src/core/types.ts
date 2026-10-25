@@ -2,7 +2,7 @@ export type Vec2 = { x: number; z: number };
 
 export type AppMode = 'build' | 'plan';
 export type BuildWorkspaceView = 'plan' | '3d';
-export type PlanCameraView = 'free' | 'top' | 'front' | 'back' | 'left' | 'right';
+export type PlanCameraView = 'free' | 'walk' | 'top' | 'front' | 'back' | 'left' | 'right';
 export type MeasurementSystem = 'metric' | 'imperial';
 export type RoomWall = 'north' | 'east' | 'south' | 'west';
 export type OpeningType = 'door' | 'window' | 'opening';

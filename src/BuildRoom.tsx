@@ -43,13 +43,13 @@ function openingKindLabel(type: RoomOpening['type']) {
   return 'Window';
 }
 
-const SHAPES: Array<{ id: Exclude<RoomShapeKind, 'custom'>; name: string; description: string }> = [
-  { id: 'rectangle', name: 'Rectangle', description: 'Simple four-wall room' },
-  { id: 'rounded-rectangle', name: 'Rounded rectangle', description: 'Straight sides with rounded corners' },
-  { id: 'circle', name: 'Circle', description: 'Round room with an adjustable diameter' },
-  { id: 'angled-corner', name: 'Angled corner', description: 'Five walls with one diagonal corner' },
-  { id: 'l-shape', name: 'L-shape', description: 'Connected spaces or alcoves' },
-  { id: 'recess', name: 'Recess', description: 'Room with a built-in notch' }
+const SHAPES: Array<{ id: Exclude<RoomShapeKind, 'custom'>; name: string; description: string; path: string }> = [
+  { id: 'rectangle', name: 'Rectangle', description: 'Simple four-wall room', path: 'M4 5h16v14H4z' },
+  { id: 'rounded-rectangle', name: 'Rounded rectangle', description: 'Straight sides with rounded corners', path: 'M8 5h8a4 4 0 0 1 4 4v6a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V9a4 4 0 0 1 4-4Z' },
+  { id: 'circle', name: 'Circle', description: 'Round room with an adjustable diameter', path: 'M20 12a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z' },
+  { id: 'angled-corner', name: 'Angled corner', description: 'Five walls with one diagonal corner', path: 'M4 5h11l5 5v9H4z' },
+  { id: 'l-shape', name: 'L-shape', description: 'Connected spaces or alcoves', path: 'M4 4h16v8h-8v8H4z' },
+  { id: 'recess', name: 'Recess', description: 'Room with a built-in notch', path: 'M4 4h16v16h-5v-6H9v6H4z' }
 ];
 
 function DimensionField({ label, value, min, max, system, metricStep = 0.05, onCommit }: {
@@ -459,18 +459,20 @@ export function BuildRoom() {
 
         {buildView === 'plan' && <><section className="tool-section">
           <div className="section-title-row">
-            <div><h2>Room shape</h2></div>
+            <div><h2 id="room-shape-heading">Room shape</h2></div>
             {room.shapeKind === 'custom' && <span className="quiet-pill">Custom</span>}
           </div>
-          <div className="shape-options">
+          <div className="shape-options" role="group" aria-labelledby="room-shape-heading" aria-describedby="room-shape-hint">
             {SHAPES.map((shape) => (
               <button key={shape.id} type="button" title={shape.description} aria-pressed={room.shapeKind === shape.id} className={room.shapeKind === shape.id ? 'selected' : ''} onClick={() => changeShape(shape.id)}>
-                <span className={`shape-glyph shape-${shape.id}`} aria-hidden="true" />
-                <span><strong>{shape.name}</strong><small>{shape.description}</small></span>
+                <svg className="shape-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d={shape.path} />
+                </svg>
+                <span>{shape.name}</span>
               </button>
             ))}
           </div>
-          <p className="hint">Choose a starting shape, then drag any wall or corner or use + to split a wall.{room.shapeKind === 'circle' && ' Use Diameter to resize the whole circle. Editing a dot creates a custom shape.'}</p>
+          <p className="hint" id="room-shape-hint">Start with a shape. Drag walls or corners to adjust it, or use + to split a wall.{room.shapeKind === 'circle' && ' Use Diameter to resize the whole circle. Editing a dot creates a custom shape.'}</p>
           {room.shapeKind === 'rounded-rectangle' && <div className="rounded-corner-control">
             <EditableRangeValue label="Corner radius" value={room.cornerRadius ?? Math.min(room.width, room.depth) * 0.25}
               min={0} max={(Math.min(room.width, room.depth) - 0.2) / 2} system={system}

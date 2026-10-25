@@ -1,6 +1,7 @@
 import { activeArchitecture } from '../core/activeArchitecture';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { WalkControls } from './WalkControls';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { OutlinePass } from 'three/examples/jsm/postprocessing/OutlinePass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
@@ -42,6 +43,7 @@ import { loadReportFonts, setCanvasFont } from '../core/reportFonts';
 import { wallCornerShading } from '../core/wallShading';
 import { createMoveHint } from '../core/moveHint';
 import { architectureSpacingMeasurements } from '../core/architectureSpacing';
+import { createWalkNavigation, findWalkSpawn, isWalkPositionValid, moveWalkPosition, type WalkNavigation } from '../core/walkNavigation';
 
 export interface SceneSnapshot extends PlannerSnapshot {
   selectedId?: string | null;
@@ -106,6 +108,8 @@ const SOFT_SUN_SHADOW_RADIUS = 5;
 const SHARP_SUN_SHADOW_RADIUS = 1;
 const FREE_CAMERA_FOV = 15;
 const PRESET_FOV = 32;
+const WALK_FOV = 65;
+const WALK_QUALITY_SETTLE_MS = 100;
 
 // Cutaway thresholds. `facing` is the horizontal dot product between a
 // wall's outward normal and the direction from that wall to the camera. Smaller
@@ -151,6 +155,18 @@ export class PlannerScene {
   private composer: EffectComposer;
   private outlinePass: OutlinePass;
   private controls: OrbitControls;
+  private walkControls: WalkControls;
+  private walkNavigation: WalkNavigation | null = null;
+  private walkMotionUntil = 0;
+  private walkReturnView: {
+    position: THREE.Vector3;
+    quaternion: THREE.Quaternion;
+    target: THREE.Vector3;
+    fov: number;
+    maxDistance: number;
+    view: PlanCameraView;
+    damping: boolean;
+  } | null = null;
   private raycaster = new THREE.Raycaster();
   private pointer = new THREE.Vector2();
   private floorGroup = new THREE.Group();
@@ -265,7 +281,8 @@ export class PlannerScene {
       this.renderer.outputColorSpace = THREE.SRGBColorSpace;
       this.renderer.toneMapping = THREE.NeutralToneMapping;
       this.renderer.toneMappingExposure = 0.98;
-      this.renderer.domElement.tabIndex = -1;
+      this.renderer.domElement.tabIndex = 0;
+      this.renderer.domElement.setAttribute('aria-label', '3D room view');
       this.container.appendChild(this.renderer.domElement);
       this.moveHint = createMoveHint(this.container);
 
@@ -336,6 +353,14 @@ export class PlannerScene {
       this.controls.addEventListener('change', this.onControlsChange);
       this.controls.addEventListener('start', this.onControlsStart);
       this.controls.addEventListener('end', this.onControlsEnd);
+      this.walkControls = new WalkControls(this.camera, this.renderer.domElement, {
+        move: (dx, dz) => this.moveWalkCamera(dx, dz),
+        change: this.requestRender,
+        exit: () => {
+          this.setCameraView('free');
+          this.bridge.cameraViewChanged?.('free');
+        }
+      });
 
       // Broad bounced light keeps the architectural shell legible. A single
       // directional shadow map supplies contact and furniture shadows; fixtures
@@ -398,6 +423,7 @@ export class PlannerScene {
     window.removeEventListener('blur', this.onWindowBlur);
     this.openingMoves.clear();
     this.pointerMoves.clear();
+    this.walkControls?.dispose();
     this.controls?.removeEventListener('change', this.onControlsChange);
     this.controls?.removeEventListener('start', this.onControlsStart);
     this.controls?.removeEventListener('end', this.onControlsEnd);
@@ -789,7 +815,8 @@ export class PlannerScene {
     const saved = { position: this.camera.position.clone(), quaternion: this.camera.quaternion.clone(), target: this.controls.target.clone(),
       fov: this.camera.fov, aspect: this.camera.aspect, near: this.camera.near, far: this.camera.far,
       view: this.currentCameraView, ratio: this.renderer.getPixelRatio(), maxDistance: this.controls.maxDistance,
-      damping: this.controls.enableDamping, enabled: this.controls.enabled, helpers: this.helperGroup.visible, layers: this.camera.layers.mask };
+      damping: this.controls.enableDamping, enabled: this.controls.enabled, helpers: this.helperGroup.visible, layers: this.camera.layers.mask,
+      walkReturnView: this.walkReturnView, walkNavigation: this.walkNavigation };
     const snapshot = structuredClone(this.sceneSnapshot());
     const warnings = snapshot.objects.filter((object) => PRODUCTS[object.productId]).flatMap((object, index) =>
       clearanceIssues(object, architectureRoom(snapshot), snapshot.objects.filter((other) => other.id !== object.id && PRODUCTS[other.productId]))
@@ -807,6 +834,11 @@ export class PlannerScene {
       this.camera.aspect = 1600 / 950;
       for (const view of ROOM_PDF_VIEWS) {
         this.setCameraView(view);
+        // Leaving Walk restores the planner's controls and helpers. Captures
+        // still need their own fixed, annotation-free presentation.
+        this.controls.enabled = false;
+        this.controls.enableDamping = false;
+        this.helperGroup.visible = false;
         // Fit both tall rooms and long/narrow rooms into the fixed export aspect.
         const bounds = roomBounds(snapshot.room.vertices);
         const spanX = view === 'left' || view === 'right' ? bounds.depth : bounds.width;
@@ -831,8 +863,12 @@ export class PlannerScene {
       this.camera.position.copy(saved.position); this.camera.quaternion.copy(saved.quaternion);
       this.camera.fov = saved.fov; this.camera.aspect = saved.aspect; this.camera.near = saved.near; this.camera.far = saved.far;
       this.camera.updateProjectionMatrix(); this.controls.target.copy(saved.target); this.controls.maxDistance = saved.maxDistance;
-      this.currentCameraView = saved.view; this.controls.update();
+      this.currentCameraView = saved.view;
+      if (saved.view !== 'walk') this.controls.update();
       this.controls.enableDamping = saved.damping; this.controls.enabled = saved.enabled; this.helperGroup.visible = saved.helpers;
+      this.walkReturnView = saved.walkReturnView; this.walkNavigation = saved.walkNavigation;
+      this.renderer.domElement.setAttribute('aria-label', saved.view === 'walk' ? 'Walk through room' : '3D room view');
+      this.walkControls.setEnabled(saved.view === 'walk');
       this.camera.layers.mask = saved.layers;
       this.updateCeilingVisibility(true); this.updateCutawayWalls(true); this.requestRender();
     }
@@ -846,6 +882,17 @@ export class PlannerScene {
   }
 
   setCameraView(view: PlanCameraView) {
+    if (view === 'walk') {
+      this.enterWalkView();
+      return;
+    }
+    if (this.currentCameraView === 'walk') {
+      const restoredView = this.leaveWalkView();
+      if (view === 'free') {
+        if (restoredView !== 'free') this.leavePresetForManualNavigation();
+        return;
+      }
+    }
     if (view === 'free' && this.currentCameraView !== 'free') {
       this.leavePresetForManualNavigation();
       this.requestRender();
@@ -917,11 +964,115 @@ export class PlannerScene {
     this.requestRender();
   }
 
+  private enterWalkView() {
+    const snapshot = this.sceneSnapshot();
+    const navigation = createWalkNavigation(snapshot);
+    const preferred = this.currentCameraView === 'walk' ? this.camera.position : this.controls.target;
+    const spawn = findWalkSpawn(navigation, preferred, snapshot.selectedSpaceId);
+    if (!spawn) {
+      // Some custom outlines have no floor wide enough to contain a person.
+      // Keep the usable planner camera when a walkable position cannot be found.
+      if (this.currentCameraView === 'walk') this.leaveWalkView();
+      this.bridge.cameraViewChanged?.(this.currentCameraView);
+      return;
+    }
+    if (this.currentCameraView !== 'walk') {
+      this.onWindowBlur();
+      this.pointerMoves.clear();
+      this.controlsInteracting = false;
+      const damping = this.controls.enableDamping;
+      // Disabling input alone does not clear OrbitControls' pending damping.
+      this.controls.enableDamping = false;
+      this.controls.update();
+      this.walkReturnView = {
+        position: this.camera.position.clone(), quaternion: this.camera.quaternion.clone(),
+        target: this.controls.target.clone(), fov: this.camera.fov,
+        maxDistance: this.controls.maxDistance, view: this.currentCameraView, damping
+      };
+    }
+    this.walkNavigation = navigation;
+    this.walkMotionUntil = 0;
+    // Reset view can re-enter an active walk session. Clear held input and
+    // synchronize the controller with the new pose when it is enabled below.
+    this.walkControls.setEnabled(false);
+    const direction = new THREE.Vector3();
+    this.camera.getWorldDirection(direction);
+    direction.y = 0;
+    if (direction.lengthSq() < 0.001) direction.set(0, 0, -1);
+    direction.normalize();
+    this.currentCameraView = 'walk';
+    this.controls.enabled = false;
+    this.camera.position.set(spawn.x, navigation.eyeHeight, spawn.z);
+    this.camera.fov = WALK_FOV;
+    this.camera.updateProjectionMatrix();
+    this.camera.lookAt(this.camera.position.clone().add(direction));
+    this.updateCameraClipping(snapshot.room);
+    this.helperGroup.visible = false;
+    if (this.moveHint) this.moveHint.hidden = true;
+    this.renderer.domElement.setAttribute('aria-label', 'Walk through room');
+    this.walkControls.setEnabled(true);
+    this.updateCeilingVisibility(true);
+    this.updateCutawayWalls(true);
+    this.requestRender();
+  }
+
+  private leaveWalkView() {
+    this.walkControls.setEnabled(false);
+    this.walkNavigation = null;
+    this.walkMotionUntil = 0;
+    const saved = this.walkReturnView;
+    this.walkReturnView = null;
+    if (saved) {
+      this.camera.position.copy(saved.position);
+      this.camera.quaternion.copy(saved.quaternion);
+      this.camera.fov = saved.fov;
+      this.camera.updateProjectionMatrix();
+      this.controls.target.copy(saved.target);
+      this.controls.maxDistance = saved.maxDistance;
+      this.currentCameraView = saved.view;
+      this.controls.update();
+      this.controls.enableDamping = saved.damping;
+    } else this.currentCameraView = 'free';
+    this.controls.enabled = true;
+    this.helperGroup.visible = true;
+    this.renderer.domElement.setAttribute('aria-label', '3D room view');
+    this.updateCeilingVisibility(true);
+    this.updateCutawayWalls(true);
+    this.requestRender();
+    return this.currentCameraView;
+  }
+
+  private moveWalkCamera(dx: number, dz: number) {
+    if (this.currentCameraView !== 'walk' || !this.walkNavigation) return;
+    const position = moveWalkPosition(this.walkNavigation, this.camera.position, { x: dx, z: dz });
+    this.camera.position.set(position.x, this.walkNavigation.eyeHeight, position.z);
+  }
+
+  private refreshWalkNavigation(snapshot: SceneSnapshot) {
+    this.walkNavigation = createWalkNavigation(snapshot);
+    let position: Vec2 = this.camera.position;
+    if (!isWalkPositionValid(this.walkNavigation, position)) {
+      // Walking may have crossed into a different space since entry. Recover
+      // near the current position rather than the finish editor's selected space.
+      const spawn = findWalkSpawn(this.walkNavigation, position);
+      if (!spawn) {
+        this.setCameraView('free');
+        this.bridge.cameraViewChanged?.('free');
+        return;
+      }
+      position = spawn;
+    }
+    this.camera.position.set(position.x, this.walkNavigation.eyeHeight, position.z);
+    this.updateCameraClipping(snapshot.room);
+  }
+
   private updateCameraClipping(room = this.sceneSnapshot().room) {
     const bounds = roomBounds(room.vertices);
     const centre = new THREE.Vector3((bounds.minX + bounds.maxX) / 2, room.height / 2, (bounds.minZ + bounds.maxZ) / 2);
     const radius = Math.hypot(bounds.width, bounds.depth, room.height) / 2;
-    const far = Math.max(100, this.camera.position.distanceTo(centre) + radius + 16);
+    // A walker stays within the room bounds. Cover the complete room diagonal
+    // once so clipping remains valid at every position without per-frame work.
+    const far = Math.max(100, this.currentCameraView === 'walk' ? radius * 2 + 16 : this.camera.position.distanceTo(centre) + radius + 16);
     // A fixed 8 cm near plane wastes most depth-buffer precision when the camera
     // is tens of metres away. Thin wall, floor and trim layers then fight for the
     // same pixels and shimmer as the user orbits a zoomed-out room. The distance
@@ -963,7 +1114,9 @@ export class PlannerScene {
       this.lastFloorFinish = floorFinish;
       this.lastOpeningsKey = openingsKey;
       const bounds = roomBounds(snapshot.room.vertices);
-      this.controls.target.set((bounds.minX + bounds.maxX) / 2, snapshot.room.height * 0.5, (bounds.minZ + bounds.maxZ) / 2);
+      if (this.currentCameraView !== 'walk') {
+        this.controls.target.set((bounds.minX + bounds.maxX) / 2, snapshot.room.height * 0.5, (bounds.minZ + bounds.maxZ) / 2);
+      }
       this.updateShadowBounds(snapshot);
     } else if (floorFinish !== this.lastFloorFinish) {
       // Keep ordinary floor finish changes decoupled from geometry rebuilds. The
@@ -1006,6 +1159,7 @@ export class PlannerScene {
       this.lastOpeningsKey = openingsKey;
     }
     this.lastRenderedOpenings = snapshot.openings;
+    if (architectureChanged && this.currentCameraView === 'walk') this.refreshWalkNavigation(snapshot);
     this.syncSunsetAngles(snapshot);
     this.syncObjects(snapshot);
     this.syncOpeningHighlight(snapshot);
@@ -2187,7 +2341,7 @@ export class PlannerScene {
       || this.currentCameraView === 'left'
       || this.currentCameraView === 'right';
 
-    let visible = sidePreset;
+    let visible = sidePreset || this.currentCameraView === 'walk';
     if (this.currentCameraView === 'free') {
       const offset = this.camera.position.clone().sub(this.controls.target);
       const horizontal = Math.hypot(offset.x, offset.z);
@@ -2915,6 +3069,10 @@ export class PlannerScene {
 
   private syncOpeningHighlight(snapshot: SceneSnapshot) {
     if (!this.outlinePass) return;
+    if (this.currentCameraView === 'walk') {
+      this.outlinePass.selectedObjects = [];
+      return;
+    }
     const outlined: THREE.Object3D[] = [];
     const model = this.options.showFurniture && snapshot.selectedId ? this.objectModels.get(snapshot.selectedId) : null;
     if (model) outlined.push(model);
@@ -2941,10 +3099,13 @@ export class PlannerScene {
   }
 
   private updateCutawayWalls(force = false) {
+    // Walk has fixed, enclosed architecture. Entry and architecture/asset changes
+    // force this update; camera movement cannot change any wall's visibility.
+    if (this.currentCameraView === 'walk' && !force) return;
     const snapshot = this.sceneSnapshot();
-    // Only the explicit Top preset shows the complete wall outline. In Free cam,
-    // foreground walls must stay hidden even as the camera approaches top-down.
-    const showAllWalls = this.currentCameraView === 'top';
+    // Top shows the complete wall outline; Walk keeps the room enclosed.
+    // Free cam retains its cutaway even as the camera approaches top-down.
+    const showAllWalls = this.currentCameraView === 'top' || this.currentCameraView === 'walk';
     const nextState = new Map<string, boolean>();
 
     for (const wall of getRoomWalls(snapshot.room)) {
@@ -3008,7 +3169,7 @@ export class PlannerScene {
   private updateInteriorWallView(snapshot: SceneSnapshot) {
     const walls = getPhysicalWalls(snapshot.room, snapshot.dividers).filter((wall) => wall.id.startsWith('divider-'));
     const profiles = new Map(walls.map((wall) => [wall.id,
-      interiorWallProfile(wall, snapshot.room.height, snapshot.interiorWallView ?? 'up')]));
+      interiorWallProfile(wall, snapshot.room.height, this.currentCameraView === 'walk' ? 'up' : snapshot.interiorWallView ?? 'up')]));
     const key = JSON.stringify([...profiles].map(([id, profile]) => [id, profile.map((point) => Math.round(point.height * 1000))]));
     if (key !== this.interiorViewKey) {
       this.interiorViewKey = key;
@@ -5048,6 +5209,7 @@ export class PlannerScene {
   }
 
   private onPointerDown = (event: PointerEvent) => {
+    if (this.currentCameraView === 'walk') return;
     this.pointerMoves.clear();
     if (event.button !== 0) return;
     // A room selection takes keyboard focus away from the architecture inputs.
@@ -5121,6 +5283,7 @@ export class PlannerScene {
   };
 
   private onPointerMove = (event: PointerEvent) => {
+    if (this.currentCameraView === 'walk') return;
     if (this.openingDragging) {
       if (this.moveHint) this.moveHint.hidden = true;
       if (event.pointerId === this.openingDragging.pointerId) this.openingMoves.push(event);
@@ -5133,6 +5296,7 @@ export class PlannerScene {
   };
 
   private movePointer(event: PointerEvent) {
+    if (this.currentCameraView === 'walk') return;
     if (this.openingDragging) {
       if (this.moveHint) this.moveHint.hidden = true;
       if (event.pointerId === this.openingDragging.pointerId) this.openingMoves.push(event);
@@ -5230,6 +5394,7 @@ export class PlannerScene {
   };
 
   private onPointerUp = (event: PointerEvent) => {
+    if (this.currentCameraView === 'walk') return;
     this.pointerMoves.flush();
     if (this.wallClick?.pointerId === event.pointerId) {
       const click = this.wallClick;
@@ -5452,6 +5617,7 @@ export class PlannerScene {
   private onControlsChange = () => this.handleControlsChange();
 
   private handleControlsChange() {
+    if (this.currentCameraView === 'walk') return;
     if (this.controlsInteracting && this.currentCameraView !== 'free') {
       const currentDirection = this.camera.position.clone().sub(this.controls.target);
       if (currentDirection.lengthSq() > 1e-8 && this.controlsInteractionStartDirection.lengthSq() > 1e-8) {
@@ -5508,23 +5674,32 @@ export class PlannerScene {
     // flag, avoiding a second geometry/shadow update from the subscription.
     if (this.stateSyncPending) this.renderFromState();
     this.animationFrame = 0;
-    const controlsChanged = this.controls.update();
-    const moving = !!(this.dragging || this.openingDragging || this.controlsInteracting || controlsChanged);
+    const walkView = this.currentCameraView === 'walk';
+    const walking = walkView && this.walkControls.update();
+    const controlsChanged = !walkView && this.controls.update();
+    const now = performance.now();
+    if (walking) this.walkMotionUntil = now + WALK_QUALITY_SETTLE_MS;
+    // Sparse pointer samples must not resize GPU buffers back and forth between
+    // every moving frame. Restore full quality once motion has actually settled.
+    const walkSettling = walkView && now < (this.walkMotionUntil ?? 0);
+    const moving = !!(this.dragging || this.openingDragging || this.controlsInteracting || controlsChanged || walking || walkSettling);
     const pixelRatio = moving ? Math.min(1, this.restingPixelRatio) : this.restingPixelRatio;
     if (this.renderer.getPixelRatio() !== pixelRatio) {
       // Spend fewer pixels during motion, then restore a crisp stationary frame.
       this.renderer.setPixelRatio(pixelRatio);
       this.composer.setPixelRatio(pixelRatio);
     }
-    this.updateCameraClipping();
-    this.updateCeilingVisibility();
-    this.updateCutawayWalls();
-    this.layoutArchitectureSpacing();
-    this.updateMeasurementLabelOrientation();
-    this.updateMeasurementLabelScale();
-    this.updateMeasurementLineGaps();
-    this.updateSpacingMeasurementLines();
-    this.updateSpacingMeasurementLines(this.architectureSpacingGroup, this.architectureSpacingLines, this.architectureSpacingLabels?.values() ?? []);
+    if (!walkView) {
+      this.updateCameraClipping();
+      this.updateCeilingVisibility();
+      this.updateCutawayWalls();
+      this.layoutArchitectureSpacing();
+      this.updateMeasurementLabelOrientation();
+      this.updateMeasurementLabelScale();
+      this.updateMeasurementLineGaps();
+      this.updateSpacingMeasurementLines();
+      this.updateSpacingMeasurementLines(this.architectureSpacingGroup, this.architectureSpacingLines, this.architectureSpacingLabels?.values() ?? []);
+    }
 
     // Native MSAA keeps ordinary room geometry and floor textures crisp. Only a
     // highlighted item needs the composer's outline pass.
@@ -5532,22 +5707,24 @@ export class PlannerScene {
     if (this.outlinePass.selectedObjects.length) this.composer.render();
     else this.renderer.render(this.scene, this.camera);
 
-    const previousAutoClear = this.renderer.autoClear;
-    const previousBackground = this.scene.background;
-    const previousCameraLayerMask = this.camera.layers.mask;
-    try {
-      this.renderer.autoClear = false;
-      // Three.js WebGLBackground force-clears when Scene.background is a Color,
-      // even if autoClear is false. Temporarily suppress only the background for
-      // the annotation overlay so the completed 3D frame is preserved.
-      this.scene.background = null;
-      this.camera.layers.set(ANNOTATION_TEXT_LAYER);
-      this.renderer.setRenderTarget(null);
-      this.renderer.render(this.scene, this.camera);
-    } finally {
-      this.camera.layers.mask = previousCameraLayerMask;
-      this.scene.background = previousBackground;
-      this.renderer.autoClear = previousAutoClear;
+    if (!walkView) {
+      const previousAutoClear = this.renderer.autoClear;
+      const previousBackground = this.scene.background;
+      const previousCameraLayerMask = this.camera.layers.mask;
+      try {
+        this.renderer.autoClear = false;
+        // Three.js WebGLBackground force-clears when Scene.background is a Color,
+        // even if autoClear is false. Temporarily suppress only the background for
+        // the annotation overlay so the completed 3D frame is preserved.
+        this.scene.background = null;
+        this.camera.layers.set(ANNOTATION_TEXT_LAYER);
+        this.renderer.setRenderTarget(null);
+        this.renderer.render(this.scene, this.camera);
+      } finally {
+        this.camera.layers.mask = previousCameraLayerMask;
+        this.scene.background = previousBackground;
+        this.renderer.autoClear = previousAutoClear;
+      }
     }
 
     // OrbitControls damping needs a few follow-up frames, but an idle scene should do
@@ -5556,6 +5733,6 @@ export class PlannerScene {
       this.firstFrameRendered = true;
       this.options.onReady?.();
     }
-    if (this.controlsInteracting || controlsChanged) this.requestRender();
+    if (this.controlsInteracting || controlsChanged || walking || walkSettling) this.requestRender();
   }
 }

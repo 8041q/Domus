@@ -24,6 +24,7 @@ const AIExperimentPanel = lazy(() => import('./ai/AIExperimentPanel').then((modu
 const CATEGORIES: Array<'All' | ProductCategory> = ['All', ...PRODUCT_CATEGORIES];
 const VIEW_PRESETS: Array<{ id: PlanCameraView; label: string }> = [
   { id: 'free', label: 'Free cam' },
+  { id: 'walk', label: 'Walk' },
   { id: 'top', label: 'Top' },
   { id: 'front', label: 'Front' },
   { id: 'right', label: 'Right' },
@@ -294,9 +295,17 @@ function DesignPanel({ onClose }: { onClose: () => void }) {
 }
 
 function InteractionStatus() {
+  const walking = usePlannerStore((s) => s.planView === 'walk');
   const activeSnap = usePlannerStore((s) => s.activeSnap);
   const collisionId = usePlannerStore((s) => s.collisionId);
   const collisionPush = usePlannerStore((s) => s.collisionPush);
+
+  if (walking) return (
+    <div className="interaction-status free">
+      <span className="status-indicator" />
+      Walk mode · movement stays inside the room · Esc to exit
+    </div>
+  );
 
   return (
     <div className={`interaction-status ${collisionId ? 'error' : collisionPush ? 'contact' : activeSnap.label === 'Free move' ? 'free' : activeSnap.kind !== 'none' ? 'snap' : ''}`}>
@@ -423,6 +432,7 @@ export function PlanRoom({ onExportReady, onPdfExportReady }: {
   const setPlanView = usePlannerStore((s) => s.setPlanView);
   const interiorWallView = usePlannerStore((s) => s.interiorWallView);
   const setInteriorWallView = usePlannerStore((s) => s.setInteriorWallView);
+  const walking = planView === 'walk';
 
   useEffect(() => {
     if (FEATURES.interiorWalls && spaces.length && !spaces.some((space) => space.id === selectedSpaceId)) selectSpace(spaces[0].id);
@@ -452,8 +462,8 @@ export function PlanRoom({ onExportReady, onPdfExportReady }: {
           {FEATURES.interiorWalls && <EditingSpaceSelector spaces={spaces} value={selectedSpaceId ?? spaces[0]?.id ?? ''} onChange={selectSpace} />}
           <div className={`designer-topbar ${FEATURES.interiorWalls ? '' : 'without-space-selector'}`} aria-label="Room view controls">
             <div className="view-preset-bar" role="group" aria-label="3D room view">
-              {FEATURES.interiorWalls && <><button type="button" className={interiorWallView === 'up' ? 'active' : ''} aria-pressed={interiorWallView === 'up'} onClick={() => setInteriorWallView('up')}>Walls up</button>
-              <button type="button" className={interiorWallView === 'down' ? 'active' : ''} aria-pressed={interiorWallView === 'down'} onClick={() => setInteriorWallView('down')}>Walls down</button>
+              {FEATURES.interiorWalls && <><button type="button" disabled={walking} title={walking ? 'Walk uses full-height walls' : undefined} className={walking || interiorWallView === 'up' ? 'active' : ''} aria-pressed={walking || interiorWallView === 'up'} onClick={() => setInteriorWallView('up')}>Walls up</button>
+              <button type="button" disabled={walking} title={walking ? 'Walk uses full-height walls' : undefined} className={!walking && interiorWallView === 'down' ? 'active' : ''} aria-pressed={!walking && interiorWallView === 'down'} onClick={() => setInteriorWallView('down')}>Walls down</button>
               <span className="view-control-divider" aria-hidden="true" /></>}
               {VIEW_PRESETS.map((view) => <button key={view.id} type="button" className={planView === view.id ? 'active' : ''} aria-pressed={planView === view.id} onClick={() => setPlanView(view.id)}>{view.label}</button>)}
             </div>
@@ -495,7 +505,7 @@ export function PlanRoom({ onExportReady, onPdfExportReady }: {
           {FEATURES.aiExperiment && showAi && <Suspense fallback={<AssistantOpening onClose={() => setShowAi(false)} />}><AIExperimentPanel onClose={() => setShowAi(false)} /></Suspense>}
           {showFinishes && <FinishesPanel onClose={() => setShowFinishes(false)} />}
           {showViewOptions && <DesignPanel onClose={() => setShowViewOptions(false)} />}
-          {selectedId && !(FEATURES.aiExperiment && showAi) && <SelectionPanel />}
+          {selectedId && !walking && !(FEATURES.aiExperiment && showAi) && <SelectionPanel />}
         </div>
 
         <InteractionStatus />

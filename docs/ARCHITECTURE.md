@@ -179,6 +179,33 @@ Free cam is independent of wall presentation. An orbit from Top, Front, Back,
 Left or Right switches to Free cam while retaining the view direction and framing.
 Zoom and pan retain the fixed preset; the wall toggle does not reset the camera.
 
+Walk is a separate first-person camera view. It keeps the camera at eye level
+and routes keyboard movement, mouse floor-plane movement and wheel steps through
+the same semantic wall collision rules. Left drag looks around; WASD and arrow
+keys move only while the viewport has focus. Focus loss cancels movement. Walk
+temporarily shows full walls and ceiling and hides editing helpers and furniture
+selection. Leaving Walk restores the prior planner camera and wall display
+preference. Its position and input state are renderer state rather than saved
+project data.
+
+Walk batches pointer input and resolves one combined horizontal movement per
+frame. Keyboard acceleration and braking use elapsed time, and wheel/trackpad
+travel eases through a bounded queue. Blur, hidden tabs and input composition
+clear pending motion. Cached wall bases and bounds reject distant collision
+candidates before continuous sweeps; recovery searches near the walker and can
+fall back outside an unusably narrow editing space.
+
+Walk renders the scene once and skips hidden measurement layout and the text
+overlay. Its enclosed walls and ceiling update when architecture changes, and a
+stable clipping range covers the whole room. A short quality-settling interval
+avoids resizing render targets between sparse mouse samples; the final frame
+restores full resolution, then the renderer sleeps while idle.
+
+Walk collision follows the full semantic architecture, independently of visual
+cutaways. Windows and closed door leaves remain solid; bare passages and door
+frames allow traversal when the viewer fits. The outer floor polygon remains a
+hard boundary even at exterior apertures.
+
 Placement resolves in core code before rendering. It keeps oriented footprints
 inside arbitrary room polygons, applies magnetic wall/object/centre snaps, and
 checks product-specific overlap and clearance rules. Holding Shift during an

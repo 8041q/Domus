@@ -29,7 +29,7 @@ runs with the local production runtime and Vite development/preview servers.
 - Place, move, rotate, duplicate, and remove furniture, including registered GLB models.
 - Use wall, object, and room-centre snapping with deterministic collision and
   clearance checks.
-- Switch between Free cam, Top, Front, Right, Back, and Left views, with interior walls up or down.
+- Switch between Free cam, Walk, Top, Front, Right, Back, and Left views, with interior walls up or down.
 - Toggle room, product, spacing, and clearance annotations.
 - Change PBR floor finishes, wall and ceiling colours, baseboard styles, and
   ceiling-light settings.
@@ -158,6 +158,16 @@ skipped when those files are absent.
 | Keep a furniture selection while orbiting | Hold `Shift` and drag empty space |
 | Move furniture without snapping | Start dragging it, then hold `Shift` |
 | Use the fine Build Room snap | Hold `Shift` while dragging in 2D |
+
+Choose **Walk** to explore the room from eye level with wall collisions. Click the
+room, then use `WASD` or arrow keys to move. Drag with the left mouse button to
+look around, drag with the right or middle button to move across the floor, and
+scroll to walk forward or backward. `Esc` or **Exit walk** returns to the previous
+planner camera. Walk shows full-height walls and the ceiling; your wall display
+preference returns when you leave. Furniture editing shortcuts are paused while
+walking. Walls, windows and closed doors block movement. Bare passages and door
+frames can be crossed when there is enough clearance, while the outer floor
+boundary always keeps you inside the room.
 
 Build Room walls, corners, and openings can be dragged directly. Selecting an
 item opens its numeric controls for precise edits.

@@ -210,6 +210,11 @@ export function Viewport3D({
       <LoadingStatus phase="export" active={!failure && (exportingPdf || exportingGlb)} blocking label={exportingPdf ? 'Preparing room report…' : 'Preparing 3D export…'}
         detail={exportingPdf ? 'Capturing room views and measurements' : 'Gathering room geometry and materials'} />
       <div className="viewport" ref={ref} hidden={failure} />
+      {view === 'walk' && !failure && <div className="walk-controls" role="note" aria-label="Walk controls">
+        <div><strong>Walk</strong><span>Click the room to use <kbd>WASD</kbd> or arrow keys.</span>
+          <span>Drag to look · Right/middle drag to move · Scroll to walk</span></div>
+        <button type="button" onClick={() => usePlannerStore.getState().setPlanView('free')}>Exit walk <kbd>Esc</kbd></button>
+      </div>}
       <LoadingStatus phase="models" active={!failure && (modelStatus.loading || !!modelStatus.error)}
         label={modelStatus.loading ? 'Loading furniture…' : 'Some furniture could not load'}
         detail={modelStatus.loading ? (modelStatus.total > 1 ? undefined : 'Preparing the model for your room') : modelStatus.error ?? undefined}

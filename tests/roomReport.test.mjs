@@ -462,12 +462,13 @@ test('a font failure blocks PDF capture and allows the next export to retry', as
 test('a failed PDF capture restores camera, render size, helper visibility and controls', async () => {
   const snapshot = emptyRoomSnapshot(), camera = new THREE.PerspectiveCamera(37, 4 / 3, 0.2, 150);
   camera.position.set(4, 6, 7); camera.layers.enable(1);
-  const renderer = { ratio: 2, size: [800, 600], getPixelRatio() { return this.ratio; }, setPixelRatio(value) { this.ratio = value; },
+  const renderer = { domElement: { setAttribute() {} }, ratio: 2, size: [800, 600], getPixelRatio() { return this.ratio; }, setPixelRatio(value) { this.ratio = value; },
     getSize(target) { return target.set(...this.size); }, setSize(x, y) { this.size = [x, y]; }, render() { throw new Error('GPU capture failed'); } };
   const scene = Object.create(PlannerScene.prototype);
   Object.assign(scene, { floorTextureReady: Promise.resolve(), spaceFloorReady: [], productModelRequests: new Map(), productModelErrors: new Map(),
     disposed: false, bridge: { getSnapshot: () => snapshot }, sceneSnapshot: () => snapshot, renderer, camera,
     controls: { target: new THREE.Vector3(2, 1, 3), maxDistance: 30, enableDamping: true, enabled: true, update() {} },
+    walkControls: { setEnabled() {} },
     helperGroup: { visible: true }, currentCameraView: 'free', scene: {}, updateCameraClipping() {}, updateCeilingVisibility() {}, updateCutawayWalls() {}, requestRender() {},
     setCameraView(view) { this.currentCameraView = view; this.camera.position.set(0, 30, 3); this.controls.target.set(2, 1, 2); } });
   const before = { position: camera.position.toArray(), quaternion: camera.quaternion.toArray(), layers: camera.layers.mask, target: scene.controls.target.toArray() };

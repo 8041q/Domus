@@ -163,21 +163,12 @@ input[type="range"]:disabled { opacity: .45; }
 .unit-toggle button { border: 0; border-radius: 5px; background: transparent; padding: 4px 7px; color: var(--muted-foreground); font-size: 9px; font-weight: 650; letter-spacing: var(--font-strong-spacing); cursor: pointer; }
 .unit-toggle button.active { background: var(--card); color: var(--foreground); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
 
-.shape-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.shape-options > button { min-height: 62px; border: 1px solid transparent; border-radius: 9px; background: var(--muted); padding: 9px; display: grid; grid-template-columns: 28px minmax(0,1fr); align-items: center; gap: 8px; text-align: left; cursor: pointer; transition: border-color .15s ease, background .15s ease; }
-.shape-options > button:hover { background: var(--accent); }
-.shape-options > button.selected { border-color: #a1a1a6; background: var(--card); }
-.shape-options > button > span:last-child { display: grid; min-width: 0; }
-.shape-options strong { font-size: 10.5px; font-weight: 500; line-height: 1.35; }
-.shape-options small { display: none; }
-.shape-glyph { width: 28px; height: 25px; display: block; position: relative; color: var(--foreground); opacity: .65; }
-.shape-glyph::before { content: ''; position: absolute; inset: 3px; border: 2px solid currentColor; border-radius: 2px; }
-.shape-angled-corner::before { inset: 2px; border: 0; background: currentColor; clip-path: polygon(0 0, 72% 0, 100% 28%, 100% 100%, 0 100%); }
-.shape-angled-corner::after { content: ''; position: absolute; inset: 5px; background: var(--card); clip-path: polygon(0 0, 69% 0, 100% 31%, 100% 100%, 0 100%); }
-.shape-l-shape::before { inset: 2px; border: 0; background: currentColor; clip-path: polygon(0 0, 100% 0, 100% 55%, 61% 55%, 61% 100%, 0 100%); }
-.shape-l-shape::after { content: ''; position: absolute; inset: 5px; background: var(--card); clip-path: polygon(0 0, 100% 0, 100% 48%, 52% 48%, 52% 100%, 0 100%); }
-.shape-recess::before { inset: 2px; border: 0; background: currentColor; clip-path: polygon(0 0, 100% 0, 100% 100%, 71% 100%, 71% 73%, 39% 73%, 39% 100%, 0 100%); }
-.shape-recess::after { content: ''; position: absolute; inset: 5px; background: var(--card); clip-path: polygon(0 0, 100% 0, 100% 100%, 68% 100%, 68% 67%, 34% 67%, 34% 100%, 0 100%); }
+.shape-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.shape-options > button { min-width: 0; min-height: 44px; border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); background: var(--card); padding: 8px 10px; display: flex; align-items: center; gap: 8px; text-align: left; cursor: pointer; font-size: 10.5px; font-weight: 500; line-height: 1.35; letter-spacing: var(--font-strong-spacing); transition: border-color .15s ease, background .15s ease, box-shadow .15s ease; }
+.shape-options > button:hover { border-color: color-mix(in oklch, var(--primary) 40%, var(--border)); background: var(--accent); }
+.shape-options > button.selected { border-color: var(--primary); background: var(--muted); box-shadow: inset 0 0 0 .5px var(--primary); }
+.shape-glyph { width: 20px; height: 20px; flex: 0 0 auto; color: var(--muted-foreground); }
+.shape-options > button.selected .shape-glyph { color: var(--foreground); }
 
 .opening-section { padding-bottom: 18px; }
 .opening-quick-add { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
@@ -241,6 +232,21 @@ input[type="range"]:disabled { opacity: .45; }
 .viewport { width: 100%; height: 100%; min-height: 420px; background: #d2d2d2; }
 .viewport canvas { display: block; width: 100%; height: 100%; touch-action: none; outline: none; }
 .viewport-stage { background: #d2d2d2; }
+.viewport canvas:focus-visible { outline: 2px solid var(--primary); outline-offset: -3px; }
+.walk-controls { position: absolute; z-index: 6; bottom: 12px; left: 12px; right: 12px; width: fit-content; max-width: calc(100% - 24px); display: flex; align-items: center; gap: 18px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: rgba(255,255,255,.94); backdrop-filter: blur(14px); box-shadow: var(--shadow-float); color: var(--foreground); }
+.walk-controls > div { display: grid; gap: 4px; min-width: 0; }
+.walk-controls strong { font-size: 11px; font-weight: 650; }
+.walk-controls span { color: var(--muted-foreground); font-size: 10px; line-height: 1.5; }
+.walk-controls kbd { font: inherit; font-weight: 600; }
+.walk-controls button { flex-shrink: 0; min-height: 32px; padding: 6px 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--foreground); font: inherit; font-size: 10px; cursor: pointer; }
+.walk-controls button:hover { background: var(--accent); }
+.walk-controls button kbd { margin-left: 5px; color: var(--muted-foreground); }
+.view-preset-bar button:disabled { opacity: .55; cursor: default; }
+@media (max-width: 520px) {
+  .walk-controls { align-items: flex-start; gap: 8px; padding: 9px; }
+  .walk-controls span { font-size: 9px; }
+  .walk-controls button kbd { display: none; }
+}
 .builder-3d-selection-surface { width: 100%; height: 100%; min-width: 0; min-height: 0; }
 .builder-3d-selection-surface > .viewport-stage { width: 100%; height: 100%; min-height: 0; }
 .floating-reset-view { position: absolute; z-index: 6; top: 12px; right: 12px; min-height: 40px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 4px 12px; border: 1px solid rgba(0,0,0,.11); border-radius: 10px; background: rgba(255,255,255,.90); backdrop-filter: blur(14px); box-shadow: var(--shadow-float); font-size: 9.5px; font-weight: 650; letter-spacing: var(--font-strong-spacing); white-space: nowrap; cursor: pointer; }
@@ -732,8 +738,6 @@ input[type="range"]:disabled { opacity: .45; }
 }
 @media (max-width: 640px) { .project-warning { flex-wrap: wrap; } }
 
-.shape-circle::before { border-radius: 50%; inset: 1px; }
-.shape-rounded-rectangle::before { border-radius: 6px; inset: 4px 1px; }
 .circle-diameter-control { display: grid; gap: 8px; margin-top: 12px; }
 .opening-quick-add.circle-openings { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .project-details-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; }

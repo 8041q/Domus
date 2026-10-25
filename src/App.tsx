@@ -29,6 +29,8 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const state = usePlannerStore.getState();
+      if (state.mode === 'plan' && state.planView === 'walk') return;
       handlePlannerShortcut(e, { mode, rotate, remove, undo, redo });
     };
     window.addEventListener('keydown', onKey);
