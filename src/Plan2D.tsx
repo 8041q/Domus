@@ -1118,7 +1118,7 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
     }
     const wallLabel = hitWallLabel(px, py);
     if (wallLabel) {
-      setHover((current) => current?.type === 'wall' && current.id === wallLabel.wallId ? current : { type: 'wall', id: wallLabel.wallId });
+      setHover(null);
       canvas.style.cursor = 'text';
       return;
     }

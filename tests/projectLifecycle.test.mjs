@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { createServer } from 'vite';
+import { createTestServer as createServer } from './helpers/vite.mjs';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 

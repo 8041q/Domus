@@ -410,6 +410,9 @@ export function experimentalAiGateway(configuredOllamaEndpoints?: string): Plugi
   const allowedOllama = ollamaEndpoints(configuredOllamaEndpoints);
   const middleware = async (request: IncomingMessage, response: ServerResponse, next: () => void) => {
     try {
+      const aiRoute = new URL(request.url ?? '/', 'http://localhost').pathname.startsWith('/api/ai/');
+      if (aiRoute && request.headers?.origin && ![`http://${request.headers.host}`, `https://${request.headers.host}`].includes(request.headers.origin)) throw new GatewayError(403, 'AI requests must come from this application.');
+      if (aiRoute && request.method === 'POST' && request.headers && !request.headers['content-type']?.startsWith('application/json')) throw new GatewayError(415, 'AI requests must use application/json.');
       if (!FEATURES.aiExperiment && new URL(request.url ?? '/', 'http://localhost').pathname.startsWith('/api/ai/')) {
         throw new GatewayError(503, 'The AI experiment is disabled.');
       }

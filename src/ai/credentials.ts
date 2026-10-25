@@ -1,4 +1,5 @@
 import type { AiProviderId } from './types';
+import { transactionDone } from '../core/projectDatabase';
 
 const DATABASE_NAME = 'domus-ai-experimental';
 const DATABASE_VERSION = 1;
@@ -17,6 +18,7 @@ export type CredentialMetadata = Pick<StoredCredential, 'provider' | 'lastFour' 
 function openDatabase() {
   return new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+    request.onblocked = () => reject(new Error('Close other Domus tabs to update credential storage.'));
     request.onupgradeneeded = () => {
       const database = request.result;
       if (!database.objectStoreNames.contains('keys')) database.createObjectStore('keys');
@@ -38,8 +40,13 @@ async function deviceKey(database: IDBDatabase) {
   const existing = await requestResult(database.transaction('keys').objectStore('keys').get(DEVICE_KEY_ID)) as CryptoKey | undefined;
   if (existing) return existing;
   const generated = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
-  await requestResult(database.transaction('keys', 'readwrite').objectStore('keys').put(generated, DEVICE_KEY_ID));
-  return generated;
+  // Generate outside the transaction, then check again under the write lock.
+  const transaction = database.transaction('keys', 'readwrite'), done = transactionDone(transaction);
+  const store = transaction.objectStore('keys');
+  const winner = await requestResult(store.get(DEVICE_KEY_ID)) as CryptoKey | undefined;
+  if (!winner) store.put(generated, DEVICE_KEY_ID);
+  await done;
+  return winner ?? generated;
 }
 
 export async function saveAiCredential(provider: Exclude<AiProviderId, 'ollama'>, credential: string) {
@@ -57,7 +64,9 @@ export async function saveAiCredential(provider: Exclude<AiProviderId, 'ollama'>
       lastFour: value.slice(-4),
       updatedAt: Date.now()
     };
-    await requestResult(database.transaction('credentials', 'readwrite').objectStore('credentials').put(record));
+    const transaction = database.transaction('credentials', 'readwrite'), done = transactionDone(transaction);
+    transaction.objectStore('credentials').put(record);
+    await done;
     return { provider, lastFour: record.lastFour, updatedAt: record.updatedAt } satisfies CredentialMetadata;
   } finally {
     database.close();
@@ -92,7 +101,9 @@ export async function getAiCredentialMetadata(provider: Exclude<AiProviderId, 'o
 export async function removeAiCredential(provider: Exclude<AiProviderId, 'ollama'>) {
   const database = await openDatabase();
   try {
-    await requestResult(database.transaction('credentials', 'readwrite').objectStore('credentials').delete(provider));
+    const transaction = database.transaction('credentials', 'readwrite'), done = transactionDone(transaction);
+    transaction.objectStore('credentials').delete(provider);
+    await done;
   } finally {
     database.close();
   }

@@ -15,3 +15,11 @@ __pycache__/
 !/public/fonts/ibm-plex-sans/
 /public/fonts/ibm-plex-sans/*
 !/public/fonts/ibm-plex-sans/OFL.txt
+
+server-dist/
+*.tsbuildinfo
+playwright-report/
+test-results/
+model-catalogue.json.lock
+model-catalogue.json.*.tmp
+.domus-optimization.lock

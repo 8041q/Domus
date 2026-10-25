@@ -46,7 +46,7 @@ export class ReportDocument {
   private newPage() {
     const canvas = this.createCanvas(); canvas.width = 1800; canvas.height = 1273;
     this.pages.push(canvas); this.ctx = canvas.getContext('2d')!;
-    reportHeading(this.ctx, this.roomName, this.pages.length === 1 ? 'Room summary' : 'Room details · continued'); this.y = 165;
+    reportHeading(this.ctx, this.roomName, this.pages.length === 1 ? 'Room summary' : 'Room details · continued'); this.y = this.pages.length === 1 ? 165 : 145;
   }
   private space(height: number) { if (this.y + height > this.bottom) this.newPage(); }
   section(title: string, firstBlockHeight = 65) {
@@ -60,10 +60,13 @@ export class ReportDocument {
   }
   paragraph(text: string) {
     reportFont(this.ctx, 23);
-    for (const line of wrapReportText(this.ctx, text, 1660)) {
-      this.space(32); reportFont(this.ctx, 23); this.ctx.fillText(line, 70, this.y); this.y += 32;
+    const lines = wrapReportText(this.ctx, text, 1660);
+    // Keep short notes intact and avoid leaving one closing line on a new page.
+    this.space(Math.min(lines.length, lines.length <= 4 ? 4 : 2) * 32);
+    for (const [index, line] of lines.entries()) {
+      this.space(index === lines.length - 2 ? 64 : 32); reportFont(this.ctx, 23); this.ctx.fillText(line, 70, this.y); this.y += 32;
     }
-    this.y += 18;
+    this.y += 12;
   }
   table(title: string, headers: string[], widths: number[], rows: string[][]) {
     if (widths.reduce((sum, width) => sum + width, 0) !== 1660 || headers.length !== widths.length) throw new Error('Invalid report table columns.');

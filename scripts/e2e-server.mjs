@@ -1,0 +1,20 @@
+import { mkdtemp, mkdir, cp, writeFile, rm } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
+import { modelBytes } from '../tests/helpers/model.mjs';
+import { optimizeModels } from './optimize-models.mjs';
+
+const root = await mkdtemp(path.join(os.tmpdir(), 'domus-browser-'));
+const marker = path.join(os.tmpdir(), 'domus-browser-5199.json');
+await cp('dist', path.join(root, 'dist'), { recursive: true });
+await mkdir(path.join(root, 'public', 'models'), { recursive: true });
+await writeFile(path.join(root, 'public', 'models', 'fixture-bed.glb'), modelBytes({ dense: true }));
+const compact = await optimizeModels(root);
+if (compact.models['fixture-bed.glb'].after.triangles < 1000) throw new Error('The browser fixture must exercise the picking worker.');
+await writeFile(marker, JSON.stringify({ root }));
+const child = spawn(process.execPath, [path.resolve('server-dist/index.mjs'), '--host', '127.0.0.1', '--port', '5199'], { cwd: root, stdio: 'inherit' });
+let stopping = false;
+const stop = () => { if (!stopping) { stopping = true; child.kill('SIGTERM'); } };
+for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, stop);
+child.once('exit', async code => { await rm(root, { recursive: true, force: true }); await rm(marker, { force: true }); process.exitCode = code ?? 0; });

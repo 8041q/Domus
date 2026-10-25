@@ -69,7 +69,7 @@ export function renderRoomReport(data: RoomReportData, roomName: string, date: s
   else doc.table('Furniture list', ['Model / category', 'Qty', 'Real-life L × W × H (m)', 'Size source', 'Placement'], [490, 90, 430, 360, 290],
     data.furniture.map((item) => [`${item.name} - ${item.category}`, String(item.quantity), item.dimensions, item.dimensionSource, item.status]));
   doc.paragraph('Real-life sizes use entered product metadata; catalogue sizes are used for built-in furniture. Where no real-life size was supplied, the model geometry is shown. Not placed items are excluded from the room views.');
-  if (data.details.notes) { doc.section('Client requirements and notes', 32); doc.paragraph(data.details.notes); }
+  if (data.details.notes) { doc.section('Client requirements and notes', 64); doc.paragraph(data.details.notes); }
   if (data.openings.length) doc.table('Doors, windows and openings', ['Type', 'Width × height', 'Bottom edge above floor', 'Location / centre'], [290, 350, 390, 630],
     data.openings.map((opening) => [opening.name, opening.dimensions, opening.sill, `${opening.location} · ${opening.position}`]));
   else { doc.section('Doors, windows and openings'); doc.paragraph('No doors, windows or openings.'); }

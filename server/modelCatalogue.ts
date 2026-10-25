@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import type { Plugin, ViteDevServer } from 'vite';
 import type { ProductDefinition } from '../src/core/types';
 import { normalizeProductCategory, PRODUCT_METADATA_VERSION } from '../src/core/productSchema';
+import { withFileLock } from './fileLock';
 import { ModelOptimizationQueue } from './modelOptimization';
 import { MODEL_CACHE_TTL_MS, modelCacheExpired } from '../scripts/model-cache.mjs';
 
@@ -158,12 +159,12 @@ export class ModelCatalogue {
   requiresOptimization = false;
   nextCacheExpiry: number | undefined;
   cacheGeneration = '';
-  constructor(private root: string) {}
+  constructor(private root: string, private persist = true) {}
   get modelsDirectory() { return path.join(this.root, 'public', 'models'); }
   private get registryFile() { return path.join(this.root, 'model-catalogue.json'); }
 
   scan(force = false): Promise<ModelCatalogueData> {
-    const next = this.queue.then(() => this.scanNow(force));
+    const next = this.queue.then(() => withFileLock(this.registryFile, () => { this.initialized = false; return this.scanNow(force); }));
     this.queue = next.catch(() => {});
     return next;
   }
@@ -226,8 +227,8 @@ export class ModelCatalogue {
     for (const entry of this.registry.entries) if (!present.has(entry.file)) retiredIds.add(entry.id);
     this.registry.entries = this.registry.entries.filter((entry) => present.has(entry.file));
     if (retiredIds.size) this.registry.retiredIds = [...retiredIds];
-    if (JSON.stringify(this.registry) !== before) {
-      const temporary = this.registryFile + '.tmp';
+    if (this.persist && JSON.stringify(this.registry) !== before) {
+      const temporary = this.registryFile + `.${process.pid}.${randomUUID()}.tmp`;
       try {
         await writeFile(temporary, JSON.stringify(this.registry, null, 2) + '\n');
         await rename(temporary, this.registryFile);
@@ -268,7 +269,11 @@ export class ModelCatalogue {
   }
 }
 
-export function automaticModelCatalogue(): Plugin {
+export function automaticModelCatalogue(): Plugin & {
+  initialize(root: string): Promise<void>;
+  middleware(request: IncomingMessage, response: ServerResponse, next: () => void): void;
+  dispose(): Promise<void>;
+} {
   let catalogue: ModelCatalogue;
   let ready: Promise<ModelCatalogueData>;
   let publish: ((data: ModelCatalogueData) => void) | undefined;
@@ -307,13 +312,16 @@ export function automaticModelCatalogue(): Plugin {
   };
   const middleware = (request: IncomingMessage, response: ServerResponse, next: () => void) => {
     const requested = new URL(request.url ?? '/', 'http://localhost');
-    if (requested.pathname === '/api/model-catalogue/rescan') {
+    if (requested.pathname === '/api/model-catalogue/rescan' || requested.pathname === '/api/model-catalogue/compact') {
       if (request.method !== 'POST') { response.statusCode = 405; response.setHeader('Allow', 'POST'); response.end('Use POST to rescan models'); return; }
       // A browser from another origin must not trigger a costly local import.
       if (request.headers.origin && request.headers.origin !== `http://${request.headers.host}` && request.headers.origin !== `https://${request.headers.host}`) {
         response.statusCode = 403; response.end('Rescan must be requested from this server'); return;
       }
-      void refresh(true).then((data) => {
+      const compact = requested.pathname.endsWith('/compact');
+      if (compact && !request.headers['content-type']?.startsWith('application/json')) { response.statusCode = 415; response.end('Use application/json'); return; }
+      request.resume();
+      void (compact ? (async () => { await optimization?.ensure(); return refresh(); })() : refresh(true)).then((data) => {
         response.setHeader('Content-Type', 'application/json'); response.setHeader('Cache-Control', 'no-store'); response.end(JSON.stringify(data));
       }).catch((error) => { response.statusCode = 500; response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ error: error.message })); });
       return;
@@ -356,7 +364,10 @@ export function automaticModelCatalogue(): Plugin {
   };
   return {
     name: 'domus-model-catalogue',
-    configResolved(config) { projectRoot = config.root; catalogue = new ModelCatalogue(config.root); ready = catalogue.scan(); },
+    async initialize(root) { projectRoot = root; catalogue = new ModelCatalogue(root); ready = catalogue.scan(); await ready; startOptimization(message => console.warn(message)); },
+    middleware,
+    async dispose() { clearTimeout(expiryTimer); await optimization?.dispose(); },
+    configResolved(config) { projectRoot = config.root; catalogue = new ModelCatalogue(config.root, config.command !== 'build'); ready = catalogue.scan(); },
     async buildStart() { await ready; },
     async closeBundle() { clearTimeout(expiryTimer); await optimization?.dispose(); },
     resolveId(id) { if (id === PUBLIC_ID) return MODULE_ID; },

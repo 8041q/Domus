@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { createServer } from 'vite';
+import { createTestServer as createServer } from './helpers/vite.mjs';
 import * as THREE from 'three';
 
 const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: 'custom', logLevel: 'silent' });
@@ -145,6 +145,17 @@ function recordingCanvas() {
     stroke() { operations.push({ kind: 'path', points: [...this.path], width: this.lineWidth, colour: this.strokeStyle }); }, closePath() {}, fill() {}, arc() {}, save() {}, restore() {} };
   return { getContext: () => ctx, operations };
 }
+
+test('short report notes stay together instead of stranding a final line on another page', () => {
+  const canvases = [];
+  const doc = new ReportDocument('Pagination', () => { const canvas = recordingCanvas(); canvases.push(canvas); return canvas; });
+  doc.paragraph(Array(29).fill('Filler line').join('\n'));
+  doc.paragraph('First closing line\nFinal closing line');
+  const text = canvas => canvas.operations.filter(operation => operation.kind === 'text').map(operation => operation.text);
+  assert.equal(text(canvases[0]).includes('First closing line'), false);
+  assert.ok(text(canvases[1]).includes('First closing line'));
+  assert.ok(text(canvases[1]).includes('Final closing line'));
+});
 
 test('report labels keep model/category together and list walls without view labels or repeated heights', () => {
   const snapshot = emptyRoomSnapshot('recess');

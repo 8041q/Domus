@@ -11,7 +11,9 @@ middleware plugin adds experimental AI routes to Vite's development and preview
 servers. The shared UI and semantic CSS tokens have no component-framework
 dependency.
 
-There is no standalone production server, database, authentication layer,
+The local production server is compiled from `server/index.ts`. IndexedDB stores
+room documents, compact asset binaries, per-tab drafts and migration metadata. There
+is no authentication layer,
 physics engine, runtime-validation library, or provider SDK. The AI gateway uses
 native `fetch` and fixed provider endpoints.
 
@@ -81,8 +83,9 @@ non-exportable Web Crypto key; they never travel with room saves or GLB files.
 
 The store normalizes loaded data, supplies defaults for fields added after an
 older save, remaps known legacy product IDs, and projects furniture back into a
-valid room position when possible. The active key is
-`room-planner-project-v4`; older keys remain readable and load as one space.
+valid room position when possible. The current project database is `domus-projects-v2`. Old localStorage libraries,
+drafts and single-slot saves remain readable as migration inputs and are retained
+as backups.
 Legacy sun-style values are also mapped to the corrected style names while
 preserving the lighting each saved room displayed.
 
@@ -269,10 +272,47 @@ not. The GLTF exporter is imported only when an export is requested.
 ## Current engineering constraints
 
 - Room data and AI credentials use the local browser as their persistence
-  boundary. AI routes exist only in Vite development and preview; a static
-  production host must provide an equivalent secured gateway.
+  boundary. The supported local runtime supplies the AI gateway; a public
+  production host still needs authentication, quotas and abuse protection.
 - Snapshot normalization is handwritten rather than schema-driven.
 - The procedural catalogue is intentionally small and has no external asset or
   pricing service.
 - The deferred Three.js bundle is large enough for Vite to emit its standard
   chunk-size warning during production builds.
+
+## Durable projects and portable files
+
+`BrowserRoomProjects` owns the asynchronous UI lifecycle. The older `RoomProjects`
+class remains the migration decoder for synchronous localStorage formats. The
+IndexedDB repository serializes revision/name checks and writes with model binaries
+and recovery metadata in one read/write transaction. Failed writes cannot mark a
+room clean. Dirty comparison uses semantic key ordering.
+
+`RoomDocumentV2` stores the snapshot and archived product metadata; assets are
+referenced by SHA-256. Only compact GLBs are captured. The same blob can serve
+multiple products, instances and rooms. Room-scoped product definitions flow
+through the existing stable product resolver into placement, rendering, reports
+and AI. Archived model URLs are local blob URLs, revoked when the room changes.
+They are distinct from the live file catalogue, and stay pinned until the room is
+closed. Catalogue deletion and the disposable server optimization cache cannot
+remove the blobs held by saved records or recovery drafts.
+
+Portable `.domus` ZIP files hold `room.json` and `assets/<sha256>.glb`. Imports
+validate document/geometry, filenames, sizes, embedded resources and content
+hashes before replacing work. Portable files have a 1 GiB limit; JSON documents
+have a 16 MiB limit. Layouts support up to 2,000 placed and 2,000 unplaced items,
+512 perimeter vertices/dividers/spaces, and 1,000 openings. Layout-only JSON
+continues to use the version 1 envelope and requires separately available models.
+
+The production runtime uses the same catalogue and experimental AI handlers as
+Vite. It serves built assets only, pins its port, validates local Host and browser
+Origin headers, and allows WebAssembly without enabling general script eval.
+The optimizer and catalogue use separate process locks. Builds scan the catalogue
+without changing persistent model identities. Tests use isolated roots and
+synthetic products, and browser tests never share the user's origin or registry.
+
+Compact assets use ArrayBuffer records for WebKit compatibility. A size index
+lets usage and cleanup inspect metadata and keys without materializing all model
+binaries. Interrupted imports retain a separate recoverable draft until the
+active-tab draft commits. Closed-tab recoveries can be discarded explicitly; a
+lifetime Web Lock prevents deleting another active tab's recovery.

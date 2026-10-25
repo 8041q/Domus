@@ -1,46 +1,6 @@
 {
   "version": 1,
-  "entries": [
-    {
-      "id": "model-7f052e07-718c-44f9-baaf-0e06af3439a4",
-      "file": "C8c.glb",
-      "fingerprint": "415758b0bb8034032f6ed225a813e64a811c33da568489ddb9222a2f634fea23",
-      "stamp": "146092008:1791899418272.1064",
-      "product": {
-        "id": "model-7f052e07-718c-44f9-baaf-0e06af3439a4",
-        "name": "C8c",
-        "category": "Hospital Bed",
-        "width": 1.1210659514009929,
-        "depth": 2.4801304906262542,
-        "height": 0.8389721843931622,
-        "available": true,
-        "displayDimensions": {
-          "width": 995,
-          "depth": 2180,
-          "height": 850
-        },
-        "collision": true,
-        "wallAffinity": false,
-        "collisionFootprint": {
-          "width": 1.1210659514009929,
-          "depth": 2.4801304906262542
-        },
-        "clearance": {
-          "front": 0,
-          "back": 0,
-          "sides": 0
-        },
-        "priceLabel": "",
-        "swatch": "#000000",
-        "model": {
-          "url": "/models/C8c.glb?v=415758b0bb803403"
-        }
-      },
-      "aliases": [
-        "hospitalbed"
-      ]
-    }
-  ],
+  "entries": [],
   "retiredIds": [
     "model-d8343886-3ca4-4d54-ad80-dc633193feca",
     "model-05c82742-a922-427f-b484-42b882213ddb",
@@ -50,6 +10,7 @@
     "model-9f30da7a-ab46-4790-8034-19af513eda49",
     "model-ea7cda57-3d71-441b-85b1-35a3eefb321f",
     "model-454b44dd-581c-4c55-9881-b9f509fad534",
-    "model-65ff5786-e0c8-46a1-8be4-6d1615030025"
+    "model-65ff5786-e0c8-46a1-8be4-6d1615030025",
+    "model-7f052e07-718c-44f9-baaf-0e06af3439a4"
   ]
 }

@@ -4,9 +4,9 @@ Domus is a browser-based room builder and layout planner. It keeps the room,
 openings, finishes, and furniture as semantic data and uses Three.js only to
 render and interact with that data.
 
-The application is local-first. It has no accounts, database, or cloud sync.
+The application is local-first. It has no accounts, remote database, or cloud sync.
 An opt-in experimental AI assistant is available through a small gateway that
-runs with Vite during local development and preview.
+runs with the local production runtime and Vite development/preview servers.
 
 ## What it does
 
@@ -67,10 +67,10 @@ resources; returning to 2D retains the layout.
 
 ## Run locally
 
-You need Node.js 20 or newer and npm.
+Use Node.js 24 LTS (see `.nvmrc`) and npm 10 or newer.
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
@@ -117,12 +117,32 @@ additional endpoints can be approved when starting the server:
 OLLAMA_ALLOWED_ENDPOINTS=http://192.168.1.50:11434 npm run dev
 ```
 
-Create and preview a production build with:
+Build and run the supported local release with:
 
 ```bash
 npm run build
-npm run preview
+npm start
 ```
+
+`npm start` serves the built app and its catalogue/experimental AI routes at
+`http://localhost:5173`. It binds only to a loopback address and refuses an occupied
+port. Keep the same hostname and port to retain access to the same browser saves.
+`npm run preview` remains a build-preview tool. Use `npm run dev` for source editing.
+
+## Verification
+
+```bash
+npm run typecheck
+npm test
+npx playwright install chromium firefox webkit
+npm run test:e2e
+```
+
+Browser checks build the app and run an isolated production server on port 5199.
+Generated fixtures replace private model files; tests do not scan your model
+folder, rewrite your registry, or open your normal saved rooms. CI runs the same
+checks on Node 24. Optional checks against private architectural GLBs remain
+skipped when those files are absent.
 
 ## Main controls
 
@@ -154,20 +174,32 @@ Use **Project** in the header to manage rooms:
 - **Open room** lists all rooms saved in this browser, with their last save time.
   Each row has a delete icon with confirmation. Deleting the active saved room
   keeps your working layout open as an unsaved room.
-- **Download draft** and **Import Draft** provide portable `.domus.json`
-  backups. Imported rooms open as unsaved copies; legacy snapshot JSON also works.
+- **Download room** creates a portable `.domus` ZIP containing the editable
+  layout, product metadata and the compact models used by placed and unplaced
+  furniture. It shows the estimated size first. **Import room** opens these files
+  as unsaved copies in another browser, even without the original model folder.
+- **Download layout only** creates a small `.domus.json` without model binaries.
+  Import room also accepts this format and legacy snapshot JSON.
+- **Room storage** shows browser/model usage, estimates additional storage and
+  offers recovery drafts, discarding of closed-tab drafts, and cleanup of assets
+  unreferenced by saves or drafts.
 
 New, Open and Import ask you to Save, Discard or Cancel when the current room has
 unsaved changes. Failed saves keep the current room and stop the replacement.
 Opening another room starts fresh undo history. Names cannot duplicate an existing
 saved room, and stale saves from another tab are rejected; use Save as to keep both.
 
-A debounced recovery draft restores the latest layout after reloading, including
-unsaved changes. Recovery is shared across tabs in the same browser origin; the
-latest draft wins. A changed layout also triggers the browser's leave-page warning.
-Explicit named saves are separate from recovery. Old single-slot saves migrate to
-**Recovered room**, and their original browser keys are retained as backups.
-Clearing site data removes saved rooms and recovery drafts. Download a room file
+A debounced recovery draft restores the same tab's latest layout after reloading,
+including unsaved changes. Drafts are isolated by tab. A duplicated tab receives
+its own identity; drafts from other tabs are offered under Room storage. A changed layout also triggers the browser's leave-page warning.
+Named saves and compact models use IndexedDB transactions with revision checks.
+Each model version is stored once and shared across rooms. Saved assets do not
+expire with the 72-hour server cache; source files and original-quality binaries
+are never copied into browser saves. Existing libraries, recovery and single-slot
+saves migrate without deleting the original browser keys. Models already missing
+from old layouts remain unresolved with a warning; restore a catalogue backup or
+replace those items to make a complete portable backup.
+Clearing site data removes saved rooms, model assets and recovery drafts. Download a room file
 for a lasting backup; cloud backup is not provided.
 
 **Project → Export Room** is available in Plan Room. It downloads a GLB of the complete room rather
@@ -213,7 +245,10 @@ from the size shown in the catalogue, and exports GLBs in metres. Copy a GLB int
 `public/models/` (subfolders work); the dev/preview server imports it automatically
 and assigns a persistent unique ID. Folder changes update the catalogue without
 source edits. Keep the generated `model-catalogue.json` with project backups.
-Removing a GLB cleans its catalogue/registry entry and instances in open rooms.
+Removing a GLB cleans its live catalogue/registry entry and ordinary instances in
+open rooms. Previously saved rooms retain their compact model version. Reopening
+a saved or imported portable room resolves its archived models within that room;
+it does not re-add deleted models to the live catalogue.
 Re-adding or renaming it assigns a new ID; retired IDs are never reused. The
 Blender add-on and project share the hospital product categories.
 
@@ -232,12 +267,12 @@ open planners. For preview or a different port, pass the server URL:
 - Most catalogue furniture uses procedural placeholder models and sample prices.
   GLBs in `public/models/` are imported automatically. Static deployments include
   the models present at build time and require a rebuild for later folder changes.
-- Saved rooms are local to one browser origin; portable room files are the backup and transfer mechanism.
+- Saved rooms are local to one browser origin; portable `.domus` files are the backup and transfer mechanism. Browser storage is not an external backup.
 - The renderer requires a browser with WebGL support.
 - AI assistance is experimental, furniture-only, non-streaming, and intended
   for trusted local use. A static `dist` deployment does not provide its API
-  routes; a production host must supply the gateway and add authentication,
-  quotas, and abuse protection before public use.
+  routes; the supported local runtime supplies the gateway. Public hosting still requires
+  authentication, quotas, and abuse protection.
 - Multi-user projects, authentication, and cloud services are not implemented.
 
 ## Developer guides

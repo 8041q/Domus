@@ -7,6 +7,7 @@ import { NodeIO } from '@gltf-transform/core';
 import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
 import { compactPrimitive, dedup, flatten, getBounds, join, meshopt, prune, simplify, weld } from '@gltf-transform/functions';
 import { MeshoptDecoder, MeshoptEncoder, MeshoptSimplifier } from 'meshoptimizer';
+import { withFileLock } from './file-lock.mjs';
 import { modelCacheExpired } from './model-cache.mjs';
 
 export const OPTIMIZER_VERSION = 5;
@@ -110,7 +111,11 @@ export async function optimizeModel(input, output) {
   return { before: { ...before, bytes: (await stat(input)).size }, after: { ...after, bytes: binary.byteLength } };
 }
 
-export async function optimizeModels(root = process.cwd(), { onError } = {}) {
+export async function optimizeModels(root = process.cwd(), options = {}) {
+  return withFileLock(path.join(root, '.domus-optimization'), () => optimizeModelsUnlocked(root, options), 300_000);
+}
+
+async function optimizeModelsUnlocked(root, { onError } = {}) {
   const sourceDirectory = path.join(root, 'public', 'models');
   const outputDirectory = path.join(root, 'public', 'optimized-models');
   const manifestFile = path.join(outputDirectory, 'manifest.json');

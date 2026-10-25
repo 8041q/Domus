@@ -9,8 +9,16 @@ export class ModelOptimizationQueue {
   private disposed = false;
   private closing?: Promise<void>;
   private finishing = false;
+  private waiters: Array<() => void> = [];
 
   constructor(private root: string, private completed: () => Promise<void>, private report: (message: string) => void) {}
+
+  async ensure() {
+    if (this.disposed) throw new Error('Model optimization is shutting down.');
+    const completed = new Promise<void>(resolve => this.waiters.push(resolve));
+    this.request(`manual:${Date.now()}:${Math.random()}`);
+    await completed;
+  }
 
   request(key: string) {
     this.desired = key;
@@ -30,6 +38,7 @@ export class ModelOptimizationQueue {
       void this.completed().catch(error => this.report(error.message)).finally(() => {
         this.finishing = false;
         this.request(this.desired);
+        if (!this.child && !this.finishing) this.waiters.splice(0).forEach(resolve => resolve());
       });
     });
   }
@@ -37,6 +46,7 @@ export class ModelOptimizationQueue {
   dispose(): Promise<void> {
     if (this.closing) return this.closing;
     this.disposed = true;
+    this.waiters.splice(0).forEach(resolve => resolve());
     const child = this.child;
     this.child = undefined;
     this.closing = child ? new Promise(resolve => { child.once('close', () => resolve()); child.kill(); }) : Promise.resolve();

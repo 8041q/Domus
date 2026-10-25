@@ -4,16 +4,17 @@ import type { RoomShapeKind } from './core/types';
 import { roomProjects, useRoomProjects } from './roomProjects';
 import { Button, Icon, type IconName } from './ui';
 import { usePlannerStore } from './store';
+import { lockLoadingInteraction } from './core/loadingInteraction';
 import { normalizeProjectDetails, PROJECT_DETAIL_FIELDS, PROJECT_STATUSES } from './core/projectDetails';
 
-type DialogKind = 'new' | 'save' | 'open' | 'guard' | 'delete' | 'details';
+type DialogKind = 'new' | 'save' | 'open' | 'guard' | 'delete' | 'details' | 'storage';
 function ProjectDialog({ title, onCancel, children, className = '' }: { title: string; onCancel: () => void; children: ReactNode; className?: string }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const dialog = ref.current!;
     const previousFocus = document.activeElement as HTMLElement | null;
     dialog.showModal();
-    return () => { dialog.close(); previousFocus?.focus(); };
+    return () => { dialog.close(); (previousFocus?.isConnected ? previousFocus : document.querySelector<HTMLElement>('.project-menu-trigger'))?.focus(); };
   }, []);
   useEffect(() => {
     const dialog = ref.current;
@@ -42,7 +43,7 @@ export function ProjectControls({ canExport, onExport, onExportPdf }: { canExpor
   const [details, setDetails] = useState(() => normalizeProjectDetails(null));
   const menuRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const pending = useRef<(() => void) | null>(null);
+  const pending = useRef<(() => void | Promise<void>) | null>(null);
 
   useEffect(() => {
     if (!notice) return;
@@ -51,8 +52,16 @@ export function ProjectControls({ canExport, onExport, onExportPdf }: { canExpor
   }, [notice]);
   useEffect(() => {
     if (!menuOpen) return;
+    const items = () => [...(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])];
+    items()[0]?.focus();
     const close = (event: PointerEvent) => { if (event.target instanceof Node && !menuRef.current?.contains(event.target)) setMenuOpen(false); };
-    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') setMenuOpen(false); };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); setMenuOpen(false); menuRef.current?.querySelector<HTMLButtonElement>('.project-menu-trigger')?.focus(); return; }
+      if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault(); const choices = items(), current = choices.indexOf(document.activeElement as HTMLButtonElement);
+      const index = event.key === 'Home' ? 0 : event.key === 'End' ? choices.length - 1 : (current + (event.key === 'ArrowDown' ? 1 : -1) + choices.length) % choices.length;
+      choices[index]?.focus();
+    };
     document.addEventListener('pointerdown', close); document.addEventListener('keydown', escape);
     return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', escape); };
   }, [menuOpen]);
@@ -70,35 +79,53 @@ export function ProjectControls({ canExport, onExport, onExportPdf }: { canExpor
     return () => window.removeEventListener('keydown', onKey);
   });
 
+  const run = async (action: () => void | Promise<unknown>) => {
+    try { await action(); } catch (failure) { setError(errorMessage(failure)); }
+  };
+  useEffect(() => {
+    if (!project.busy) return;
+    const root = document.querySelector<HTMLElement>('.app-shell');
+    if (root) return lockLoadingInteraction(root);
+  }, [project.busy]);
+
   const cancel = () => {
     if (dialog === 'delete') { setDeleteTarget(null); setDialog('open'); }
     else { pending.current = null; setDialog(null); }
     setError('');
   };
-  const finishPending = () => {
-    pending.current?.();
+  const finishPending = async () => {
+    await pending.current?.();
     pending.current = null;
     setDialog(null);
     setError('');
   };
-  const replace = (action: () => void) => {
+  const replace = (action: () => void | Promise<void>) => {
     roomProjects.changed();
     pending.current = action;
     if (roomProjects.getState().dirty) { setError(''); setDialog('guard'); }
-    else { try { finishPending(); } catch (failure) { setError(errorMessage(failure)); } }
+    else { void run(finishPending); }
   };
   const save = (copy = false) => {
     setMenuOpen(false); setError('');
     setName(copy ? `${roomProjects.getState().name} copy`.slice(0, 80) : roomProjects.getState().name);
-    setAsCopy(copy); setDialog('save');
+    setAsCopy(copy); setDialog('save'); void run(() => roomProjects.inspect());
   };
-  const download = () => {
+  const downloadLayout = () => {
     const url = URL.createObjectURL(new Blob([roomProjects.exportFile()], { type: 'application/json' }));
     const link = document.createElement('a');
     link.href = url; link.download = `${project.name.replace(/[^\p{L}\p{N} _-]/gu, '').trim() || 'room'}.domus.json`;
     link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     setMenuOpen(false);
   };
+  const download = async () => {
+    await run(async () => {
+      const blob = await roomProjects.exportArchive();
+      const url = URL.createObjectURL(blob), link = document.createElement('a');
+      link.href = url; link.download = `${project.name.replace(/[^\p{L}\p{N} _-]/gu, '').trim() || 'room'}.domus`;
+      link.click(); setTimeout(() => URL.revokeObjectURL(url), 30_000); setMenuOpen(false);
+    });
+  };
+  const bytes = (value: number) => value < 1024 * 1024 ? `${(value / 1024).toFixed(1)} KB` : `${(value / (1024 * 1024)).toFixed(1)} MB`;
   const menuItem = (icon: IconName, title: string, description: string, action: () => void, disabled = false) => <button type="button" role="menuitem" disabled={disabled} onClick={() => { setMenuOpen(false); setError(''); action(); }}>
     <Icon name={icon} /><span><strong>{title}</strong><small>{description}</small></span>
   </button>;
@@ -114,24 +141,39 @@ export function ProjectControls({ canExport, onExport, onExportPdf }: { canExpor
           setDetails(normalizeProjectDetails(usePlannerStore.getState().room.projectDetails)); setDialog('details');
         })}
         {menuItem('save', 'Save as', 'Save or name a copy · Ctrl/Cmd+S', () => save())}
-        {menuItem('folder', 'Open room', 'Choose a saved room', () => { try { roomProjects.refreshRooms(); setDialog('open'); } catch (failure) { setError(errorMessage(failure)); } })}
+        {menuItem('folder', 'Open room', 'Choose a saved room', () => { void run(async () => { await roomProjects.refreshRooms(); setDialog('open'); }); })}
         <span className="project-menu-divider" role="separator" />
-        {menuItem('download', 'Download draft', 'Keep an editable backup', download)}
-        {menuItem('folder', 'Import Draft', 'Open an editable Domus draft', () => fileRef.current?.click())}
+        {menuItem('download', 'Download room', 'Editable backup with compact models', () => { setDialog('storage'); void run(() => roomProjects.inspect()); })}
+        {menuItem('download', 'Download layout only', 'Small JSON file without model assets', downloadLayout)}
+        {menuItem('folder', 'Room storage', 'Usage, recovery drafts and unused assets', () => { setDialog('storage'); void run(() => roomProjects.storageInfo()); })}
+        {menuItem('folder', 'Import room', 'Open a Domus room or legacy layout', () => fileRef.current?.click())}
         {onExport && <><span className="project-menu-divider" role="separator" />{menuItem('cube', 'Export Room', 'Download the complete 3D room as GLB', onExport, !canExport)}</>}
         {onExportPdf && menuItem('download', 'Export to PDF', 'Project summary, furniture and five room views', onExportPdf, !canExport)}
       </div>}
     </div>
-    <input ref={fileRef} type="file" accept=".json,application/json" hidden aria-label="Import Domus draft" onChange={async (event) => {
+    <input ref={fileRef} type="file" accept=".domus,.json,application/json,application/zip" hidden aria-label="Import Domus draft" onChange={async (event) => {
       const file = event.target.files?.[0]; event.target.value = '';
       if (!file) return;
       try {
-        const imported = roomProjects.readFile(await file.text(), file.name.replace(/(?:\.domus)?\.json$/i, '').slice(0, 80) || 'Imported room');
+        const imported = await roomProjects.readFile(file);
         replace(() => roomProjects.importRoom(imported));
       } catch (failure) { setError(errorMessage(failure)); }
     }} />
-    {dialog && <ProjectDialog className={dialog === 'details' ? 'project-details-dialog' : ''} title={dialog === 'details' ? 'Project details' : dialog === 'new' ? 'New room' : dialog === 'save' ? 'Save as' : dialog === 'open' ? 'Open room' : dialog === 'delete' ? 'Delete saved room?' : 'Save your changes?'} onCancel={cancel}>
-      {dialog === 'details' ? <form onSubmit={(event) => {
+    {dialog && <ProjectDialog className={dialog === 'details' ? 'project-details-dialog' : ''} title={dialog === 'storage' ? 'Room storage and backup' : dialog === 'details' ? 'Project details' : dialog === 'new' ? 'New room' : dialog === 'save' ? 'Save as' : dialog === 'open' ? 'Open room' : dialog === 'delete' ? 'Delete saved room?' : 'Save your changes?'} onCancel={cancel}>
+      {project.busy && <p role="status">{project.busy}</p>}
+      {dialog === 'storage' ? <>
+        <p>Compact models are shared across saved rooms. Portable backups include each used model once.</p>
+        <dl className="project-storage"><dt>Saved model assets</dt><dd>{bytes(project.assetBytes)}</dd><dt>Browser storage used</dt><dd>{bytes(project.storageBytes)}</dd>
+          {project.storageQuota > 0 && <><dt>Browser storage allowance</dt><dd>{bytes(project.storageQuota)}</dd></>}
+          <dt>Additional model storage for this room</dt><dd>{bytes(project.additionalBytes)}</dd><dt>Portable room estimate</dt><dd>{bytes(project.packageBytes)}</dd></dl>
+        <p>Clearing browser data removes local saves. Keep a portable room file as a backup.</p>
+        {project.recoveries.length > 0 && <><h3>Recovery drafts from other tabs</h3>{project.recoveries.map(draft => <div key={draft.id} className="project-recovery-row"><Button variant="outline" onClick={() => replace(() => roomProjects.restoreDraft(draft.id))}>Recover {draft.document.name}</Button>
+          <Button variant="ghost" aria-label={`Discard recovery for ${draft.document.name}`} onClick={() => {
+            if (window.confirm(`Discard the recovery draft for ${draft.document.name}? This cannot be undone.`)) void run(() => roomProjects.discardRecovery(draft.id, draft.updatedAt));
+          }}>Discard</Button></div>)}</>}
+        {error && <p className="project-error" role="alert">{error}</p>}
+        <footer><Button variant="outline" onClick={() => { void run(() => roomProjects.cleanUnusedAssets()); }}>Clean unused models</Button><Button variant="outline" onClick={cancel}>Close</Button><Button onClick={() => { void download(); }}>Download room</Button></footer>
+      </> : dialog === 'details' ? <form onSubmit={(event) => {
         event.preventDefault(); setError('');
         try { usePlannerStore.getState().updateProjectDetails(details);
           setDialog(null); setNotice('Project details updated. Use Save as to save the room.');
@@ -153,10 +195,11 @@ export function ProjectControls({ canExport, onExport, onExportPdf }: { canExpor
       </form> : dialog === 'new' || dialog === 'save' ? <form onSubmit={(event) => {
         event.preventDefault(); setError('');
         if (dialog === 'new') { const roomName = name.trim(); if (!roomName) { setError('Enter a room name.'); return; } replace(() => roomProjects.newRoom(roomName, shape)); }
-        else { try { roomProjects.save(name, asCopy || name.trim() !== roomProjects.getState().name); setNotice('Room saved in this browser'); finishPending(); } catch (failure) { setError(errorMessage(failure)); } }
+        else { void run(async () => { await roomProjects.save(name, asCopy || name.trim() !== roomProjects.getState().name); setNotice('Room saved in this browser'); await finishPending(); }); }
       }}>
         <p>{dialog === 'new' ? 'Choose a name and starting shape. Adjust dimensions in the 2D builder.' : 'Keep the current name to update this room, or choose a new name to save a separate copy.'}</p>
         <label className="project-field">Room name<input data-project-focus autoFocus required maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Living room" /></label>
+        {dialog === 'save' && <p>Compact model assets: {bytes(project.additionalBytes)} additional storage · Portable room: approximately {bytes(project.packageBytes)}.</p>}
         {dialog === 'new' && <label className="project-field">Starting shape<select value={shape} onChange={(event) => setShape(event.target.value as typeof shape)}>
           <option value="rectangle">Rectangle</option><option value="rounded-rectangle">Rounded rectangle</option><option value="circle">Circle</option><option value="angled-corner">Angled corner</option><option value="l-shape">L shape</option><option value="recess">Recess</option>
         </select></label>}
@@ -172,24 +215,25 @@ export function ProjectControls({ canExport, onExport, onExportPdf }: { canExpor
             onClick={() => { setDeleteTarget(room); setError(''); setDialog('delete'); }}><Icon name="trash" /></Button>
         </div>) : <div className="saved-room-empty"><Icon name="folder" /><strong>No saved rooms yet</strong><span>Use Save as to keep your first room.</span></div>}</div>
         {error && <p className="project-error" role="alert">{error}</p>}
-        <footer><Button variant="outline" onClick={() => fileRef.current?.click()}>Import Draft</Button><Button onClick={cancel}>Close</Button></footer>
+        <footer><Button variant="outline" onClick={() => fileRef.current?.click()}>Import room</Button><Button onClick={cancel}>Close</Button></footer>
       </> : dialog === 'delete' && deleteTarget ? <>
         <p>Delete <strong>{deleteTarget.name}</strong> from this browser's saved rooms? This cannot be undone.</p>
         {deleteTarget.id === project.activeId && <p>The room you're editing will stay open as an unsaved room.</p>}
         {error && <p className="project-error" role="alert">{error}</p>}
         <footer><Button data-project-focus variant="outline" onClick={cancel}>Cancel</Button><Button variant="destructive" onClick={() => {
-          try {
-            roomProjects.remove(deleteTarget.id, deleteTarget.revision);
+          void run(async () => {
+            await roomProjects.remove(deleteTarget.id, deleteTarget.revision);
             setDeleteTarget(null); setError(''); setDialog('open'); setNotice('Saved room deleted');
-          } catch (failure) { setError(errorMessage(failure)); }
+          });
         }}><Icon name="trash" />Delete room</Button></footer>
       </> : <>
         <p><strong>{project.name}</strong> has unsaved changes. Save them before opening another room?</p>
         {error && <p className="project-error" role="alert">{error}</p>}
-        <footer><Button variant="outline" onClick={cancel}>Cancel</Button><Button variant="secondary" onClick={() => { try { finishPending(); } catch (failure) { setError(errorMessage(failure)); } }}>Discard changes</Button><Button onClick={() => save()}>Save changes</Button></footer>
+        <footer><Button variant="outline" onClick={cancel}>Cancel</Button><Button variant="secondary" onClick={() => { void run(finishPending); }}>Discard changes</Button><Button onClick={() => save()}>Save changes</Button></footer>
       </>}
     </ProjectDialog>}
-    {!dialog && (error || project.warning) && <div className="project-warning" role="alert"><span>{error || project.warning}</span><Button variant="outline" size="sm" onClick={download}>Download draft</Button>{error && <Button variant="ghost" size="icon" aria-label="Dismiss error" onClick={() => setError('')}><Icon name="x" /></Button>}</div>}
+    {!dialog && (error || project.warning) && <div className="project-warning" role="alert"><span>{error || project.warning}</span><Button variant="outline" size="sm" onClick={downloadLayout}>Download layout</Button>{error && <Button variant="ghost" size="icon" aria-label="Dismiss error" onClick={() => setError('')}><Icon name="x" /></Button>}</div>}
+    {project.busy && <div className="project-progress loading-status" role="status" aria-live="polite">{project.busy}</div>}
     {notice && <div className="toast" role="status"><Icon name="check" />{notice}</div>}
   </>;
 }

@@ -21,7 +21,7 @@ chat message. The settings panel is the intended input path.
 
 ## Current implementation
 
-The Vite development and preview servers mount three routes:
+The local production runtime and Vite development/preview servers mount three routes:
 
 - `GET /api/ai/config` returns approved, non-secret Ollama endpoints.
 - `POST /api/ai/models` tests a provider connection and lists models.
@@ -92,8 +92,8 @@ can propose operations; other models remain useful for advice-only chat.
 
 ## Known experimental limits
 
-- The gateway is a Vite development/preview plugin. Static `dist` hosting alone
-  does not expose `/api/ai/*`.
+- `npm start` supplies the local gateway. Static `dist` hosting alone does not
+  expose `/api/ai/*`. Cross-origin browser requests and non-JSON POSTs are rejected.
 - There is no authentication, rate limiting, streaming, audit log, or multi-user
   credential isolation.
 - Each request includes the relevant conversation and full semantic snapshot;

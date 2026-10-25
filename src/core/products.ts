@@ -69,10 +69,29 @@ export const subscribeProductCatalogue = (listener: () => void, beforeViews = fa
 export const displayProductDimensions = (product: ProductDefinition) => product.displayDimensions ?? product;
 
 let catalogueSignature = '';
+let liveCatalogue = import.meta.hot?.data.liveCatalogue ?? modelCatalogue;
+let roomProducts: ProductDefinition[] = import.meta.hot?.data.roomProducts ?? [];
+export function getLiveProduct(id: string): ProductDefinition | undefined {
+  return (Object.hasOwn(BUILTIN_PRODUCTS, id) ? BUILTIN_PRODUCTS[id] : undefined) ?? liveCatalogue.products.find((product: ProductDefinition) => product.id === id || product.id === liveCatalogue.aliases[id]);
+}
+/** Resolve archived products for this room without adding them to the catalogue. */
+export function withRoomProducts<T>(products: ProductDefinition[], action: () => T): T {
+  const previous = { ...PRODUCTS };
+  Object.assign(PRODUCTS, Object.fromEntries(products.map(product => [product.id, product])));
+  try { return action(); }
+  finally { for (const id of Object.keys(PRODUCTS)) delete PRODUCTS[id]; Object.assign(PRODUCTS, previous); }
+}
+export function setRoomProducts(products: ProductDefinition[]) {
+  roomProducts = products;
+  catalogueSignature = '';
+  updateCatalogue(liveCatalogue);
+}
 function updateCatalogue(data: typeof modelCatalogue) {
   const signature = JSON.stringify(data);
   if (signature === catalogueSignature) return;
   catalogueSignature = signature;
+  liveCatalogue = data;
+  for (const id of Object.keys(PRODUCTS)) delete PRODUCTS[id];
   Object.assign(PRODUCTS, BUILTIN_PRODUCTS);
   const currentIds = new Set(data.products.map((product) => product.id));
   for (const [id, product] of Object.entries(PRODUCTS)) {
@@ -80,7 +99,9 @@ function updateCatalogue(data: typeof modelCatalogue) {
   }
   for (const product of data.products) PRODUCTS[product.id] = product;
   for (const [alias, id] of Object.entries(data.aliases)) if (PRODUCTS[id] && !BUILTIN_PRODUCTS[alias]) PRODUCTS[alias] = PRODUCTS[id];
-  PRODUCT_LIST.splice(0, PRODUCT_LIST.length, ...Object.values(BUILTIN_PRODUCTS), ...data.products.filter((product) => product.available !== false));
+  const archived = new Map(roomProducts.map(product => [product.id, product]));
+  PRODUCT_LIST.splice(0, PRODUCT_LIST.length, ...Object.values(BUILTIN_PRODUCTS), ...data.products.filter((product) => product.available !== false).map(product => archived.get(product.id) ?? product));
+  Object.assign(PRODUCTS, Object.fromEntries(roomProducts.map(product => [product.id, product])));
   state.issues = data.issues;
   state.version++;
   state.beforeListeners.forEach((listener) => listener());
@@ -118,7 +139,7 @@ export function startProductCatalogueUpdates() {
 }
 if (import.meta.hot) {
   import.meta.hot.on('domus:catalogue', updateCatalogue);
-  import.meta.hot.dispose((data) => { data.catalogue = state; import.meta.hot?.off('domus:catalogue', updateCatalogue); });
+  import.meta.hot.dispose((data) => { data.catalogue = state; data.liveCatalogue = liveCatalogue; data.roomProducts = roomProducts; import.meta.hot?.off('domus:catalogue', updateCatalogue); });
 }
 
 /** Runtime derivatives retain the source URL for catalogue identity and dimensions. */

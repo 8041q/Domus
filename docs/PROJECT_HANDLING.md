@@ -1,3 +1,11 @@
+# Current project handling
+
+The production release uses IndexedDB for named room documents, compact models,
+and recovery drafts. `.domus` files are complete editable ZIP backups;
+`.domus.json` files contain only layouts. See the README and ARCHITECTURE guide
+for storage limits and migration behavior. The verification below records the
+older localStorage implementation; its migration contract remains covered.
+
 # Project handling verification
 
 Verified on 4 October 2026. `npm test`: 98 passing checks; `npm run build`: successful.
@@ -24,7 +32,7 @@ Verified on 4 October 2026. `npm test`: 98 passing checks; `npm run build`: succ
 - A recovery draft preserves saved identity, saved baseline and unsaved changes.
   Undo back to the saved snapshot clears the dirty status. Camera/UI changes do
   not mark a project dirty. Hot updates retain the active project session.
-- Recovery is shared across browser tabs. Explicit record saves reject a stale
+- Recovery is isolated by tab; duplicated tabs receive separate identities. Explicit record saves reject a stale
   revision after another tab updates that room; Save as can retain both versions.
 
 ## Automated cases

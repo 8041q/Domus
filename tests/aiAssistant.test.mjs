@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
-import { createServer } from 'vite';
+import { createTestServer as createServer } from './helpers/vite.mjs';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 

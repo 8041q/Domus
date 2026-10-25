@@ -5,7 +5,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
-import { createServer, preview } from 'vite';
+import { preview } from 'vite';
+import { createTestServer as createServer } from './helpers/vite.mjs';
 import { MODEL_CACHE_TTL_MS } from '../scripts/model-cache.mjs';
 
 const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: 'custom', logLevel: 'silent' });
@@ -54,6 +55,16 @@ test('new models, copies and nested folders import automatically with unique per
   }
   assert.deepEqual((await new ModelCatalogue(root).scan()).products.map(p=>p.id),first.products.map(p=>p.id));
   assert.match(first.products[0].model.url,/\/models\/Medical\/bed\.glb\?v=/);
+});
+
+test('independent catalogue writers serialize their registry updates without ID changes or temporary-file races', async t => {
+  const { root, models } = await sandbox(t);
+  await writeFile(path.join(models, 'fixture.glb'), glb(metadata));
+  const results = await Promise.all(Array.from({ length: 6 }, () => new ModelCatalogue(root).scan()));
+  assert.equal(new Set(results.map(result => result.products[0].id)).size, 1);
+  const registry = JSON.parse(await readFile(path.join(root, 'model-catalogue.json'), 'utf8'));
+  assert.equal(registry.entries.length, 1);
+  assert.equal(registry.entries[0].id, results[0].products[0].id);
 });
 
 test('runtime derivatives retain source identity and dimensions, and stale or incomplete copies fall back to the source', async (t) => {

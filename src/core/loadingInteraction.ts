@@ -11,7 +11,20 @@ export function blocksLoadingInteraction(event: Event) {
   return !navigation;
 }
 
+const locks = new WeakMap<HTMLElement, { count: number; release: () => void }>();
+/** Project persistence and scene loading may overlap; release only the last lease. */
 export function lockLoadingInteraction(root: HTMLElement) {
+  let lock = locks.get(root);
+  if (lock) lock.count++;
+  else { lock = { count: 1, release: createLoadingInteractionLock(root) }; locks.set(root, lock); }
+  let released = false;
+  return () => {
+    if (released) return; released = true;
+    if (--lock.count === 0) { lock.release(); locks.delete(root); }
+  };
+}
+
+function createLoadingInteractionLock(root: HTMLElement) {
   const previous = new Map<HTMLElement, boolean>();
   const focused = root.ownerDocument.activeElement as HTMLElement | null;
   const restore = () => { for (const [node, inert] of previous) node.inert = inert; previous.clear(); };

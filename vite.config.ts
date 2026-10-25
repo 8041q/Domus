@@ -7,6 +7,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   return {
     plugins: [react(), automaticModelCatalogue(), experimentalAiGateway(env.OLLAMA_ALLOWED_ENDPOINTS)],
-    server: { port: 5173 }
+    server: { host: 'localhost', port: 5173, strictPort: true },
+    preview: { host: 'localhost', port: 4173, strictPort: true }
   };
 });

@@ -1,11 +1,29 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { createServer } from 'vite';
+import { createTestServer as createServer } from './helpers/vite.mjs';
 
 const vite = await createServer({ server: { middlewareMode: true, hmr: false }, appType: 'custom', logLevel: 'silent' });
 after(() => vite.close());
 const { createLoadingCoordinator } = await vite.ssrLoadModule('/src/core/loadingCoordinator.ts');
 const { PlannerScene } = await vite.ssrLoadModule('/src/renderer/PlannerScene.ts');
+const { lockLoadingInteraction } = await vite.ssrLoadModule('/src/core/loadingInteraction.ts');
+
+test('overlapping scene and project loading locks release interaction only after both finish', () => {
+  const priorWindow = globalThis.window, priorObserver = globalThis.MutationObserver;
+  let listeners = 0, observers = 0;
+  globalThis.window = { addEventListener() { listeners++; }, removeEventListener() { listeners--; } };
+  globalThis.MutationObserver = class { constructor() { observers++; } observe() {} disconnect() { observers--; } };
+  const nav = { focus() {} }, surface = {}, control = { inert: false, contains: () => false };
+  const root = { ownerDocument: { activeElement: null }, children: [nav, surface, control], dataset: {},
+    querySelectorAll: () => [nav, surface], querySelector: () => nav };
+  try {
+    const scene = lockLoadingInteraction(root), project = lockLoadingInteraction(root);
+    assert.equal(control.inert, true); assert.equal(observers, 1);
+    scene(); assert.equal(control.inert, true);
+    project(); assert.equal(control.inert, false); assert.equal(listeners, 0); assert.equal(observers, 0);
+    project(); assert.equal(listeners, 0);
+  } finally { globalThis.window = priorWindow; globalThis.MutationObserver = priorObserver; }
+});
 
 function fixture() {
   let time = 0, id = 0;
