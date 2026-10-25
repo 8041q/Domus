@@ -26,7 +26,7 @@ function fixture() {
     hasPointerCapture(id) { return captures.has(id); },
     releasePointerCapture(id) { captures.delete(id); }
   });
-  const camera = new THREE.PerspectiveCamera();
+  const camera = new THREE.PerspectiveCamera(65);
   camera.position.set(3, 1.6, 3);
   const moves = [];
   let changes = 0, exits = 0;
@@ -95,7 +95,7 @@ test('look drag turns in place and keyboard movement follows horizontal heading'
   const f = fixture(); f.controls.setEnabled(true);
   const position = f.camera.position.clone();
   pointer(f, 'pointerdown');
-  pointer(f, 'pointermove', { clientX: -Math.PI / 2 / 0.003, clientY: 20_000 });
+  pointer(f, 'pointermove', { clientX: Math.PI / 2 / 0.003, clientY: -20_000 });
   pointer(f, 'pointerup');
   f.controls.update(0);
   assert.ok(f.camera.position.equals(position));
@@ -107,7 +107,7 @@ test('look drag turns in place and keyboard movement follows horizontal heading'
   f.controls.dispose();
 });
 
-test('mouse pan and wheel share horizontal collision movement without changing FOV', () => {
+test('pan moves the viewer while wheel zoom only changes magnification', () => {
   const f = fixture(); f.controls.setEnabled(true);
   const originalFov = f.camera.fov, originalQuaternion = f.camera.quaternion.clone();
   pointer(f, 'pointerdown', { button: 2 });
@@ -121,9 +121,9 @@ test('mouse pan and wheel share horizontal collision movement without changing F
   assert.equal(wheel.defaultPrevented, true);
   assert.equal(f.moves.length, 0, 'wheel input eases across future frames');
   advance(f, 0, 1000);
-  assert.ok(Math.abs(distance(f) - 0.8) < 1e-8);
-  assert.ok(f.moves.every(move => move.x === 0 && move.z < 0 && Math.abs(move.z) <= 0.05 + 1e-6));
-  assert.equal(f.camera.fov, originalFov);
+  assert.equal(f.moves.length, 0, 'zoom never translates through the room');
+  assert.ok(f.camera.fov >= 30);
+  assert.ok(f.camera.fov < originalFov);
   assert.ok(f.camera.quaternion.equals(originalQuaternion));
   f.controls.dispose();
 });
@@ -154,38 +154,51 @@ test('look bursts preserve total rotation while applying the quaternion only on 
   pointer(f, 'pointerup');
   assert.ok(f.camera.quaternion.equals(before), 'events update intent without repeated camera work');
   assert.equal(f.controls.update(0), true);
-  const expected = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.15, -0.3, 0, 'YXZ'));
+  const expected = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.15, 0.3, 0, 'YXZ'));
   assert.ok(f.camera.quaternion.angleTo(expected) < 1e-7);
   assert.equal(f.moves.length, 0);
   assert.equal(f.controls.update(16), false);
   f.controls.dispose();
 });
 
-test('wheel units have equal travel, trackpad sideways movement works, and bursts cannot build a long backlog', () => {
+test('wheel units give equal magnification, zoom stays bounded, and horizontal scroll does not walk', () => {
+  const fovs = [];
   for (const [deltaY, deltaMode] of [[120, 0], [7.5, 1], [0.2, 2]]) {
     const f = fixture(); f.controls.setEnabled(true);
     emit(f.canvas, 'wheel', { deltaY, deltaMode }); advance(f, 0, 1000);
-    assert.ok(Math.abs(distance(f) - 0.3) < 1e-8);
+    assert.equal(f.moves.length, 0);
+    fovs.push(f.camera.fov);
     assert.equal(f.controls.update(1016), false); f.controls.dispose();
   }
   const f = fixture(); f.controls.setEnabled(true);
-  for (let sample = 0; sample < 1000; sample++) emit(f.canvas, 'wheel', { deltaX: 100, deltaY: 0, deltaMode: 0 });
+  assert.ok(Math.max(...fovs) - Math.min(...fovs) < 1e-8);
+  for (let sample = 0; sample < 1000; sample++) emit(f.canvas, 'wheel', { deltaX: 100, deltaY: -120, deltaMode: 0 });
   advance(f, 0, 1000);
-  assert.ok(Math.abs(distance(f) - 0.8) < 1e-8);
-  assert.ok(f.moves.every(move => move.x > 0 && Math.abs(move.z) < 1e-9));
-  assert.equal(f.controls.update(1016), false); f.controls.dispose();
+  assert.equal(f.camera.fov, 30); assert.equal(f.moves.length, 0);
+  for (let sample = 0; sample < 1000; sample++) emit(f.canvas, 'wheel', { deltaY: 120, deltaMode: 0 });
+  advance(f, 1000, 1000);
+  assert.equal(f.camera.fov, 85);
+  emit(f.canvas, 'wheel', { deltaX: 100, deltaY: 0, deltaMode: 0 });
+  advance(f, 2000, 1000);
+  assert.equal(f.camera.fov, 85); assert.equal(f.moves.length, 0);
+  assert.equal(f.controls.update(3016), false); f.controls.dispose();
 });
 
-test('wheel reversal promptly cancels the old direction and pinch zoom stays a browser gesture', () => {
+test('wheel reversal changes zoom direction promptly and trackpad pinch zooms the view', () => {
   const f = fixture(); f.controls.setEnabled(true);
   emit(f.canvas, 'wheel', { deltaY: -120, deltaMode: 0 });
+  f.controls.update(0); f.controls.update(16);
+  const atReversal = f.camera.fov;
   emit(f.canvas, 'wheel', { deltaY: 40, deltaMode: 0 });
-  advance(f, 0, 1000);
-  assert.ok(Math.abs(distance(f) - 0.1) < 1e-8);
-  assert.ok(f.moves.every(move => move.z > 0));
-  assert.equal(emit(f.canvas, 'wheel', { deltaY: 120, deltaMode: 0, ctrlKey: true }).defaultPrevented, false);
+  advance(f, 16, 1000);
+  assert.ok(f.camera.fov > atReversal);
+  const beforePinch = f.camera.fov;
+  assert.equal(emit(f.canvas, 'wheel', { deltaY: -120, deltaMode: 0, ctrlKey: true }).defaultPrevented, true);
+  advance(f, 1016, 1000);
+  assert.ok(f.camera.fov < beforePinch);
+  assert.equal(f.moves.length, 0);
   assert.equal(emit(f.canvas, 'wheel', { deltaY: NaN, deltaMode: 0 }).defaultPrevented, false);
-  assert.equal(f.controls.update(1016), false); f.controls.dispose();
+  assert.equal(f.controls.update(2032), false); f.controls.dispose();
 });
 
 test('cancelled pointers and missed button releases cannot keep dragging or apply a cancelled sample', () => {
@@ -272,4 +285,103 @@ test('Escape exits and disabling/disposal releases capture, clears keys and rest
   f.controls.setEnabled(true); pointer(f, 'pointerdown'); f.controls.dispose();
   assert.equal(f.canvas.style.cursor, 'default'); assert.equal(f.captures.size, 0);
   assert.equal(emit(f.canvas, 'wheel', { deltaY: -100, deltaMode: 0 }).defaultPrevented, false);
+});
+
+const touch = (f, type, id, x, y) => emit(type === 'pointerdown' ? f.canvas : f.window, type, {
+  pointerType: 'touch', pointerId: id, isPrimary: id === 1, button: 0,
+  clientX: x, clientY: y, buttons: type === 'pointerup' || type === 'pointercancel' ? 0 : 1
+});
+
+test('the visible Pan tool makes primary mouse drag pan and Look restores panorama dragging', () => {
+  const f = fixture(); f.controls.setEnabled(true); f.controls.setPointerMode('pan');
+  const quaternion = f.camera.quaternion.clone();
+  pointer(f, 'pointerdown'); pointer(f, 'pointermove', { clientX: 50, clientY: 25 }); pointer(f, 'pointerup');
+  f.controls.update(0);
+  assert.deepEqual(f.moves, [{ x: -0.3, z: 0.15 }]);
+  assert.ok(f.camera.quaternion.equals(quaternion));
+  f.controls.setPointerMode('look'); f.moves.length = 0;
+  pointer(f, 'pointerdown'); pointer(f, 'pointermove', { clientX: 50, clientY: 25 }); pointer(f, 'pointerup');
+  f.controls.update(16);
+  assert.equal(f.moves.length, 0); assert.ok(!f.camera.quaternion.equals(quaternion));
+  f.controls.dispose();
+});
+
+test('zoom buttons change the lens and zoomed-in dragging stays controlled', () => {
+  const f = fixture(); f.controls.setEnabled(true);
+  const projection = f.camera.projectionMatrix.clone();
+  f.controls.zoomBy(2); advance(f, 0, 1000);
+  assert.ok(f.camera.fov < 40); assert.equal(f.moves.length, 0);
+  assert.ok(!f.camera.projectionMatrix.equals(projection));
+  pointer(f, 'pointerdown'); pointer(f, 'pointermove', { clientX: 100 }); pointer(f, 'pointerup'); f.controls.update(1016);
+  const yaw = new THREE.Euler().setFromQuaternion(f.camera.quaternion, 'YXZ').y;
+  assert.ok(yaw > 0 && yaw < 0.2, 'zoom reduces pointer angular sensitivity');
+  for (const factor of [NaN, Infinity, -1, 0]) f.controls.zoomBy(factor);
+  assert.equal(f.controls.update(1032), false);
+  f.controls.dispose();
+});
+
+test('one finger looks around without moving the viewer', () => {
+  const f = fixture(); f.controls.setEnabled(true);
+  touch(f, 'pointerdown', 1, 100, 100); touch(f, 'pointermove', 1, 150, 125); touch(f, 'pointerup', 1, 150, 125);
+  f.controls.update(0);
+  const expected = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.075, 0.15, 0, 'YXZ'));
+  assert.ok(f.camera.quaternion.angleTo(expected) < 1e-7);
+  assert.equal(f.moves.length, 0); assert.equal(f.camera.fov, 65); assert.equal(f.captures.size, 0);
+  f.controls.dispose();
+});
+
+test('two fingers pan without rotating or zooming, including a non-primary second touch', () => {
+  const f = fixture(); f.controls.setEnabled(true);
+  const quaternion = f.camera.quaternion.clone();
+  touch(f, 'pointerdown', 1, 100, 100); touch(f, 'pointerdown', 2, 200, 100);
+  assert.equal(f.captures.size, 2);
+  for (let x = 2; x <= 24; x += 2) {
+    touch(f, 'pointermove', 1, 100 + x, 100); touch(f, 'pointermove', 2, 200 + x, 100);
+  }
+  touch(f, 'pointerup', 1, 124, 100); touch(f, 'pointerup', 2, 224, 100); f.controls.update(0);
+  assert.equal(f.moves.length, 1); assert.ok(Math.abs(f.moves[0].x + 0.144) < 1e-8); assert.equal(f.moves[0].z, 0);
+  assert.ok(f.camera.quaternion.equals(quaternion)); assert.equal(f.camera.fov, 65); assert.equal(f.captures.size, 0);
+  f.controls.dispose();
+});
+
+test('fast two-finger pan is classified from both fingers together instead of mistaken for pinch', () => {
+  const f = fixture(); f.controls.setEnabled(true);
+  touch(f, 'pointerdown', 1, 100, 100); touch(f, 'pointerdown', 2, 200, 100);
+  touch(f, 'pointermove', 1, 150, 100); touch(f, 'pointermove', 2, 250, 100);
+  const changes = f.changes;
+  f.controls.update(0);
+  assert.equal(f.changes, changes, 'processing a touch frame does not schedule a redundant frame');
+  assert.deepEqual(f.moves, [{ x: -0.3, z: 0 }]); assert.equal(f.camera.fov, 65);
+  touch(f, 'pointerup', 1, 150, 100); touch(f, 'pointerup', 2, 250, 100);
+  f.controls.dispose();
+});
+
+test('pinch magnifies without panning and finger transitions do not jump', () => {
+  const f = fixture(); f.controls.setEnabled(true);
+  const quaternion = f.camera.quaternion.clone();
+  touch(f, 'pointerdown', 1, 100, 100); touch(f, 'pointermove', 1, 105, 100);
+  touch(f, 'pointerdown', 2, 205, 100); // Discard an unrendered one-finger look at the transition.
+  for (let x = 4; x <= 40; x += 4) {
+    touch(f, 'pointermove', 1, 105 - x, 100); touch(f, 'pointermove', 2, 205 + x, 100);
+  }
+  f.controls.update(0); f.controls.update(16);
+  const beforeLift = f.camera.quaternion.clone();
+  touch(f, 'pointerup', 1, 65, 100); touch(f, 'pointermove', 2, 245, 100); touch(f, 'pointerup', 2, 245, 100);
+  advance(f, 16, 1000);
+  assert.equal(f.moves.length, 0); assert.ok(f.camera.fov < 45);
+  assert.ok(f.camera.quaternion.equals(quaternion)); assert.ok(f.camera.quaternion.equals(beforeLift));
+  assert.equal(f.captures.size, 0); assert.equal(f.controls.update(1032), false);
+  f.controls.dispose();
+});
+
+test('Pan offers a one-finger alternative and cancelling touch clears every captured finger', () => {
+  const f = fixture(); f.controls.setEnabled(true); f.controls.setPointerMode('pan');
+  touch(f, 'pointerdown', 1, 100, 100); touch(f, 'pointermove', 1, 120, 110); f.controls.update(0);
+  assert.deepEqual(f.moves, [{ x: -0.12, z: 0.06 }]);
+  touch(f, 'pointerdown', 2, 200, 100); touch(f, 'pointerdown', 3, 300, 100);
+  assert.equal(f.captures.size, 2, 'extra fingers do not change the active gesture');
+  touch(f, 'pointercancel', 1, 120, 110);
+  assert.equal(f.captures.size, 0); assert.equal(f.controls.update(16), false);
+  touch(f, 'pointermove', 2, 240, 120); assert.equal(f.controls.update(32), false);
+  f.controls.dispose();
 });

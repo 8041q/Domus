@@ -160,9 +160,13 @@ skipped when those files are absent.
 | Use the fine Build Room snap | Hold `Shift` while dragging in 2D |
 
 Choose **Walk** to explore the room from eye level with wall collisions. Click the
-room, then use `WASD` or arrow keys to move. Drag with the left mouse button to
-look around, drag with the right or middle button to move across the floor, and
-scroll to walk forward or backward. `Esc` or **Exit walk** returns to the previous
+room, then use `WASD` or arrow keys to move. Drag to look around, right-drag to
+pan across the floor, and scroll to zoom. **Look** and **Pan** buttons let you
+choose what a primary drag does; **− / +** also control zoom. Zoom magnifies the
+view without changing your position. On phones, drag with one finger to look,
+drag with two fingers to pan, or pinch to zoom. Choose **Pan** for a one-finger
+alternative. Walk fills the phone workspace and brings the catalogue back when
+you exit. `Esc` or **Exit walk** returns to the previous
 planner camera. Walk shows full-height walls and the ceiling; your wall display
 preference returns when you leave. Furniture editing shortcuts are paused while
 walking. Walls, windows and closed doors block movement. Bare passages and door

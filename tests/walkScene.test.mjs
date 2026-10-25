@@ -220,13 +220,13 @@ test('resetting an active walk synchronizes the look controller and clears held 
   try {
     scene.setCameraView('walk'); drag(100);
     const direction = () => scene.camera.getWorldDirection(new THREE.Vector3()).y;
-    assert.ok(direction() < -0.29);
+    assert.ok(direction() > 0.29);
     emit(canvas, 'keydown', { code: 'KeyW', key: 'w' });
     scene.setCameraView('walk');
     assert.ok(Math.abs(direction()) < 1e-10, 'Reset levels the camera');
     assert.equal(scene.walkControls.update(0), false, 'Reset clears held movement');
     drag(1);
-    assert.ok(Math.abs(direction() + Math.sin(0.003)) < 1e-10, 'the next drag starts from the reset orientation');
+    assert.ok(Math.abs(direction() - Math.sin(0.003)) < 1e-10, 'the next drag starts from the reset orientation');
   } finally { scene.walkControls.dispose(); }
 });
 

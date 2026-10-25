@@ -180,8 +180,9 @@ Left or Right switches to Free cam while retaining the view direction and framin
 Zoom and pan retain the fixed preset; the wall toggle does not reset the camera.
 
 Walk is a separate first-person camera view. It keeps the camera at eye level
-and routes keyboard movement, mouse floor-plane movement and wheel steps through
-the same semantic wall collision rules. Left drag looks around; WASD and arrow
+and routes keyboard movement and floor-plane panning through the same semantic
+wall collision rules. Primary drag grabs the panorama; secondary drag pans, and
+the visible Look/Pan switch provides a primary-button alternative. WASD and arrow
 keys move only while the viewport has focus. Focus loss cancels movement. Walk
 temporarily shows full walls and ceiling and hides editing helpers and furniture
 selection. Leaving Walk restores the prior planner camera and wall display
@@ -189,8 +190,13 @@ preference. Its position and input state are renderer state rather than saved
 project data.
 
 Walk batches pointer input and resolves one combined horizontal movement per
-frame. Keyboard acceleration and braking use elapsed time, and wheel/trackpad
-travel eases through a bounded queue. Blur, hidden tabs and input composition
+frame. Keyboard acceleration and braking use elapsed time. Wheel, trackpad pinch,
+touch pinch and zoom buttons adjust a bounded 30–85° field of view without moving
+the camera; zoomed-in drags have lower sensitivity. Touch tracks both pointers,
+distinguishes two-finger pan from pinch after a small intent threshold, and
+rebases when fingers lift. One finger uses the selected Look/Pan tool. Mobile
+Walk hides the catalogue and sizes the workspace to the dynamic viewport; exiting
+restores the catalogue. Blur, hidden tabs and input composition
 clear pending motion. Cached wall bases and bounds reject distant collision
 candidates before continuous sweeps; recovery searches near the walker and can
 fall back outside an unusably narrow editing space.

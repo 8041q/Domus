@@ -1,7 +1,7 @@
 import { activeArchitecture } from '../core/activeArchitecture';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { WalkControls } from './WalkControls';
+import { WalkControls, type WalkPointerMode } from './WalkControls';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { OutlinePass } from 'three/examples/jsm/postprocessing/OutlinePass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
@@ -463,6 +463,14 @@ export class PlannerScene {
 
   resetCamera() {
     this.setCameraView('free');
+  }
+
+  setWalkPointerMode(mode: WalkPointerMode) {
+    this.walkControls.setPointerMode(mode);
+  }
+
+  zoomWalk(factor: number) {
+    if (this.currentCameraView === 'walk') this.walkControls.zoomBy(factor);
   }
 
   /**

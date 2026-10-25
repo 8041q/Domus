@@ -454,7 +454,7 @@ export function PlanRoom({ onExportReady, onPdfExportReady }: {
   }, [showFinishes, showViewOptions]);
 
   return (
-    <div className="mode-layout plan-room-layout">
+    <div className={`mode-layout plan-room-layout${walking ? ' is-walking' : ''}`}>
       <ProductCatalog />
 
       <section className="designer-canvas">

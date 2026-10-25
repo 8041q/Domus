@@ -8,6 +8,8 @@ import { usePlannerStore } from './store';
 import { subscribeProductCatalogue } from './core/products';
 import { roomProjects } from './roomProjects';
 import { registerOpeningVisibility } from './core/openingVisibility';
+import { Icon } from './ui';
+import type { WalkPointerMode } from './renderer/WalkControls';
 
 export function Viewport3D({
   furniture = true,
@@ -33,12 +35,17 @@ export function Viewport3D({
   const [modelStatus, setModelStatus] = useState<ModelLoadStatus>({ loading: false, error: null, completed: 0, total: 0 });
   const [preparingRoom, setPreparingRoom] = useState(true);
   const [loadingTextures, setLoadingTextures] = useState(false);
+  const [walkPointerMode, setWalkPointerMode] = useState<WalkPointerMode>('look');
   const ref = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<PlannerScene | null>(null);
   const internallyChangedViewRef = useRef<PlanCameraView | null>(null);
   const exportingRef = useRef(false);
   const [exportingPdf, setExportingPdf] = useState(false);
   const [exportingGlb, setExportingGlb] = useState(false);
+  const chooseWalkTool = (mode: WalkPointerMode) => {
+    setWalkPointerMode(mode);
+    sceneRef.current?.setWalkPointerMode(mode);
+  };
   const exportPDF = async () => {
     if (!sceneRef.current || exportingRef.current) return;
     exportingRef.current = true; setExportingPdf(true);
@@ -143,6 +150,7 @@ export function Viewport3D({
         onError: fail
       });
       sceneRef.current = scene;
+      scene.setWalkPointerMode(walkPointerMode);
       if (architectureInteractive) {
         const viewport = scene;
         unregisterOpeningVisibility = registerOpeningVisibility(opening => viewport.openingAllowedOnVisibleWalls(opening));
@@ -197,6 +205,10 @@ export function Viewport3D({
   }, [view]);
 
   useEffect(() => {
+    sceneRef.current?.setWalkPointerMode(walkPointerMode);
+  }, [walkPointerMode]);
+
+  useEffect(() => {
     if (resetViewRequest > 0) {
       if (view) sceneRef.current?.setCameraView(view);
       else sceneRef.current?.resetCamera();
@@ -210,10 +222,20 @@ export function Viewport3D({
       <LoadingStatus phase="export" active={!failure && (exportingPdf || exportingGlb)} blocking label={exportingPdf ? 'Preparing room report…' : 'Preparing 3D export…'}
         detail={exportingPdf ? 'Capturing room views and measurements' : 'Gathering room geometry and materials'} />
       <div className="viewport" ref={ref} hidden={failure} />
-      {view === 'walk' && !failure && <div className="walk-controls" role="note" aria-label="Walk controls">
-        <div><strong>Walk</strong><span>Click the room to use <kbd>WASD</kbd> or arrow keys.</span>
-          <span>Drag to look · Right/middle drag to move · Scroll to walk</span></div>
-        <button type="button" onClick={() => usePlannerStore.getState().setPlanView('free')}>Exit walk <kbd>Esc</kbd></button>
+      {view === 'walk' && !failure && <div className="walk-controls" role="region" aria-label="Walk controls">
+        <div className="walk-control-tools">
+          <div className="walk-tool-switch" role="group" aria-label="Drag tool">
+            <button type="button" aria-pressed={walkPointerMode === 'look'} onClick={() => chooseWalkTool('look')}><Icon name="eye" />Look</button>
+            <button type="button" aria-pressed={walkPointerMode === 'pan'} onClick={() => chooseWalkTool('pan')}><Icon name="move" />Pan</button>
+          </div>
+          <div className="walk-zoom-tools" role="group" aria-label="Zoom">
+            <button type="button" aria-label="Zoom out" onClick={() => sceneRef.current?.zoomWalk(1 / 1.2)}>−</button>
+            <button type="button" aria-label="Zoom in" onClick={() => sceneRef.current?.zoomWalk(1.2)}>+</button>
+          </div>
+          <button type="button" className="walk-exit" onClick={() => usePlannerStore.getState().setPlanView('free')}>Exit walk <kbd>Esc</kbd></button>
+        </div>
+        <p className="walk-help-pointer">Drag to {walkPointerMode} · Scroll to zoom · <kbd>WASD</kbd> to walk</p>
+        <p className="walk-help-touch">Drag to {walkPointerMode} · Two fingers to pan · Pinch to zoom</p>
       </div>}
       <LoadingStatus phase="models" active={!failure && (modelStatus.loading || !!modelStatus.error)}
         label={modelStatus.loading ? 'Loading furniture…' : 'Some furniture could not load'}

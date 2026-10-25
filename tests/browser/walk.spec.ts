@@ -51,7 +51,7 @@ test('Walk supports keyboard and mouse navigation without editing furniture, and
 
   await walk.click();
   await expect(walk).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByRole('note', { name: 'Walk controls' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Walk controls' })).toBeVisible();
   await expect(canvas).toHaveAttribute('aria-label', 'Walk through room');
   await expect(canvas).toBeFocused();
   await expect(page.locator('.selection-panel')).toHaveCount(0);
@@ -61,7 +61,14 @@ test('Walk supports keyboard and mouse navigation without editing furniture, and
   await changesView(page, () => page.keyboard.press('ArrowRight', { delay: 220 }), 'Arrow keys move across the floor');
   await changesView(page, () => dragView(page, 'left', 90, 30), 'Left drag looks around');
   await changesView(page, () => dragView(page, 'right', 55, 15), 'Right drag moves across the floor');
-  await changesView(page, () => page.mouse.wheel(0, 200), 'Wheel walks backward');
+  await page.getByRole('button', { name: 'Pan', exact: true }).click();
+  await expect(canvas).toBeFocused();
+  await changesView(page, () => dragView(page, 'left', 40, 10), 'Pan tool uses the primary button');
+  await page.getByRole('button', { name: 'Look', exact: true }).click();
+  const bounds = (await canvas.boundingBox())!;
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  await changesView(page, () => page.mouse.wheel(0, 200), 'Wheel changes magnification');
+  await changesView(page, () => page.getByRole('button', { name: 'Zoom in', exact: true }).click(), 'Zoom buttons change magnification');
   for (const key of ['r', 'x', 'Delete', 'Backspace']) await page.keyboard.press(key);
   await expect(canvas).toBeVisible();
   const walked = await layout(page);
@@ -70,20 +77,20 @@ test('Walk supports keyboard and mouse navigation without editing furniture, and
   await canvas.focus();
   await page.keyboard.press('Escape');
   await expect(page.getByRole('button', { name: 'Free cam', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByRole('note', { name: 'Walk controls' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Walk controls' })).toHaveCount(0);
   await expect(canvas).toHaveAttribute('aria-label', '3D room view');
   await expect(page.locator('.selection-panel')).toBeVisible();
 
   await walk.click();
   await page.getByRole('button', { name: /Exit walk/ }).click();
   await expect(walk).toHaveAttribute('aria-pressed', 'false');
-  await expect(page.getByRole('note', { name: 'Walk controls' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Walk controls' })).toHaveCount(0);
 
   await walk.click();
   await page.getByRole('button', { name: 'Top', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Top', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(canvas).toHaveAttribute('aria-label', '3D room view');
-  await expect(page.getByRole('note', { name: 'Walk controls' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Walk controls' })).toHaveCount(0);
   await canvas.focus();
   await page.keyboard.press('r');
   const edited = await layout(page);
@@ -110,4 +117,70 @@ test('PDF export from Walk restores walking and its planner return view', async 
   await page.keyboard.press('Escape');
   await expect(page.getByRole('button', { name: 'Free cam', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(canvas).toHaveAttribute('aria-label', '3D room view');
+});
+
+test('phone Walk keeps controls in reach and supports touch navigation without a keyboard', async ({ browser, browserName }, testInfo) => {
+  test.skip(browserName === 'firefox', 'Playwright does not emulate mobile Firefox.');
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
+  const page = await context.newPage();
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  try {
+    await readyToPlan(page);
+    await page.getByRole('button', { name: 'Walk', exact: true }).tap();
+    const canvas = page.locator('.viewport canvas');
+    const controls = page.getByRole('region', { name: 'Walk controls' });
+    await expect(controls).toBeVisible();
+    await expect(page.locator('.catalog-panel')).toBeHidden();
+    await expect(page.locator('.walk-help-touch')).toBeVisible();
+    await expect(page.locator('.walk-help-pointer')).toBeHidden();
+    const box = (await controls.boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(0); expect(box.x + box.width).toBeLessThanOrEqual(391);
+    expect(box.y + box.height).toBeLessThanOrEqual(844);
+    for (const button of await controls.getByRole('button').all()) {
+      const target = (await button.boundingBox())!;
+      expect(target.width).toBeGreaterThanOrEqual(44); expect(target.height).toBeGreaterThanOrEqual(44);
+    }
+    await page.screenshot({ path: testInfo.outputPath('phone-walk.png') });
+    if (browserName === 'chromium') {
+      const cdp = await context.newCDPSession(page);
+      const bounds = (await canvas.boundingBox())!;
+      const x = bounds.x + bounds.width / 2, y = bounds.y + bounds.height / 2;
+      const gesture = async (kind: 'look' | 'pan' | 'pinch') => {
+        const points = (step: number) => kind === 'look'
+          ? [{ id: 1, x: x + step * 4, y }]
+          : kind === 'pan'
+            ? [{ id: 1, x: x - 40 + step * 3, y }, { id: 2, x: x + 40 + step * 3, y }]
+            : [{ id: 1, x: x - 40 - step * 3, y }, { id: 2, x: x + 40 + step * 3, y }];
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: points(0) });
+        for (let step = 1; step <= 12; step++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: points(step) });
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      };
+      const scroll = await page.evaluate(() => window.scrollY);
+      await changesView(page, () => gesture('look'), 'One finger looks around');
+      await changesView(page, () => gesture('pan'), 'Two fingers pan');
+      await changesView(page, () => gesture('pinch'), 'Pinch magnifies');
+      expect(await page.evaluate(() => window.scrollY)).toBe(scroll);
+      await page.getByRole('button', { name: 'Pan', exact: true }).tap();
+      await expect(page.getByRole('button', { name: 'Pan', exact: true })).toHaveAttribute('aria-pressed', 'true');
+      await changesView(page, () => gesture('look'), 'Pan tool allows a one-finger alternative');
+      await cdp.detach();
+    }
+    await changesView(page, () => page.getByRole('button', { name: 'Zoom in', exact: true }).tap(), 'Touch zoom button magnifies');
+    for (const size of [{ width: 844, height: 390 }, { width: 320, height: 568 }]) {
+      await page.setViewportSize(size);
+      await expect(page.locator('.catalog-panel')).toBeHidden();
+      const panel = (await controls.boundingBox())!;
+      expect(panel.x).toBeGreaterThanOrEqual(0); expect(panel.x + panel.width).toBeLessThanOrEqual(size.width + 1);
+      expect(panel.y + panel.height).toBeLessThanOrEqual(size.height);
+      for (const button of await controls.getByRole('button').all()) {
+        const target = (await button.boundingBox())!;
+        expect(target.x).toBeGreaterThanOrEqual(0); expect(target.x + target.width).toBeLessThanOrEqual(size.width + 1);
+      }
+      await page.screenshot({ path: testInfo.outputPath(`phone-walk-${size.width}.png`) });
+    }
+    await page.getByRole('button', { name: /Exit walk/ }).tap();
+    await expect(page.locator('.catalog-panel')).toBeVisible();
+    await expect(controls).toHaveCount(0);
+    expect(errors).toEqual([]);
+  } finally { await context.close(); }
 });

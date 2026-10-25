@@ -233,19 +233,49 @@ input[type="range"]:disabled { opacity: .45; }
 .viewport canvas { display: block; width: 100%; height: 100%; touch-action: none; outline: none; }
 .viewport-stage { background: #d2d2d2; }
 .viewport canvas:focus-visible { outline: 2px solid var(--primary); outline-offset: -3px; }
-.walk-controls { position: absolute; z-index: 6; bottom: 12px; left: 12px; right: 12px; width: fit-content; max-width: calc(100% - 24px); display: flex; align-items: center; gap: 18px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: rgba(255,255,255,.94); backdrop-filter: blur(14px); box-shadow: var(--shadow-float); color: var(--foreground); }
-.walk-controls > div { display: grid; gap: 4px; min-width: 0; }
-.walk-controls strong { font-size: 11px; font-weight: 650; }
-.walk-controls span { color: var(--muted-foreground); font-size: 10px; line-height: 1.5; }
+.walk-controls { position: absolute; z-index: 6; bottom: 12px; left: 12px; right: 12px; width: fit-content; max-width: calc(100% - 24px); display: grid; gap: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 12px; background: rgba(255,255,255,.96); backdrop-filter: blur(14px); box-shadow: var(--shadow-float); color: var(--foreground); }
+.walk-control-tools { display: flex; align-items: center; gap: 8px; }
+.walk-tool-switch, .walk-zoom-tools { display: flex; gap: 3px; }
+.walk-tool-switch { padding: 3px; border-radius: 9px; background: var(--muted); }
 .walk-controls kbd { font: inherit; font-weight: 600; }
-.walk-controls button { flex-shrink: 0; min-height: 32px; padding: 6px 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--foreground); font: inherit; font-size: 10px; cursor: pointer; }
+.walk-controls button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex-shrink: 0; min-width: 44px; min-height: 44px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--card); color: var(--foreground); font: inherit; font-size: 12px; font-weight: 550; cursor: pointer; touch-action: manipulation; }
+.walk-tool-switch button { background: transparent; border-color: transparent; }
+.walk-tool-switch button[aria-pressed="true"] { background: var(--card); border-color: var(--border); box-shadow: 0 1px 4px #0000000c; }
+.walk-controls button svg { width: 16px; height: 16px; }
+.walk-zoom-tools button { font-size: 22px; font-weight: 400; }
 .walk-controls button:hover { background: var(--accent); }
+.walk-controls button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .walk-controls button kbd { margin-left: 5px; color: var(--muted-foreground); }
+.walk-controls p { margin: 0; padding: 0 3px; color: var(--muted-foreground); font-size: 10px; line-height: 1.5; }
+.walk-help-touch { display: none; }
+@media (pointer: coarse) {
+  .walk-help-pointer { display: none; }
+  .walk-help-touch { display: block; }
+  .walk-controls button kbd { display: none; }
+}
 .view-preset-bar button:disabled { opacity: .55; cursor: default; }
 @media (max-width: 520px) {
-  .walk-controls { align-items: flex-start; gap: 8px; padding: 9px; }
-  .walk-controls span { font-size: 9px; }
+  .walk-controls { left: 8px; right: 8px; bottom: max(8px, env(safe-area-inset-bottom)); width: auto; max-width: none; padding: 6px; }
+  .walk-control-tools { gap: 5px; justify-content: space-between; }
+  .walk-controls button { padding: 6px 8px; font-size: 12px; }
+  .walk-tool-switch { gap: 1px; padding: 2px; }
+  .walk-zoom-tools { gap: 2px; }
+  .walk-zoom-tools button { font-size: 22px; }
+  .walk-controls p { font-size: 10px; }
   .walk-controls button kbd { display: none; }
+}
+@media (max-width: 360px) {
+  .walk-control-tools { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+  .walk-tool-switch { grid-column: 1; grid-row: 1; width: fit-content; }
+  .walk-exit { grid-column: 2; grid-row: 1; }
+  .walk-zoom-tools { grid-column: 1 / -1; grid-row: 2; justify-content: center; }
+}
+@media (pointer: coarse) and (min-width: 821px) {
+  .app-shell:has(.plan-room-layout.is-walking) { height: 100dvh; }
+  .plan-room-layout.is-walking { grid-template-columns: minmax(0, 1fr); }
+  .plan-room-layout.is-walking .catalog-panel { display: none; }
+  .plan-room-layout.is-walking .designer-canvas { grid-template-rows: minmax(0, 1fr); }
+  .plan-room-layout.is-walking .interaction-status { display: none; }
 }
 .builder-3d-selection-surface { width: 100%; height: 100%; min-width: 0; min-height: 0; }
 .builder-3d-selection-surface > .viewport-stage { width: 100%; height: 100%; min-height: 0; }
@@ -598,6 +628,11 @@ input[type="range"]:disabled { opacity: .45; }
   .catalog-panel { max-height: none; }
   .product-grid { grid-template-columns: repeat(3, 1fr); }
   .designer-canvas { height: calc(100vh - 108px); min-height: 620px; grid-template-rows: minmax(420px, 1fr) auto; overflow: visible; }
+  .plan-room-layout.is-walking { height: calc(100dvh - 108px); min-height: 0; }
+  .plan-room-layout.is-walking .catalog-panel { display: none; }
+  .plan-room-layout.is-walking .designer-canvas { height: 100%; min-height: 0; grid-template-rows: minmax(0, 1fr); overflow: hidden; }
+  .plan-room-layout.is-walking .viewport { min-height: 0; }
+  .plan-room-layout.is-walking .interaction-status { display: none; }
   .selection-panel { top: auto; bottom: 12px; }
   .floating-reset-view { top: 12px; }
   .plan-view-controls { top: 58px; }
