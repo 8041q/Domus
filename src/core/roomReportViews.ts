@@ -1,4 +1,5 @@
-import { roomBounds, wallPoint } from './roomGeometry';
+import { roomBounds } from './roomGeometry';
+import { layoutReportPlanLabels } from './roomReportPlanLabels';
 import { reportFooter, reportFont, reportHeading, wrapReportText } from './reportLayout';
 import { jpegBytes, type PdfSnapshot, ROOM_PDF_VIEWS } from './roomPdf';
 import { reportMetres, type RoomReportData } from './roomReport';
@@ -29,42 +30,39 @@ export function drawReportPlanKey(ctx: CanvasRenderingContext2D, vertices: RoomV
   ctx.closePath(); ctx.fill();
   ctx.beginPath(); vertices.forEach((v, i) => { const p = point(v); if (i) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y); });
   ctx.closePath(); ctx.fillStyle = '#f4f4f6'; ctx.fill(); ctx.strokeStyle = '#a1a1aa'; ctx.lineWidth = 2; ctx.stroke();
-  const occupied: Array<{ left: number; top: number; right: number; bottom: number }> = [];
-  const labels: Array<{ text: string; colour: string; x: number; y: number }> = [];
-  summary.boundaries.forEach((boundary, i) => {
-    const colour = colours[i % colours.length]; ctx.strokeStyle = colour; ctx.fillStyle = colour; ctx.lineWidth = 6;
-    ctx.beginPath(); const start = point(boundary.walls[0].start); ctx.moveTo(start.x, start.y);
-    boundary.walls.forEach((wall) => { const p = point(wall.end); ctx.lineTo(p.x, p.y); }); ctx.stroke();
-    const first = boundary.walls[0];
-    let distance = boundary.length / 2;
-    const middle = boundary.walls.find((wall) => { if (distance <= wall.length) return true; distance -= wall.length; return false; }) ?? first;
-    const p = point(wallPoint(middle, distance));
-    reportFont(ctx, 24, true); ctx.fillStyle = colour; ctx.textAlign = 'center';
-    const textWidth = ctx.measureText(boundary.label).width;
-    const lateral = Math.abs(middle.inward.x) >= Math.abs(middle.inward.z) - 1e-8;
-    // Left/right names sit outside; top/bottom names sit just inside. At a
-    // diagonal corner, use the lateral placement instead of floating centrally.
-    // Account for the text rectangle at an angle so its corner cannot touch the wall.
-    const lateralGap = (gap + Math.abs(middle.inward.z) * 12) / Math.abs(middle.inward.x);
-    const verticalGap = (gap + Math.abs(middle.inward.x) * textWidth / 2) / Math.abs(middle.inward.z);
-    const cx = lateral ? p.x - Math.sign(middle.inward.x) * (lateralGap + textWidth / 2) : p.x;
-    const cy = lateral ? p.y - 12 : p.y + (middle.inward.z > 0 ? verticalGap : -verticalGap - 24);
-    const maxShift = Math.max(0, middle.length * scale / 2 - 12);
-    const positions = [0, 32, -32, 64, -64].map(offset => {
-      const shift = Math.max(-maxShift, Math.min(maxShift, offset));
-      const px = cx + middle.tangent.x * shift, py = cy + middle.tangent.z * shift;
-      return { x: px, y: py, left: px - textWidth / 2, right: px + textWidth / 2, top: py, bottom: py + 24 };
-    });
-    const label = positions.find(candidate => occupied.every(other =>
-      candidate.right + 8 <= other.left || candidate.left >= other.right + 8
-      || candidate.bottom + 8 <= other.top || candidate.top >= other.bottom + 8)) ?? positions[0];
-    occupied.push(label);
-    labels.push({ text: boundary.label, colour, x: label.x, y: label.y });
-  });
-  for (const label of labels) {
-    reportFont(ctx, 24, true); ctx.fillStyle = label.colour; ctx.textAlign = 'center';
-    ctx.fillText(label.text, label.x, label.y);
+  const polygon = vertices.map(point);
+  const inputs = summary.boundaries.map(boundary => ({
+    width: ctx.measureText(boundary.label).width,
+    walls: boundary.walls.map(wall => ({ start: point(wall.start), end: point(wall.end), inward: { x: wall.inward.x, y: wall.inward.z }, length: wall.length }))
+  }));
+  const area = { left: x, top: y, right: x + width, bottom: y + height };
+  const arrow = { left: frontX - 10, top: y + 3, right: frontX + 10, bottom: y + 28 };
+  let fontSize = 24;
+  let labels = layoutReportPlanLabels(inputs, polygon, area, arrow);
+  // Keep the usual large text, but allow a modest reduction for crowded custom
+  // outlines. The wall schedule remains the complete reference if no space fits.
+  for (const size of [22, 20, 18]) {
+    if (labels) break;
+    fontSize = size; reportFont(ctx, size, true);
+    labels = layoutReportPlanLabels(inputs.map((input, i) => ({ ...input, width: ctx.measureText(summary.boundaries[i].label).width })), polygon, area, arrow, size);
   }
+  if (!labels) labels = layoutReportPlanLabels(inputs.map((input, i) => ({ ...input, width: ctx.measureText(summary.boundaries[i].label).width })), polygon, area, arrow, fontSize, true);
+  summary.boundaries.forEach((boundary, i) => {
+    ctx.strokeStyle = colours[i % colours.length]; ctx.lineWidth = 6;
+    ctx.beginPath(); const start = point(boundary.walls[0].start); ctx.moveTo(start.x, start.y);
+    boundary.walls.forEach(wall => { const p = point(wall.end); ctx.lineTo(p.x, p.y); }); ctx.stroke();
+  });
+  labels?.forEach((label, i) => {
+    if (!label?.callout) return;
+    ctx.strokeStyle = colours[i % colours.length]; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(label.anchor.x, label.anchor.y);
+    ctx.lineTo(Math.max(label.left, Math.min(label.right, label.anchor.x)), Math.max(label.top, Math.min(label.bottom, label.anchor.y))); ctx.stroke();
+  });
+  labels?.forEach((label, i) => {
+    if (!label) return;
+    reportFont(ctx, fontSize, true); ctx.fillStyle = colours[i % colours.length]; ctx.textAlign = 'center';
+    ctx.fillText(summary.boundaries[i].label, label.x, label.y);
+  });
   ctx.restore();
 }
 

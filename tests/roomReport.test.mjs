@@ -261,6 +261,68 @@ test('large labels on adjacent angled sides do not overlap in the diagram', () =
   });
 });
 
+test('plan labels clear every wall, other labels, the arrow and key bounds in cramped rooms', () => {
+  let checked = 0;
+  for (const shape of ['angled-corner', 'l-shape', 'recess', 'rounded-rectangle', 'circle']) {
+    for (const aspect of [.35, .7, 1, 2.5, 5]) {
+      const snapshot = emptyRoomSnapshot(shape);
+      snapshot.room.vertices = snapshot.room.vertices.map(v => ({ ...v, x: v.x * aspect }));
+      const walls = getRoomWalls(snapshot.room);
+      const selections = shape === 'circle' || shape === 'rounded-rectangle'
+        ? [walls.slice(0, Math.floor(walls.length / 2))]
+        : [walls.slice(0, 2), walls.slice(1, 3), walls.filter(wall => wall.inward.z > .01), walls.filter(wall => wall.inward.z < -.01)];
+      for (const selection of selections) {
+        const summary = roomViewSummary(snapshot, 'front', selection.map(wall => wall.id));
+        if (summary.boundaries[1]) summary.boundaries[1].label = 'Side 12';
+        const canvas = recordingCanvas();
+        canvas.getContext().measureText = function(text) { return { width: text.length * Number(this.font.match(/(\d+)px/)?.[1] ?? 24) / 2 }; };
+        drawReportPlanKey(canvas.getContext(), snapshot.room.vertices, summary, 1390, 160, 340, 360);
+        const labels = canvas.operations.filter(op => op.kind === 'text' && /^Side /.test(op.text)).map(op => ({
+          left: op.x - canvas.getContext().measureText(op.text).width / 2,
+          right: op.x + canvas.getContext().measureText(op.text).width / 2,
+          top: op.y, bottom: op.y + Number(op.font.match(/(\d+)px/)[1])
+        }));
+        const context = `${shape}, aspect ${aspect}, ${selection.length} walls`;
+        assert.equal(labels.length, summary.boundaries.length, context);
+        const disjoint = (a, b, gap = 0) => a.right + gap <= b.left || a.left >= b.right + gap || a.bottom + gap <= b.top || a.top >= b.bottom + gap;
+        const outline = canvas.operations.find(op => op.kind === 'path' && op.width === 2).points;
+        labels.forEach((label, i) => {
+          assert.ok(label.left >= 1394 && label.right <= 1726 && label.top >= 164 && label.bottom <= 516, context);
+          assert.ok(disjoint(label, { left: 1550, right: 1570, top: 163, bottom: 188 }, 8), context);
+          labels.slice(i + 1).forEach(other => assert.ok(disjoint(label, other, 8), context));
+          // Sample the complete polygon, including recessed edges unrelated to
+          // the named side. Checking just the side's normal missed this bug.
+          outline.forEach((a, j) => {
+            const b = outline[(j + 1) % outline.length], steps = Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) * 2);
+            for (let step = 0; step <= steps; step++) {
+              const x = a[0] + (b[0] - a[0]) * step / steps, y = a[1] + (b[1] - a[1]) * step / steps;
+              assert.ok(x < label.left - 3.9 || x > label.right + 3.9 || y < label.top - 3.9 || y > label.bottom + 3.9, context);
+            }
+          });
+        });
+        checked++;
+      }
+    }
+  }
+  assert.equal(checked, 70);
+});
+
+test('an exceptionally crowded key keeps clear labels instead of an overlapping fallback', () => {
+  const snapshot = emptyRoomSnapshot('recess');
+  snapshot.room.vertices = snapshot.room.vertices.map(v => ({ ...v, x: v.x * 5 }));
+  const summary = roomViewSummary(snapshot, 'front', getRoomWalls(snapshot.room).map(wall => wall.id));
+  const canvas = recordingCanvas();
+  canvas.getContext().measureText = function(text) { return { width: text.length * Number(this.font.match(/(\d+)px/)?.[1] ?? 24) / 2 }; };
+  drawReportPlanKey(canvas.getContext(), snapshot.room.vertices, summary, 0, 0, 340, 360);
+  const labels = canvas.operations.filter(op => op.kind === 'text');
+  assert.ok(labels.length > 0, 'retain the labels that fit when the full set cannot fit');
+  labels.forEach((a, i) => labels.slice(i + 1).forEach(b => {
+    const aw = canvas.getContext().measureText(a.text).width, bw = canvas.getContext().measureText(b.text).width;
+    assert.ok(a.x + aw / 2 + 8 <= b.x - bw / 2 || b.x + bw / 2 + 8 <= a.x - aw / 2 || a.y + 26 <= b.y || b.y + 26 <= a.y);
+  }));
+  assert.equal(canvas.operations.filter(op => op.kind === 'path' && op.width === 6).length, summary.boundaries.length);
+});
+
 test('minimap names sit close to walls, outside left/right and inside top/bottom', () => {
   const snapshot = emptyRoomSnapshot(), walls = getRoomWalls(snapshot.room);
   const summary = roomViewSummary(snapshot, 'front', walls.map(wall => wall.id));

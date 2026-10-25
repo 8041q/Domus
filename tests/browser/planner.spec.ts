@@ -106,6 +106,26 @@ test('PDF and GLB downloads include furniture and preserve the editor after expo
   }
 });
 
+test('PDF export handles a small room with adjacent short and angled sides', async ({ page }, testInfo) => {
+  await ready(page);
+  const snapshot = await layout(page);
+  snapshot.room = { ...snapshot.room, width: 2.4, depth: 2.2, shapeKind: 'custom', vertices: [
+    { id: 'v0', x: 0, z: 0 }, { id: 'v1', x: 1.3, z: 0 }, { id: 'v2', x: 2.4, z: 1.1 },
+    { id: 'v3', x: 2.4, z: 2.2 }, { id: 'v4', x: 0, z: 2.2 }
+  ] };
+  snapshot.objects = []; snapshot.unplacedObjects = []; snapshot.openings = []; snapshot.spaces = [];
+  await page.getByLabel('Import Domus draft').setInputFiles({ name: 'small-angled.json', mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify({ format: 'domus-room', version: 1, name: 'Small angled room', snapshot })) });
+  await expect(page.locator('.project-status')).toContainText('Small angled room');
+  await plan(page);
+  const downloaded = page.waitForEvent('download'); await menu(page, /^Export to PDF/);
+  const filename = testInfo.outputPath('small-angled-report.pdf');
+  await (await downloaded).saveAs(filename);
+  expect((await readFile(filename)).subarray(0, 4).toString()).toBe('%PDF');
+  await expect(page.locator('.loading-status')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Catalogue', exact: true })).toBeVisible();
+});
+
 test('view switches, finishes and keyboard dialogs remain usable at desktop sizes', async ({ page }) => {
   await ready(page); await page.setViewportSize({ width: 1280, height: 720 });
   for (let i = 0; i < 4; i++) {
