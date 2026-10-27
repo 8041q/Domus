@@ -27,7 +27,7 @@ async function save(page: Page, name: string) {
   await expect(page.locator('.project-status')).toContainText('Saved in this browser');
 }
 async function layout(page: Page) {
-  const downloaded = page.waitForEvent('download'); await menu(page, /^Download layout only/);
+  const downloaded = page.waitForEvent('download'); await menu(page, /^Download room/);
   return JSON.parse(await readFile((await (await downloaded).path())!, 'utf8')).snapshot;
 }
 
@@ -51,14 +51,13 @@ test('room editing, typed values, named saving, undo and recovery survive reload
   expect(errors).toEqual([]);
 });
 
-test('compact room backup reopens with its model after the source and generated cache are removed', async ({ page, browser, request }) => {
+test('reference room reopens its retained model after the source is removed', async ({ page, browser, request }) => {
   await ready(page); await plan(page);
   await page.getByRole('button', { name: /^fixture-bed/ }).click();
   await save(page, 'Portable fixture');
+  const downloadEvent = page.waitForEvent('download');
   await menu(page, /^Download room/);
   await expect(page.locator('.project-progress')).toHaveCount(0);
-  const downloadEvent = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Download room', exact: true }).click();
   const download = await downloadEvent; const filename = await download.path(); expect(filename).toBeTruthy();
   const { root } = JSON.parse(await readFile(path.join(os.tmpdir(), 'domus-browser-5199.json'), 'utf8'));
   const source = path.join(root, 'public', 'models', 'fixture-bed.glb'), bytes = await readFile(source);
@@ -93,14 +92,20 @@ test('malformed imports preserve the active room and unsaved-change dialogs prot
   await expect(page.locator('.project-status')).toContainText('Protected');
 });
 
-test('PDF and GLB downloads include furniture and preserve the editor after export', async ({ page }, testInfo) => {
+test('PDF retains furniture while GLB exports architecture only and preserves the editor', async ({ page }, testInfo) => {
   await ready(page); await plan(page); await page.getByRole('button', { name: /^3-seat sofa/ }).click();
   for (const [action, signature] of [[/^Export Room/, 'glTF'], [/^Export to PDF/, '%PDF']] as const) {
     const downloaded = page.waitForEvent('download'); await menu(page, action);
     const download = await downloaded;
     const filename = testInfo.outputPath(signature === '%PDF' ? 'room-report.pdf' : 'room.glb');
     await download.saveAs(filename);
-    expect((await readFile(filename!)).subarray(0, 4).toString()).toBe(signature);
+    const exported = await readFile(filename!);
+    expect(exported.subarray(0, 4).toString()).toBe(signature);
+    if (signature === 'glTF') {
+      const document = JSON.parse(exported.subarray(20, 20 + exported.readUInt32LE(12)).toString());
+      expect(document.nodes.some((node: { name?: string }) => /Furniture|sofa/i.test(node.name ?? ''))).toBe(false);
+      expect(document.nodes.some((node: { name?: string }) => node.name === 'Walls')).toBe(true);
+    }
     await expect(page.locator('.loading-status')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Select 3-seat sofa' })).toBeVisible();
   }

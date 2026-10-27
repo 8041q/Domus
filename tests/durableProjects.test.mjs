@@ -33,35 +33,31 @@ async function portable(name = 'Archived bed') {
   return { document: { format: 'domus-room', version: 2, name, snapshot, products: [{ definition, hash, bytes: bytes.length }] }, assets: [{ hash, blob: new Blob([bytes]) }] };
 }
 
-test('saved compact models survive catalogue removal, reload and transfer to an empty browser', async () => {
+const realFetch = globalThis.fetch;
+globalThis.fetch = async url => new Response(JSON.stringify(String(url) === '/api/model-catalogue' ? { products: [] } : null), { status: String(url) === '/api/model-catalogue' ? 200 : 404, headers: { 'Content-Type': 'application/json' } });
+after(() => { globalThis.fetch = realFetch; });
+
+test('room transfer contains references, never embedded binaries, and preserves missing items', async () => {
   const h = await harness(), prepared = await portable();
   await h.service.importRoom(prepared);
   const saved = await h.service.save('Ward');
-  setRoomProducts([]);
-  assert.equal(PRODUCTS['model-archived-bed'], undefined);
-  const reopened = await harness(h.database, 'tab-a');
-  assert.equal(reopened.get().objects[0].id, 'bed-a');
-  assert.equal(reopened.get().unplacedObjects[0].id, 'bed-b');
-  assert.match(PRODUCTS['model-archived-bed'].model.url, /^blob:/);
-  const blob = await reopened.service.exportArchive();
+  assert.equal(saved.document.version, 3);
+  assert.equal(saved.document.products[0].hash, null);
+  assert.equal((await h.database.all('assets')).length, 0);
+  const blob = await h.service.exportArchive(), document = JSON.parse(await blob.text());
+  assert.equal(document.version, 3); assert.equal(document.products[0].definition.model.url, 'published:model-archived-bed');
   const transferred = await harness();
-  const imported = await transferred.service.readFile(new File([blob], 'Ward.domus'));
-  await transferred.service.importRoom(imported);
+  await transferred.service.importRoom(await transferred.service.readFile(new File([blob], 'Ward.domus')));
   assert.equal(JSON.stringify(transferred.get()), JSON.stringify(prepared.document.snapshot));
-  assert.equal(transferred.service.getState().activeId, null);
-  assert.equal(saved.document.products[0].hash, prepared.assets[0].hash);
+  assert.equal(PRODUCTS['model-archived-bed'].available, false);
   setRoomProducts([]);
 });
 
-test('instances and multiple saved rooms share one blob; cleanup retains saved and recovery references', async () => {
-  const h = await harness(); await h.service.importRoom(await portable());
-  await h.service.save('First'); await h.service.save('Second', true);
-  assert.equal((await h.database.all('assets')).length, 1);
-  await h.service.cleanUnusedAssets(); assert.equal((await h.database.all('assets')).length, 1);
-  for (const room of await h.database.all('rooms')) await h.service.remove(room.id, room.revision);
-  await h.service.newRoom('Empty', 'rectangle');
-  await h.service.cleanUnusedAssets(); assert.equal((await h.database.all('assets')).length, 0);
-  setRoomProducts([]);
+test('opening requires the server and failed opening preserves current work', async () => {
+  const h = await harness(); h.edit(3.1); const before = h.get(), fetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error('Offline'); };
+  try { await assert.rejects(h.service.importRoom(await portable()), /Offline/); assert.deepEqual(h.get(), before); }
+  finally { globalThis.fetch = fetch; setRoomProducts([]); }
 });
 
 test('concurrent saves enforce revision and unique names inside the write transaction', async () => {
@@ -95,35 +91,6 @@ test('normalization key order does not mark a successfully saved room dirty', as
   reordered.room = Object.fromEntries(Object.entries(reordered.room).reverse());
   h.set(reordered);
   assert.equal(h.service.getState().dirty, false);
-});
-
-test('damaged stored models cannot be silently exported as a successful portable backup', async () => {
-  const h = await harness(), prepared = await portable(); await h.service.importRoom(prepared); await h.service.save('Safe model');
-  await h.database.commit(async stores => { stores.assets.put({ hash: prepared.assets[0].hash, blob: new Blob(['damaged']) }); });
-  await assert.rejects(h.service.exportArchive(), /damaged/);
-  const restored = await harness(h.database, 'tab-a');
-  assert.match(restored.service.getState().warning, /damaged/);
-  assert.equal((await h.database.all('rooms'))[0].snapshot.objects.length, 1);
-  setRoomProducts([]);
-});
-
-test('updating a live model captures a new compact version without changing another saved room', async () => {
-  const h = await harness(), prepared = await portable();
-  const definition = { ...prepared.document.products[0].definition, model: { url: '/models/live.glb?v=old', runtimeUrl: '/optimized-models/old.glb' } };
-  const fetch = globalThis.fetch; let bytes = modelBytes();
-  globalThis.fetch = async () => new Response(bytes);
-  try {
-    PRODUCTS[definition.id] = definition; h.set(prepared.document.snapshot);
-    const first = await h.service.save('Original'); await h.service.save('Updated', true);
-    PRODUCTS[definition.id] = { ...definition, width: 2, model: { url: '/models/live.glb?v=new', runtimeUrl: '/optimized-models/new.glb' } };
-    bytes = modelBytes({ widthScale: 2 });
-    const updated = await h.service.save('Updated');
-    assert.notEqual(first.document.products[0].hash, updated.document.products[0].hash);
-    assert.equal((await h.database.all('assets')).length, 2);
-    await h.service.open(first.id);
-    assert.equal(PRODUCTS[definition.id].width, 1);
-    assert.equal((await h.service.exportArchive()).size > 0, true);
-  } finally { globalThis.fetch = fetch; setRoomProducts([]); }
 });
 
 test('discarding a stale recovery requires the displayed revision and permits unused assets to be reclaimed', async () => {
@@ -168,7 +135,7 @@ test('legacy migration keeps browser keys and retains absent furniture reference
   assert.equal(h.get().objects[0].productId, 'model-retired');
   assert.match(h.service.getState().warning, /missing models/);
   assert.equal(legacy.get('room-planner-project-v4'), raw);
-  await assert.rejects(h.service.exportArchive(), /unavailable/);
+  assert.equal(JSON.parse(await (await h.service.exportArchive()).text()).snapshot.objects[0].productId, 'model-retired');
   setRoomProducts([]);
 });
 
@@ -188,4 +155,28 @@ test('invalid archives, hashes, external textures and duplicate paths fail befor
   const invalid = structuredClone(prepared.document); invalid.snapshot.room.vertices[0].x = 'bad';
   await assert.rejects(h.service.readFile(new File([await writeRoomArchive(invalid, prepared.assets)], 'bad.domus')), /invalid geometry/);
   assert.deepEqual(h.get(), before);
+});
+
+test('opening a published reference uses trusted server metadata and ignores file-supplied URLs', async () => {
+  const h = await harness(), prepared = await portable();
+  const id = 'model-00000000-0000-4000-8000-000000000001--' + 'a'.repeat(64);
+  const canonical = { ...prepared.document.products[0].definition, id, name: 'Published bed', model: { url: `/api/published-models/${id}.glb` } };
+  prepared.document.version = 3; prepared.document.namespace = 'domus';
+  prepared.document.products = [{ definition: { ...canonical, name: 'Untrusted file name', model: { url: 'https://untrusted.example/model.glb' } }, hash: null, bytes: 0 }];
+  for (const item of [...prepared.document.snapshot.objects, ...prepared.document.snapshot.unplacedObjects]) item.productId = id;
+  const fetch = globalThis.fetch, requested = [];
+  globalThis.fetch = async url => {
+    requested.push(url);
+    return new Response(JSON.stringify(url === '/api/model-catalogue' ? { products: [] } : canonical), { headers: { 'Content-Type': 'application/json' } });
+  };
+  try {
+    await h.service.importRoom(prepared);
+    assert.deepEqual(requested, ['/api/model-catalogue', `/api/published-models/${id}.json`]);
+    assert.equal(PRODUCTS[id].name, 'Published bed');
+    const exported = JSON.parse(await (await h.service.exportArchive()).text());
+    assert.equal(exported.products[0].definition.model.url, `published:${id}`);
+    assert.equal((await h.database.all('assets')).length, 0);
+    await h.service.save('Pinned');
+    assert.equal(h.service.getState().dirty, false);
+  } finally { globalThis.fetch = fetch; setRoomProducts([]); }
 });

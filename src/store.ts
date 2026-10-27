@@ -285,6 +285,7 @@ function normalizeOpening(opening: RoomOpening & { wall?: RoomWall }, room: Room
   const maxHeight = Math.max(minHeight, room.height - sillHeight);
   const height = Math.max(minHeight, Math.min(opening.height, maxHeight));
   return { id: opening.id, type: opening.type, variant, wallId, width, offset, height, sillHeight,
+    ...(opening.modelRevision && /^[a-f0-9]{64}$/.test(opening.modelRevision) ? { modelRevision: opening.modelRevision } : {}),
     ...(opening.type === 'door' && (room.shapeKind === 'circle' || opening.wrapAround) ? { wrapAround: true } : {}),
     ...(opening.type === 'door' && opening.doorFlipped != null ? { doorFlipped: opening.doorFlipped === true } : {}) };
 }
@@ -943,7 +944,8 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
         preset.height = Math.min(state.room.height, 2.1);
         preset.sillHeight = 0;
       }
-      const candidate = normalizeOpening({ ...o, ...preset, ...patch, type: nextType, variant: nextVariant }, state.room, state.dividers);
+      const candidate = normalizeOpening({ ...o, ...preset, modelRevision: nextVariant === o.variant ? o.modelRevision : undefined,
+        ...patch, type: nextType, variant: nextVariant }, state.room, state.dividers);
       if (!allowed(candidate)) return o;
       const fitted = fitOpening(state.room, state.dividers, candidate, state.openings.filter((opening) => opening.id !== id), allowed);
       accepted = fitted != null;

@@ -14,7 +14,7 @@ async function project(page: Page, action: RegExp) {
 }
 async function snapshot(page: Page) {
   const result = page.waitForEvent('download');
-  await project(page, /^Download layout only/);
+  await project(page, /^Download room/);
   return JSON.parse(await readFile((await (await result).path())!, 'utf8')).snapshot;
 }
 async function expand(page: Page, id: string) {
@@ -93,7 +93,6 @@ test('phone project files, local saves and Back dismissal preserve the current w
   await expect(page.locator('.project-status')).toContainText('Phone room');
   const download = page.waitForEvent('download'); await project(page, /^Download room(?! layout)/);
   await expect(page.locator('.project-progress')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Download room', exact: true }).click();
   const file = await (await download).path(); expect(file).toBeTruthy();
   await page.getByLabel('Import Domus draft').setInputFiles(file!);
   await expect(page.locator('.project-status')).toContainText('Phone room');

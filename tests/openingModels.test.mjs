@@ -16,6 +16,9 @@ const { prepareOpeningAsset } = await vite.ssrLoadModule('/src/renderer/openingM
 const { ProductModelLibrary } = await vite.ssrLoadModule('/src/renderer/productModels.ts');
 const { getRoomWalls } = await vite.ssrLoadModule('/src/core/roomGeometry.ts');
 
+const { setArchitecturalRevisions } = await vite.ssrLoadModule('/src/core/architecturalRevisions.ts');
+setArchitecturalRevisions(Object.fromEntries(Object.values(OPENING_MODELS).map(definition => [definition.file, 'a'.repeat(64)])));
+
 const door = { id: 'imported-door', type: 'door', variant: 'single-door', wallId: 'wall-v0-v1', offset: 2,
   width: .9, height: 2.08, sillHeight: 0 };
 function template(width = 1, height = 2, depth = .15) {
@@ -29,7 +32,7 @@ function template(width = 1, height = 2, depth = .15) {
 function close(actual, expected) { assert.ok(Math.abs(actual - expected) < 1e-6, `${actual} != ${expected}`); }
 
 test('architectural URLs stay separate from furniture, with unmapped styles left procedural', () => {
-  assert.equal(openingModelUrl(door), '/internal/architecture/openings/single_door.glb');
+  assert.equal(openingModelUrl(door), '/internal/architecture/openings/single_door.glb?v=' + 'a'.repeat(64));
   for (const variant of ['double-door', 'door-frame', 'full-height-window', 'wall-opening']) {
     assert.equal(openingModelUrl({ type: variant.endsWith('window') ? 'window' : 'door', variant }), undefined);
   }

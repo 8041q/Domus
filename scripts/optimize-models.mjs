@@ -116,7 +116,7 @@ export async function optimizeModels(root = process.cwd(), options = {}) {
 }
 
 async function optimizeModelsUnlocked(root, { onError } = {}) {
-  const sourceDirectory = path.join(root, 'public', 'models');
+  const sourceDirectory = path.join(root, await stat(path.join(root, 'private/models')).catch(() => null) ? 'private/models' : 'public/models');
   const outputDirectory = path.join(root, 'public', 'optimized-models');
   const manifestFile = path.join(outputDirectory, 'manifest.json');
   let manifest = { version: OPTIMIZER_VERSION, models: {} };

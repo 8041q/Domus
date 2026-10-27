@@ -19,7 +19,7 @@ async function readyToPlan(page: Page) {
 async function layout(page: Page) {
   const downloaded = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Project', exact: true }).click();
-  await page.getByRole('menuitem', { name: /^Download layout only/ }).click();
+  await page.getByRole('menuitem', { name: /^Download room/ }).click();
   const filename = await (await downloaded).path();
   return JSON.parse(await readFile(filename!, 'utf8')).snapshot;
 }

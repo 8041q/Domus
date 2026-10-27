@@ -808,11 +808,7 @@ export class PlannerScene {
     // Give the active finish maps a chance to arrive before GLTFExporter serialises
     // the floor material. Failed requests resolve too, so export never hangs offline.
     await Promise.all([this.floorTextureReady, ...this.spaceFloorReady]);
-    while (this.productModelRequests.size) await Promise.all(this.productModelRequests.values());
     if (this.disposed) throw new Error('The 3D view closed while preparing the export.');
-    if (this.bridge.getSnapshot().objects.some((object) => this.productModelErrors.has(productModelUrl(PRODUCTS[object.productId]) ?? ''))) {
-      throw new Error('A furniture model could not load. Retry loading it before exporting.');
-    }
     // Export semantic data, not the current Cutaway view. Camera cutaways,
     // dimensions, selection outlines and other helper/UI state are never part of
     // this export tree.
@@ -822,7 +818,7 @@ export class PlannerScene {
     exportRoot.userData.units = 'meters';
 
     const categories = new Map<DomusExportCategory, THREE.Group>();
-    const categoryOrder: DomusExportCategory[] = ['Walls', 'Floors', 'Frames', 'Ceiling', 'Furniture'];
+    const categoryOrder: DomusExportCategory[] = ['Walls', 'Floors', 'Frames', 'Ceiling'];
     for (const name of categoryOrder) {
       const group = new THREE.Group();
       group.name = name;
@@ -832,7 +828,7 @@ export class PlannerScene {
     }
 
     for (const item of this.collectExportItems()) {
-      if (item.category === 'Furniture' && !this.options.showFurniture) continue;
+      if (item.category === 'Furniture') continue;
       const node = this.buildExportItem(item);
       if (node) categories.get(item.category)?.add(node);
     }

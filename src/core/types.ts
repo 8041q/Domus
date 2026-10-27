@@ -83,6 +83,7 @@ export interface RoomState {
 }
 
 export interface RoomOpening {
+  modelRevision?: string;
   id: string;
   type: OpeningType;
   /** Stable wall segment id derived from its endpoint vertex ids. */
@@ -180,6 +181,8 @@ export interface ProductCollisionFootprint {
 }
 
 export interface ProductDefinition {
+  /** Logical catalogue identity; id is revision-qualified for published assets. */
+  catalogueId?: string;
   id: ProductKind;
   name: string;
   category: ProductCategory;

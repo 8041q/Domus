@@ -1,3 +1,4 @@
+import { setArchitecturalRevisions } from './architecturalRevisions';
 import type { ProductDefinition, ProductKind } from './types';
 import modelCatalogue from 'virtual:domus-models';
 import { normalizeProductCategory } from './productSchema';
@@ -91,11 +92,13 @@ function updateCatalogue(data: typeof modelCatalogue) {
   if (signature === catalogueSignature) return;
   catalogueSignature = signature;
   liveCatalogue = data;
+  setArchitecturalRevisions(data.architecture ?? {});
+  const pinnedRevisions = Object.fromEntries(Object.entries(PRODUCTS).filter(([id]) => /^model-[a-f0-9-]{36}--[a-f0-9]{64}$/.test(id)));
   for (const id of Object.keys(PRODUCTS)) delete PRODUCTS[id];
-  Object.assign(PRODUCTS, BUILTIN_PRODUCTS);
+  Object.assign(PRODUCTS, BUILTIN_PRODUCTS, pinnedRevisions);
   const currentIds = new Set(data.products.map((product) => product.id));
   for (const [id, product] of Object.entries(PRODUCTS)) {
-    if (product.model && !currentIds.has(id)) delete PRODUCTS[id];
+    if (product.model && !currentIds.has(id) && !/^model-[a-f0-9-]{36}--[a-f0-9]{64}$/.test(id)) delete PRODUCTS[id];
   }
   for (const product of data.products) PRODUCTS[product.id] = product;
   for (const [alias, id] of Object.entries(data.aliases)) if (PRODUCTS[id] && !BUILTIN_PRODUCTS[alias]) PRODUCTS[alias] = PRODUCTS[id];

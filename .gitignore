@@ -23,3 +23,6 @@ test-results/
 model-catalogue.json.lock
 model-catalogue.json.*.tmp
 .domus-optimization.lock
+
+/private/
+/.domus-published/

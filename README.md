@@ -39,7 +39,7 @@ runs with the local production runtime and Vite development/preview servers.
   glazed openings.
 - Ask the experimental AI assistant for layout advice or validated furniture
   proposals using Gemini, OpenAI, or a server-reachable Ollama model.
-- Export the complete physical room as a semantic GLB.
+- Export room architecture and finishes as GLB, excluding placed furniture.
 
 Both workspaces edit the same project. A change made in Build Room is available
 immediately in Plan Room and vice versa.
@@ -77,7 +77,7 @@ npm run dev
 Vite serves the app at `http://localhost:5173` by default.
 
 Development startup and production builds prepare compressed viewport copies of
-GLBs in `public/models`. Originals stay intact; the catalogue still measures the
+GLBs in `private/models` (legacy `public/models` is relocated by the build). Originals stay intact; the catalogue still measures the
 source geometry. Generated copies in `public/optimized-models` combine compatible
 opaque parts, simplify detail with an error limit, and use Meshopt compression.
 Transparent parts retain separate sorting. The first preparation takes longer;
@@ -93,7 +93,7 @@ copies and rebuilds them in the background; if it is closed, cleanup runs at
 the next startup. Reading a model does not extend its expiry, and original
 GLBs are never deleted by cache cleanup. `npm run models:optimize` and `npm run models:rescan`
 remain available for manual recovery. Derivatives are matched to the full source
-fingerprint; missing, incomplete or stale copies fall back to the source.
+fingerprint; missing, incomplete or stale copies are unavailable until rebuilt. Originals are never served. Published viewing revisions are retained independently.
 The 3D view prepares detailed picking data in a background
 worker, processes pointer movement once per frame, caches unchanged shadows,
 and restores full display resolution when movement stops.
@@ -204,12 +204,13 @@ Use **Project** in the header to manage rooms:
 - **Open room** lists all rooms saved in this browser, with their last save time.
   Each row has a delete icon with confirmation. Deleting the active saved room
   keeps your working layout open as an unsaved room.
-- **Download room** creates a portable `.domus` ZIP containing the editable
-  layout, product metadata and the compact models used by placed and unplaced
-  furniture. It shows the estimated size first. **Import room** opens these files
-  as unsaved copies in another browser, even without the original model folder.
-- **Download layout only** creates a small `.domus.json` without model binaries.
-  Import room also accepts this format and legacy snapshot JSON.
+- **Download room** creates a small reference-only `.domus` JSON document. It
+  contains the layout, finishes, project details and exact published model revisions,
+  with no furniture model binaries. Send this file through any channel; the recipient
+  imports it into Domus with an internet connection to the same model library.
+- **Import room** also accepts legacy layout JSON and model-containing archives.
+  Embedded models are validated but never rendered or saved. Known asset hashes
+  resolve to published revisions; unresolved items retain their data as placeholders.
 - **Room storage** shows browser/model usage, estimates additional storage and
   offers recovery drafts, discarding of closed-tab drafts, and cleanup of assets
   unreferenced by saves or drafts.
@@ -222,20 +223,36 @@ saved room, and stale saves from another tab are rejected; use Save as to keep b
 A debounced recovery draft restores the same tab's latest layout after reloading,
 including unsaved changes. Drafts are isolated by tab. A duplicated tab receives
 its own identity; drafts from other tabs are offered under Room storage. A changed layout also triggers the browser's leave-page warning.
-Named saves and compact models use IndexedDB transactions with revision checks.
-Each model version is stored once and shared across rooms. Saved assets do not
-expire with the 72-hour server cache; source files and original-quality binaries
-are never copied into browser saves. Existing libraries, recovery and single-slot
-saves migrate without deleting the original browser keys. Models already missing
-from old layouts remain unresolved with a warning; restore a catalogue backup or
-replace those items to make a complete portable backup.
-Clearing site data removes saved rooms, model assets and recovery drafts. Download a room file
-for a lasting backup; cloud backup is not provided.
+Named saves and recovery drafts use IndexedDB transactions with revision checks.
+New saves contain references only. Old embedded assets remain until explicit cleanup.
+A failed connection or import leaves the current room intact. Missing individual
+revisions retain item positions and dimensions with a warning; they are never silently
+replaced by the newest catalogue item. Clearing site data removes local saves and
+recovery drafts; keep downloaded room files as backups. Cloud backup is not provided.
 
-**Project → Export Room** is available in Plan Room. It downloads a GLB of the complete room rather
-than the current cutaway: walls, floor, baseboards, frames, ceiling, and
-furniture are grouped by semantic category. Cameras, selection outlines,
-measurements, and other editing helpers are excluded.
+**Project → Export Room** downloads architecture only as GLB: walls, floor,
+baseboards, doors/windows, ceiling, materials and textures. Placed furniture is
+excluded, regardless of visibility or selection. PDF reports retain furniture.
+There is no private staff workflow or furniture-containing GLB export.
+
+### Publishing and hosting
+
+`npm run build` relocates legacy `public/models` masters to `private/models` and
+architectural masters to `private/openings`, then prepares viewing derivatives.
+Both source and destination existing is an error requiring manual consolidation.
+Optimization failures never make originals public. Published furniture revisions,
+opening revisions and the active catalogue live in `.domus-published/`; back up
+this entire directory and retain it across deployments. Retirement removes an item
+from new placement, while previous room references remain usable indefinitely.
+
+Deploy `dist/`, `server-dist/`, dependencies and `.domus-published/`. Do **not** deploy
+`private/` or processing caches. Run behind an HTTPS reverse proxy preserving the
+configured Host, for example `DOMUS_PUBLIC=1 DOMUS_ORIGIN=https://planner.example.com
+npm start -- --host 0.0.0.0`. Public mode reads only the published catalogue, disables
+model maintenance endpoints and local Ollama access, and requires no user accounts.
+Vite development is local-only; it is not a public hosting server. Published viewing
+geometry remains extractable from a browser; these measures protect masters and
+remove convenient model-containing downloads, rather than provide DRM.
 
 **Project → Project details** edits optional company/client names and contacts,
 project reference, preparer, revision, status, room purpose, site/department and notes. These details are kept with saves,
@@ -272,13 +289,12 @@ and false corners on straight walls with added breakpoints.
 To prepare your own furniture models, use the [Blender product metadata add-on](docs/BLENDER_METADATA.md).
 It works with complete product collections, saves measured geometry separately
 from the size shown in the catalogue, and exports GLBs in metres. Copy a GLB into
-`public/models/` (subfolders work); the dev/preview server imports it automatically
+`private/models/` (subfolders work); the dev/preview server imports it automatically
 and assigns a persistent unique ID. Folder changes update the catalogue without
 source edits. Keep the generated `model-catalogue.json` with project backups.
-Removing a GLB cleans its live catalogue/registry entry and ordinary instances in
-open rooms. Previously saved rooms retain their compact model version. Reopening
-a saved or imported portable room resolves its archived models within that room;
-it does not re-add deleted models to the live catalogue.
+Removing a master retires its catalogue entry. Open and saved rooms retain published
+revisions; reopening retrieves those exact versions from durable server storage.
+Retired revisions do not reappear in the placement catalogue.
 Re-adding or renaming it assigns a new ID; retired IDs are never reused. The
 Blender add-on and project share the hospital product categories.
 
@@ -295,8 +311,8 @@ open planners. For preview or a different port, pass the server URL:
 ## Current limitations
 
 - Most catalogue furniture uses procedural placeholder models and sample prices.
-  GLBs in `public/models/` are imported automatically. Static deployments include
-  the models present at build time and require a rebuild for later folder changes.
+  GLBs in `private/models/` are processed locally. Public hosting requires the runtime
+  and durable published library; a static-only deployment cannot resolve room files.
 - Saved rooms are local to one browser origin; portable `.domus` files are the backup and transfer mechanism. Browser storage is not an external backup.
 - The renderer requires a browser with WebGL support.
 - AI assistance is experimental, furniture-only, non-streaming, and intended

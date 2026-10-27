@@ -1,9 +1,9 @@
 import type { PlannerSnapshot, ProductDefinition } from './types';
 import { normalizeProductCategory } from './productSchema';
 
-export interface ArchivedProduct { definition: ProductDefinition; hash: string | null; bytes: number; sourceUrl?: string; sourceRuntimeUrl?: string }
+export interface ArchivedProduct { legacyHash?: string; definition: ProductDefinition; hash: string | null; bytes: number; sourceUrl?: string; sourceRuntimeUrl?: string }
 export interface RoomDocumentV2 {
-  format: 'domus-room'; version: 2; name: string; snapshot: PlannerSnapshot; products: ArchivedProduct[];
+  format: 'domus-room'; version: 2 | 3; namespace?: 'domus'; name: string; snapshot: PlannerSnapshot; products: ArchivedProduct[];
 }
 export interface ModelAsset { hash: string; blob: Blob }
 export const MAX_PACKAGE_BYTES = 1024 * 1024 * 1024;
@@ -32,8 +32,9 @@ export async function assetHash(bytes: Uint8Array): Promise<string> {
 /** Check archived metadata before it can reach placement or rendering code. */
 export function readDocument(value: unknown): RoomDocumentV2 {
   const doc = value as RoomDocumentV2;
-  if (!doc || doc.format !== 'domus-room' || doc.version !== 2 || typeof doc.name !== 'string' || !doc.name.trim() || doc.name.length > 80
+  if (!doc || doc.format !== 'domus-room' || ![2, 3].includes(doc.version) || typeof doc.name !== 'string' || !doc.name.trim() || doc.name.length > 80
     || !doc.snapshot || !Array.isArray(doc.products) || doc.products.length > 2000) throw new Error('This room document is invalid or uses an unsupported version.');
+  if (doc.version === 3 && (doc.namespace !== 'domus' || doc.products.some(entry => entry?.hash !== null || entry?.bytes !== 0))) throw new Error('Invalid reference-only room document.');
   validateSnapshotSize(doc.snapshot);
   const ids = new Set<string>(), sizes = new Map<string, number>();
   for (const entry of doc.products) {
@@ -51,6 +52,7 @@ export function readDocument(value: unknown): RoomDocumentV2 {
     if (product.collisionFootprint && (![product.collisionFootprint.width, product.collisionFootprint.depth].every(n => Number.isFinite(n) && n > 0 && n <= 1000)
       || ![product.collisionFootprint.offsetX ?? 0, product.collisionFootprint.offsetZ ?? 0].every(n => Number.isFinite(n) && Math.abs(n) <= 1000))) throw new Error('The room contains invalid collision metadata.');
     if (product.interaction && Object.values(product.interaction).some(tags => !Array.isArray(tags) || tags.length > 30 || tags.some(tag => typeof tag !== 'string'))) throw new Error('The room contains invalid interaction metadata.');
+    if (entry.legacyHash != null && !validHash(entry.legacyHash)) throw new Error('Invalid legacy model reference.');
     ids.add(product.id);
     if (entry.hash) {
       if (sizes.has(entry.hash) && sizes.get(entry.hash) !== entry.bytes) throw new Error('The room contains inconsistent asset sizes.');

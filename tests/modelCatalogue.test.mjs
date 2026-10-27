@@ -15,12 +15,12 @@ const { ModelCatalogue, inspectProductGLB, automaticModelCatalogue } = await vit
 const { displayProductDimensions, PRODUCTS, PRODUCT_LIST, initializeProductCatalogue, subscribeProductCatalogue, getProductCatalogueIssues } = await vite.ssrLoadModule('/src/core/products.ts');
 const { PRODUCT_CATEGORIES } = await vite.ssrLoadModule('/src/core/productSchema.ts');
 
-function glb(extras = {}, points = [-0.5,0,-1, 0.5,0,-1, 0.5,0.8,1, -0.5,0.8,1], node = {}) {
+function glb(extras = {}, points = [-0.5,0,-1, 0.5,0,-1, 0.5,0.8,1, -0.5,0,-1, 0.5,0.8,1, -0.5,0.8,1], node = {}) {
   const binary = Buffer.alloc(points.length * 4);
   points.forEach((value, index) => binary.writeFloatLE(value, index * 4));
   const json = JSON.stringify({ asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0] }],
     nodes: [{ mesh: 0, extras, ...node }], meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
-    accessors: [{ bufferView: 0, componentType: 5126, count: points.length / 3, type: 'VEC3' }],
+    accessors: [{ bufferView: 0, componentType: 5126, count: points.length / 3, type: 'VEC3', min: [0,1,2].map(axis => Math.min(...points.filter((_, index) => index % 3 === axis))), max: [0,1,2].map(axis => Math.max(...points.filter((_, index) => index % 3 === axis))) }],
     bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: binary.length }], buffers: [{ byteLength: binary.length }] });
   const jsonBuffer = Buffer.from(json + ' '.repeat((4 - Buffer.byteLength(json) % 4) % 4));
   const header = Buffer.alloc(20), binHeader = Buffer.alloc(8);
@@ -102,64 +102,21 @@ test('runtime derivatives retain source identity and dimensions, and stale or in
   assert.equal((await catalogue.scan()).products[0].available, true);
 });
 
-test('the running server automatically optimizes newly added models and removes their unused cache', async (t) => {
+test('published revisions survive source updates, retirement and processing cache expiry', async t => {
   const { root, models } = await sandbox(t);
-  const server = await createServer({ configFile: false, root, plugins: [automaticModelCatalogue()], logLevel: 'silent',
-    server: { host: '127.0.0.1', port: 0 }, optimizeDeps: { noDiscovery: true } });
-  t.after(() => server.close());
-  await server.listen();
-  const origin = server.resolvedUrls.local[0];
-  const binary = glb(metadata, [-.5, 0, -1, .5, 0, -1, .5, .8, 1, -.5, 0, -1, .5, .8, 1, -.5, .8, 1]);
-  const source = path.join(models, 'automatic.glb');
-  const waitUntil = async (check) => {
-    const deadline = Date.now() + 8000;
-    while (Date.now() < deadline) {
-      const result = await check();
-      if (result) return result;
-      await new Promise(resolve => setTimeout(resolve, 30));
-    }
-    assert.fail('Automatic model processing did not finish');
-  };
-  await writeFile(source, binary);
-  const product = await waitUntil(async () => {
-    const data = await (await fetch(origin + 'api/model-catalogue')).json();
-    return data.products.find(product => product.model?.runtimeUrl);
-  });
-  assert.deepEqual(await readFile(source), binary);
-  assert.equal((await (await fetch(origin + 'api/model-catalogue')).json()).products.length, 1);
-  const head = await fetch(new URL(product.model.runtimeUrl, origin), { method: 'HEAD' });
-  assert.equal(head.status, 200);
-  assert.match(head.headers.get('cache-control'), /must-revalidate/);
-  assert.ok(Number(head.headers.get('cache-control').match(/max-age=(\d+)/)[1]) <= 259200);
-  const firstGenerated = path.join(root, 'public', product.model.runtimeUrl.slice(1));
-  // Schedule an imminent expiry, then observe disk only: no source change or
-  // catalogue polling should be necessary to trigger the background rebuild.
-  const nearExpiry = new Date(Date.now() - MODEL_CACHE_TTL_MS + 500);
-  await utimes(firstGenerated, nearExpiry, nearExpiry);
-  await fetch(origin + 'api/model-catalogue');
-  await waitUntil(async () => {
-    try { return (await stat(firstGenerated)).mtimeMs > nearExpiry.getTime() + 1000; }
-    catch (error) { if (error.code === 'ENOENT') return false; throw error; }
-  });
-  assert.deepEqual(await readFile(source), binary, 'Timed expiry never changes the original');
-  await writeFile(source, glb({ ...metadata, domus_name: 'Updated automatic' },
-    [-.6, 0, -1, .6, 0, -1, .6, .8, 1, -.6, 0, -1, .6, .8, 1, -.6, .8, 1]));
-  const updated = await waitUntil(async () => {
-    const data = await (await fetch(origin + 'api/model-catalogue')).json();
-    return data.products.find(item => item.model?.runtimeUrl && item.model.runtimeUrl !== product.model.runtimeUrl);
-  });
-  assert.equal(updated.id, product.id);
-  assert.equal(updated.name, 'Updated automatic');
-  await waitUntil(async () => { try { await stat(firstGenerated); return false; } catch (error) { return error.code === 'ENOENT'; } });
-  const generated = path.join(root, 'public', updated.model.runtimeUrl.slice(1));
-  await unlink(source);
-  await waitUntil(async () => {
-    const data = await (await fetch(origin + 'api/model-catalogue')).json();
-    if (data.products.length) return false;
-    try { await stat(generated); return false; } catch (error) { return error.code === 'ENOENT'; }
-  });
-  const manifest = JSON.parse(await readFile(path.join(root, 'public', 'optimized-models', 'manifest.json'), 'utf8'));
-  assert.equal(manifest.models['automatic.glb'], undefined);
+  const server = await createServer({ configFile: false, root, plugins: [automaticModelCatalogue()], logLevel: 'silent', server: { host: '127.0.0.1', port: 0 }, optimizeDeps: { noDiscovery: true } });
+  t.after(() => server.close()); await server.listen(); const origin = server.resolvedUrls.local[0];
+  const source = path.join(models, 'published.glb'); await writeFile(source, glb(metadata));
+  const rescan = async () => (await (await fetch(origin + 'api/model-catalogue/rescan', { method: 'POST' })).json());
+  const first = (await rescan()).products[0]; assert.ok(first);
+  assert.equal((await fetch(new URL('/models/published.glb', origin))).status, 404);
+  const bytes = await (await fetch(new URL(first.model.url, origin))).arrayBuffer();
+  await writeFile(source, glb({ ...metadata, domus_name: 'Revised' }));
+  const second = (await rescan()).products[0]; assert.notEqual(first.id, second.id); assert.equal(first.catalogueId, second.catalogueId);
+  await unlink(source); assert.equal((await rescan()).products.length, 0);
+  const retained = await fetch(new URL(first.model.url, origin)); assert.equal(retained.status, 200);
+  assert.deepEqual(await retained.arrayBuffer(), bytes);
+  assert.match(retained.headers.get('cache-control'), /immutable/);
 });
 
 test('file updates retain identity while renames and deletions retire IDs and remove registry definitions', async (t) => {
@@ -307,7 +264,7 @@ test('the rescan command imports missed files and broadcasts to open planners wi
   await writeFile(path.join(models,'missed.glb'),glb(metadata));
   const {stdout} = await promisify(execFile)(process.execPath,[path.resolve('scripts/rescan-models.mjs'),origin],{cwd:root});
   assert.match(stdout,/1 available, 0 unavailable, 0 import issue/);
-  const update = broadcasts.find(message=>message.event==='domus:catalogue');
+  const update = broadcasts.findLast(message=>message.event==='domus:catalogue' && message.data.products.length);
   assert.equal(update.data.products[0].name,'Hospital bed');
   assert.equal(broadcasts.some(message=>message.type==='full-reload'),false);
   const id = update.data.products[0].id;
@@ -334,13 +291,13 @@ test('preview imports and serves new source models after the production build', 
   const head = await fetch(new URL(data.products[0].model.url,origin),{method:'HEAD'});
   assert.equal(head.status,200); assert.equal(head.headers.get('content-type'),'model/gltf-binary');
   await writeFile(path.join(models,'after build.glb'),glb({...metadata,domus_name:'Changed'}));
-  const updated = await (await fetch(origin+'api/model-catalogue')).json();
-  assert.equal(updated.products[0].id,data.products[0].id);
-  assert.equal((await fetch(new URL(data.products[0].model.url,origin))).status,409);
+  const updated = await (await fetch(origin+'api/model-catalogue/rescan', { method: 'POST' })).json();
+  assert.notEqual(updated.products[0].id,data.products[0].id);
+  assert.equal((await fetch(new URL(data.products[0].model.url,origin))).status,200);
   await unlink(path.join(models,'after build.glb'));
   const removed = await (await fetch(origin+'api/model-catalogue')).json();
   assert.equal(removed.products.length,0);
-  assert.equal((await fetch(new URL(updated.products[0].model.url,origin))).status,404);
+  assert.equal((await fetch(new URL(updated.products[0].model.url,origin))).status,200);
 });
 
 test('catalogue deletion cleans live furniture, aliases, unplaced items, history and later saved-room imports', async (t) => {
@@ -381,4 +338,20 @@ test('catalogue deletion cleans live furniture, aliases, unplaced items, history
   await writeFile(file,glb(metadata)); responseData = await catalogue.scan(); await initializeProductCatalogue();
   assert.notEqual(responseData.products[0].id,id);
   assert.ok(store.getState().objects.every(object=>object.productId!==responseData.products[0].id));
+});
+
+test('public runtime uses only the durable catalogue and refuses source and maintenance routes', async t => {
+  const { root } = await sandbox(t);
+  await mkdir(path.join(root, '.domus-published'), { recursive: true });
+  await writeFile(path.join(root, '.domus-published/catalogue.json'), JSON.stringify({ products: [], aliases: {}, issues: [] }));
+  const previous = process.env.DOMUS_PUBLIC; process.env.DOMUS_PUBLIC = '1';
+  const server = await createServer({ configFile: false, root, plugins: [automaticModelCatalogue()], logLevel: 'silent', server: { host: '127.0.0.1', port: 0 }, optimizeDeps: { noDiscovery: true } });
+  try {
+    await server.listen(); const origin = server.resolvedUrls.local[0];
+    assert.deepEqual((await (await fetch(origin + 'api/model-catalogue')).json()).products, []);
+    for (const route of ['models/secret.glb', 'optimized-models/secret.glb', 'api/model-catalogue/rescan', 'api/model-catalogue/compact']) {
+      assert.equal((await fetch(origin + route, { method: route.startsWith('api/') ? 'POST' : 'GET' })).status, 404);
+    }
+    assert.equal((await fetch(origin + 'api/published-models/..%2Fprivate.glb')).status, 404);
+  } finally { await server.close(); if (previous === undefined) delete process.env.DOMUS_PUBLIC; else process.env.DOMUS_PUBLIC = previous; }
 });

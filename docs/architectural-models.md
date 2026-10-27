@@ -1,9 +1,12 @@
 # Door and window GLBs
 
-Architectural inserts live in `public/internal/architecture/openings/`. Keep
-furniture in `public/models/`; the furniture importer recursively scans only that
-directory. These folders contain local assets and are ignored by Git, so copy the
-architectural folder along with other public assets when deploying elsewhere.
+Architectural masters live in `private/openings/`; furniture masters live in
+`private/models/`. `npm run build` relocates legacy public source directories and
+publishes compressed viewing copies into `.domus-published/`. Only published
+copies are served. Back up and deploy that durable library, never the private
+masters. Published opening revisions are pinned in room files and retained when
+an asset is replaced or retired. The runtime maps styles through
+`src/core/architecturalRevisions.ts` and preserves hierarchy for segmented resizing.
 
 `src/renderer/openingModels.ts` maps existing opening styles to the supplied files.
 Full-height windows, solid double doors and empty door frames currently have no

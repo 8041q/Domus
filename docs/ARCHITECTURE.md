@@ -368,3 +368,19 @@ lets usage and cleanup inspect metadata and keys without materializing all model
 binaries. Interrupted imports retain a separate recoverable draft until the
 active-tab draft commits. Closed-tab recoveries can be discarded explicitly; a
 lifetime Web Lock prevents deleting another active tab's recovery.
+
+## Reference documents and public model delivery
+
+New `.domus` downloads and local records use document version 3 with a `domus`
+catalogue namespace. Product identities combine a stable catalogue UUID and immutable
+revision hash covering the viewing binary and product metadata. Opening references
+pin published asset hashes. No model binaries or arbitrary fetch URLs are activated
+from project files. Legacy archives are validated and matched by approved binary hash,
+otherwise retained as unresolved metadata. Migration never deletes legacy browser blobs.
+
+Publishing moves masters outside public assets and copies only derivatives to
+`.domus-published`. Published revisions outlive processing cache expiry and catalogue
+retirement. Public runtime reads the durable catalogue without scanning source files;
+maintenance routes and source routes are unavailable. Deployments must back up and
+retain this directory. Architecture GLB export always excludes the Furniture category;
+PDF rendering and in-app furniture remain unchanged. There is no privileged export mode.

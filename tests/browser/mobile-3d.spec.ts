@@ -5,7 +5,7 @@ import { PerspectiveCamera, Vector3 } from 'three';
 async function layout(page: Page) {
   const downloaded = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Project', exact: true }).tap();
-  await page.getByRole('menuitem', { name: /^Download layout only/ }).tap();
+  await page.getByRole('menuitem', { name: /^Download room/ }).tap();
   return JSON.parse(await readFile((await (await downloaded).path())!, 'utf8')).snapshot;
 }
 

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { open, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, open, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
@@ -9,10 +10,11 @@ import type { ProductDefinition } from '../src/core/types';
 import { normalizeProductCategory, PRODUCT_METADATA_VERSION } from '../src/core/productSchema';
 import { withFileLock } from './fileLock';
 import { ModelOptimizationQueue } from './modelOptimization';
+import { publishModel, readPublished, publishedRoot } from './publishedModels';
 import { MODEL_CACHE_TTL_MS, modelCacheExpired } from '../scripts/model-cache.mjs';
 
 export interface CatalogueIssue { file: string; message: string }
-export interface ModelCatalogueData { products: ProductDefinition[]; aliases: Record<string, string>; issues: CatalogueIssue[] }
+export interface ModelCatalogueData { products: ProductDefinition[]; aliases: Record<string, string>; issues: CatalogueIssue[]; architecture?: Record<string, string> }
 interface Entry { id: string; file: string; fingerprint: string; stamp: string; product: ProductDefinition; aliases?: string[] }
 interface Registry { version: 1; entries: Entry[]; retiredIds?: string[] }
 const PUBLIC_ID = 'virtual:domus-models';
@@ -155,21 +157,28 @@ export class ModelCatalogue {
   private registry: Registry = { version: 1, entries: [] };
   private initialized = false;
   private queue: Promise<unknown> = Promise.resolve();
+  publishedData: ModelCatalogueData = { products: [], aliases: {}, issues: [] };
   data: ModelCatalogueData = { products: [], aliases: {}, issues: [] };
   requiresOptimization = false;
   nextCacheExpiry: number | undefined;
   cacheGeneration = '';
   constructor(private root: string, private persist = true) {}
-  get modelsDirectory() { return path.join(this.root, 'public', 'models'); }
+  get modelsDirectory() { return path.join(this.root, existsSync(path.join(this.root, 'private/models')) ? 'private/models' : 'public/models'); }
   private get registryFile() { return path.join(this.root, 'model-catalogue.json'); }
 
   scan(force = false): Promise<ModelCatalogueData> {
-    const next = this.queue.then(() => withFileLock(this.registryFile, () => { this.initialized = false; return this.scanNow(force); }));
+    const next = this.queue.then(() => process.env.DOMUS_PUBLIC === '1' ? this.scanNow(force)
+      : withFileLock(this.registryFile, () => { this.initialized = false; return this.scanNow(force); }));
     this.queue = next.catch(() => {});
     return next;
   }
 
   private async scanNow(force: boolean) {
+    if (process.env.DOMUS_PUBLIC === '1') {
+      this.publishedData = JSON.parse(await readFile(path.join(publishedRoot(this.root), 'catalogue.json'), 'utf8'));
+      this.data = this.publishedData; this.requiresOptimization = false;
+      return this.data;
+    }
     if (!this.initialized) {
       try {
         const stored = JSON.parse(await readFile(this.registryFile, 'utf8')) as Registry;
@@ -261,10 +270,16 @@ export class ModelCatalogue {
     this.cacheGeneration = JSON.stringify(Object.entries(cacheStamps).sort(([a], [b]) => a.localeCompare(b)));
     this.requiresOptimization = products.some(product => product.available !== false && product.model && !product.model.runtimeUrl)
       || Object.keys(optimized.models ?? {}).some(file => !present.has(file));
-    this.data = {
-      products,
-      aliases: Object.fromEntries(this.registry.entries.flatMap((entry) => (entry.aliases ?? []).map((alias) => [alias, entry.id]))), issues
+    const published = (await Promise.all(products.map(product => publishModel(this.root, product)))).filter((product): product is ProductDefinition => Boolean(product));
+    this.data = { products, aliases: Object.fromEntries(this.registry.entries.flatMap(entry => (entry.aliases ?? []).map(alias => [alias, entry.id]))), issues };
+    this.publishedData = {
+      products: published,
+      aliases: Object.fromEntries(published.flatMap(product => [[product.catalogueId!, product.id], ...(this.registry.entries.find(entry => entry.id === product.catalogueId)?.aliases ?? []).map(alias => [alias, product.id])])), issues
     };
+    this.publishedData.architecture = await readFile(path.join(publishedRoot(this.root), 'openings.json'), 'utf8').then(JSON.parse).catch(() => ({}));
+    await mkdir(publishedRoot(this.root), { recursive: true });
+    const manifest = path.join(publishedRoot(this.root), 'catalogue.json');
+    await writeFile(manifest + '.tmp', JSON.stringify(this.publishedData)); await rename(manifest + '.tmp', manifest);
     return this.data;
   }
 }
@@ -293,7 +308,7 @@ export function automaticModelCatalogue(): Plugin & {
     .map(product => [product.id, product.model!.url])) + catalogue.cacheGeneration;
   const refresh = async (force = false) => {
     const data = await catalogue.scan(force);
-    publish?.(data);
+    publish?.(catalogue.publishedData);
     if (catalogue.requiresOptimization) optimization?.request(optimizationKey(data));
     scheduleExpiry();
     return data;
@@ -303,7 +318,7 @@ export function automaticModelCatalogue(): Plugin & {
     optimization = new ModelOptimizationQueue(projectRoot, async () => {
       const before = JSON.stringify(catalogue.data);
       const data = await catalogue.scan();
-      if (JSON.stringify(data) !== before) publish?.(data);
+      if (JSON.stringify(data) !== before) publish?.(catalogue.publishedData);
       if (catalogue.requiresOptimization) optimization?.request(optimizationKey(data));
       scheduleExpiry();
     }, report);
@@ -312,7 +327,47 @@ export function automaticModelCatalogue(): Plugin & {
   };
   const middleware = (request: IncomingMessage, response: ServerResponse, next: () => void) => {
     const requested = new URL(request.url ?? '/', 'http://localhost');
+    if (requested.pathname.startsWith('/internal/architecture/')) {
+      const match = /^\/internal\/architecture\/openings\/([a-z_]+\.glb)$/.exec(requested.pathname);
+      if (!match || !['GET', 'HEAD'].includes(request.method ?? '')) { response.writeHead(404).end(); return; }
+      const revision = requested.searchParams.get('v');
+      if (!revision || !/^[a-f0-9]{64}$/.test(revision)) { response.writeHead(404).end(); return; }
+      const filename = path.join(projectRoot, '.domus-published/openings', `${revision}-${match[1]}`);
+      void stat(filename).then(info => {
+        response.setHeader('Content-Type', 'model/gltf-binary'); response.setHeader('Content-Length', info.size);
+        if (request.method === 'HEAD') { response.end(); return; }
+        const stream = createReadStream(filename); stream.on('error', () => response.destroy()); response.on('close', () => stream.destroy()); stream.pipe(response);
+      }).catch(() => response.writeHead(404).end()); return;
+    }
+    if (requested.pathname === '/api/model-legacy') {
+      const hash = requested.searchParams.get('hash'), id = requested.searchParams.get('id');
+      if (!hash || !/^[a-f0-9]{64}$/.test(hash) || !id || !/^model-[a-f0-9-]{36}$/.test(id)) { response.writeHead(404).end(); return; }
+      void readdir(publishedRoot(projectRoot)).then(async files => {
+        for (const file of files.filter(file => file.startsWith(id + '--') && file.endsWith('.json'))) {
+          const entry = JSON.parse(await readFile(path.join(publishedRoot(projectRoot), file), 'utf8'));
+          if (entry.assetHash === hash) { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(entry.product)); return; }
+        }
+        response.writeHead(404).end();
+      }).catch(() => response.writeHead(404).end()); return;
+    }
+    if (requested.pathname.startsWith('/api/published-models/')) {
+      if (!['GET', 'HEAD'].includes(request.method ?? '')) { response.writeHead(405).end(); return; }
+      const match = /^\/api\/published-models\/(model-[a-f0-9-]{36}--[a-f0-9]{64})\.(glb|json)$/.exec(requested.pathname);
+      if (!match) { response.writeHead(404).end(); return; }
+      void readPublished(projectRoot, match[1]).then(async product => {
+        if (!product) { response.writeHead(404).end('Model revision unavailable'); return; }
+        if (match[2] === 'json') { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(product)); return; }
+        const filename = path.join(publishedRoot(projectRoot), `${match[1]}.glb`);
+        const info = await stat(filename); response.setHeader('Content-Type', 'model/gltf-binary');
+        response.setHeader('Content-Length', info.size); response.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        if (request.method === 'HEAD') { response.end(); return; }
+        const stream = createReadStream(filename); stream.on('error', () => response.destroy()); response.on('close', () => stream.destroy()); stream.pipe(response);
+      }).catch(() => { if (!response.headersSent) response.writeHead(404).end(); else response.destroy(); });
+      return;
+    }
+    if (requested.pathname.startsWith('/models/') || requested.pathname.startsWith('/optimized-models/')) { response.writeHead(404).end(); return; }
     if (requested.pathname === '/api/model-catalogue/rescan' || requested.pathname === '/api/model-catalogue/compact') {
+      if (process.env.DOMUS_PUBLIC === '1') { response.writeHead(404).end(); return; }
       if (request.method !== 'POST') { response.statusCode = 405; response.setHeader('Allow', 'POST'); response.end('Use POST to rescan models'); return; }
       // A browser from another origin must not trigger a costly local import.
       if (request.headers.origin && request.headers.origin !== `http://${request.headers.host}` && request.headers.origin !== `https://${request.headers.host}`) {
@@ -321,8 +376,8 @@ export function automaticModelCatalogue(): Plugin & {
       const compact = requested.pathname.endsWith('/compact');
       if (compact && !request.headers['content-type']?.startsWith('application/json')) { response.statusCode = 415; response.end('Use application/json'); return; }
       request.resume();
-      void (compact ? (async () => { await optimization?.ensure(); return refresh(); })() : refresh(true)).then((data) => {
-        response.setHeader('Content-Type', 'application/json'); response.setHeader('Cache-Control', 'no-store'); response.end(JSON.stringify(data));
+      void (compact ? (async () => { await optimization?.ensure(); return refresh(); })() : (async () => { await refresh(true); await optimization?.ensure(); return refresh(); })()).then((data) => {
+        response.setHeader('Content-Type', 'application/json'); response.setHeader('Cache-Control', 'no-store'); response.end(JSON.stringify(catalogue.publishedData));
       }).catch((error) => { response.statusCode = 500; response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ error: error.message })); });
       return;
     }
@@ -330,37 +385,11 @@ export function automaticModelCatalogue(): Plugin & {
     if (requested.pathname === '/api/model-catalogue') {
       void refresh().then((data) => {
         response.setHeader('Content-Type', 'application/json'); response.setHeader('Cache-Control', 'no-store');
-        response.end(JSON.stringify(data));
+        response.end(JSON.stringify(catalogue.publishedData));
       }).catch((error) => { response.statusCode = 500; response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ error: error.message })); });
       return;
     }
-    const runtimeAsset = requested.pathname.startsWith('/optimized-models/');
-    if ((!requested.pathname.startsWith('/models/') && !runtimeAsset) || !/\.glb$/i.test(requested.pathname)) { next(); return; }
-    void ready.then(async () => {
-      const product = catalogue.data.products.find((item) => item.available !== false && item.model
-        && new URL(runtimeAsset ? item.model.runtimeUrl ?? '/' : item.model.url, 'http://localhost').pathname === requested.pathname);
-      if (!product?.model) { response.statusCode = 404; response.end('Model unavailable'); return; }
-      const expected = new URL(product.model.url, 'http://localhost').searchParams.get('v');
-      if (requested.searchParams.has('v') && requested.searchParams.get('v') !== expected) { response.statusCode = 409; response.end('Model changed; reload the catalogue'); return; }
-      const directory = runtimeAsset ? path.join(catalogue.modelsDirectory, '..', 'optimized-models') : catalogue.modelsDirectory;
-      const relative = decodeURIComponent(requested.pathname.slice(runtimeAsset ? '/optimized-models/'.length : '/models/'.length));
-      const filename = path.resolve(directory, relative);
-      const inside = path.relative(directory, filename);
-      if (inside.startsWith('..') || path.isAbsolute(inside)) { response.statusCode = 404; response.end(); return; }
-      const info = await stat(filename);
-      if (runtimeAsset && modelCacheExpired(info.mtimeMs)) {
-        void refresh().catch(error => reportExpiryError?.(error.message));
-        response.statusCode = 404; response.end('Model cache expired; reload the catalogue'); return;
-      }
-      response.setHeader('Content-Type', 'model/gltf-binary'); response.setHeader('Content-Length', info.size);
-      const maxAge = Math.max(0, Math.floor((info.mtimeMs + MODEL_CACHE_TTL_MS - Date.now()) / 1000));
-      response.setHeader('Cache-Control', runtimeAsset ? `public, max-age=${maxAge}, must-revalidate` : 'no-cache');
-      if (request.method === 'HEAD') { response.end(); return; }
-      const stream = createReadStream(filename);
-      stream.on('error', () => response.destroy());
-      response.on('close', () => stream.destroy());
-      stream.pipe(response);
-    }).catch(() => { if (!response.headersSent) { response.statusCode = 404; response.end('Model unavailable'); } else response.destroy(); });
+    next();
   };
   return {
     name: 'domus-model-catalogue',
@@ -375,7 +404,7 @@ export function automaticModelCatalogue(): Plugin & {
       const relative = path.relative(catalogue.modelsDirectory, context.file);
       if (!relative.startsWith('..') && !path.isAbsolute(relative)) return [];
     },
-    async load(id) { if (id === MODULE_ID) { await ready; return `export default ${JSON.stringify(catalogue.data)};`; } },
+    async load(id) { if (id === MODULE_ID) { await ready; return `export default ${JSON.stringify(catalogue.publishedData)};`; } },
     async configureServer(server: ViteDevServer) {
       await ready;
       publish = (data) => {

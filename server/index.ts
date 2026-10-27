@@ -7,8 +7,11 @@ import { experimentalAiGateway } from './aiGateway';
 
 const args = process.argv.slice(2);
 function option(name: string, fallback: string) { const index = args.indexOf(`--${name}`); return index < 0 ? fallback : args[index + 1]; }
+const publicMode = process.env.DOMUS_PUBLIC === '1';
+const publicOrigin = publicMode ? new URL(process.env.DOMUS_ORIGIN ?? '') : null;
+if (publicOrigin && publicOrigin.protocol !== 'https:') throw new Error('Public hosting requires an HTTPS DOMUS_ORIGIN.');
 const host = option('host', 'localhost'), port = Number(option('port', process.env.PORT ?? '5173'));
-if (!['localhost', '127.0.0.1', '::1'].includes(host) || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Use a loopback host and a port between 1 and 65535.');
+if (!(publicMode || ['localhost', '127.0.0.1', '::1'].includes(host)) || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Use a loopback host and a port between 1 and 65535.');
 const root = process.cwd(), dist = path.join(root, 'dist');
 await stat(path.join(dist, 'index.html')).catch(() => { throw new Error('Build Domus first with npm run build.'); });
 const catalogue = automaticModelCatalogue();
@@ -37,7 +40,7 @@ async function serve(request: IncomingMessage, response: ServerResponse) {
 }
 const server = createServer((request, response) => {
   const authority = request.headers.host;
-  if (![`localhost:${port}`, `127.0.0.1:${port}`, `[::1]:${port}`].includes(authority ?? '')) { response.writeHead(403).end('Unrecognized local host'); return; }
+  if (!(publicOrigin ? authority === publicOrigin.host : [`localhost:${port}`, `127.0.0.1:${port}`, `[::1]:${port}`].includes(authority ?? ''))) { response.writeHead(403).end('Unrecognized local host'); return; }
   response.setHeader('X-Content-Type-Options', 'nosniff');
   response.setHeader('Referrer-Policy', 'no-referrer');
   response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self'; connect-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");

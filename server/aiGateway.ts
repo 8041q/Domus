@@ -407,7 +407,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
 }
 
 export function experimentalAiGateway(configuredOllamaEndpoints?: string): Plugin {
-  const allowedOllama = ollamaEndpoints(configuredOllamaEndpoints);
+  const allowedOllama = process.env.DOMUS_PUBLIC === '1' ? [] : ollamaEndpoints(configuredOllamaEndpoints);
   const middleware = async (request: IncomingMessage, response: ServerResponse, next: () => void) => {
     try {
       const aiRoute = new URL(request.url ?? '/', 'http://localhost').pathname.startsWith('/api/ai/');

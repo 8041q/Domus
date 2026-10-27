@@ -150,11 +150,11 @@ export function ProjectControls({ canExport, onExport, onExportPdf }: { canExpor
     {menuItem('save', 'Save as', 'Save or name a copy · Ctrl/Cmd+S', () => save())}
     {menuItem('folder', 'Open room', 'Choose a saved room', () => { void run(async () => { await roomProjects.refreshRooms(); setDialog('open'); }); })}
     <span className="project-menu-divider" role="separator" />
-    {menuItem('download', 'Download room', 'Editable backup with compact models', () => { setDialog('storage'); void run(() => roomProjects.inspect()); })}
-    {menuItem('download', 'Download layout only', 'Small JSON file without model assets', downloadLayout)}
-    {menuItem('folder', 'Room storage', 'Usage, recovery drafts and unused assets', () => { setDialog('storage'); void run(() => roomProjects.storageInfo()); })}
+    {menuItem('download', 'Download room', 'Editable room references · internet required to reopen', () => { void download(); })}
+
+    {menuItem('folder', 'Room storage', 'Local usage, recovery drafts and legacy asset cleanup', () => { setDialog('storage'); void run(() => roomProjects.storageInfo()); })}
     {menuItem('folder', 'Import room', 'Open a Domus room or legacy layout', () => fileRef.current?.click())}
-    {onExport && <><span className="project-menu-divider" role="separator" />{menuItem('cube', 'Export Room', 'Download the complete 3D room as GLB', onExport, !canExport)}</>}
+    {onExport && <><span className="project-menu-divider" role="separator" />{menuItem('cube', 'Export Room', 'Room architecture and finishes only · no furniture', onExport, !canExport)}</>}
     {onExportPdf && menuItem('download', 'Export to PDF', 'Project summary, furniture and five room views', onExportPdf, !canExport)}
   </>;
 
@@ -185,10 +185,10 @@ export function ProjectControls({ canExport, onExport, onExportPdf }: { canExpor
     {dialog && <ProjectDialog className={dialog === 'details' ? 'project-details-dialog' : ''} title={dialog === 'storage' ? 'Room storage and backup' : dialog === 'details' ? 'Project details' : dialog === 'new' ? 'New room' : dialog === 'save' ? 'Save as' : dialog === 'open' ? 'Open room' : dialog === 'delete' ? 'Delete saved room?' : 'Save your changes?'} onCancel={cancel}>
       {project.busy && <p role="status">{project.busy}</p>}
       {dialog === 'storage' ? <>
-        <p>Compact models are shared across saved rooms. Portable backups include each used model once.</p>
-        <dl className="project-storage"><dt>Saved model assets</dt><dd>{bytes(project.assetBytes)}</dd><dt>Browser storage used</dt><dd>{bytes(project.storageBytes)}</dd>
+        <p>Room files contain references, not models. Reopening requires access to the Domus server.</p>
+        <dl className="project-storage"><dt>Legacy model assets</dt><dd>{bytes(project.assetBytes)}</dd><dt>Browser storage used</dt><dd>{bytes(project.storageBytes)}</dd>
           {project.storageQuota > 0 && <><dt>Browser storage allowance</dt><dd>{bytes(project.storageQuota)}</dd></>}
-          <dt>Additional model storage for this room</dt><dd>{bytes(project.additionalBytes)}</dd><dt>Portable room estimate</dt><dd>{bytes(project.packageBytes)}</dd></dl>
+          <dt>Additional model storage (reference-only)</dt><dd>{bytes(project.additionalBytes)}</dd><dt>Room file estimate</dt><dd>{bytes(project.packageBytes)}</dd></dl>
         <p>Clearing browser data removes local saves. Keep a portable room file as a backup.</p>
         {project.recoveries.length > 0 && <><h3>Recovery drafts from other tabs</h3>{project.recoveries.map(draft => <div key={draft.id} className="project-recovery-row"><Button variant="outline" onClick={() => replace(() => roomProjects.restoreDraft(draft.id))}>Recover {draft.document.name}</Button>
           <Button variant="ghost" aria-label={`Discard recovery for ${draft.document.name}`} onClick={() => {
@@ -222,7 +222,7 @@ export function ProjectControls({ canExport, onExport, onExportPdf }: { canExpor
       }}>
         <p>{dialog === 'new' ? 'Choose a name and starting shape. Adjust dimensions in the 2D builder.' : 'Keep the current name to update this room, or choose a new name to save a separate copy.'}</p>
         <label className="project-field">Room name<input data-project-focus autoFocus required maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Living room" /></label>
-        {dialog === 'save' && <p>Compact model assets: {bytes(project.additionalBytes)} additional storage · Portable room: approximately {bytes(project.packageBytes)}.</p>}
+        {dialog === 'save' && <p>Room file: approximately {bytes(project.packageBytes)}. Models are retrieved from the server when reopening.</p>}
         {dialog === 'new' && <label className="project-field">Starting shape<select value={shape} onChange={(event) => setShape(event.target.value as typeof shape)}>
           <option value="rectangle">Rectangle</option><option value="rounded-rectangle">Rounded rectangle</option><option value="circle">Circle</option><option value="angled-corner">Angled corner</option><option value="l-shape">L shape</option><option value="recess">Recess</option>
         </select></label>}
