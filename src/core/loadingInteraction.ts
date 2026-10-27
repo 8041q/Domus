@@ -1,7 +1,7 @@
 /** Only workspace navigation remains interactive during a loading flow. */
 export function blocksLoadingInteraction(event: Event) {
   const path = event.composedPath();
-  const navigation = path.some(node => (node as Element).matches?.('.mode-stepper button'));
+  const navigation = path.some(node => (node as Element).matches?.('.mode-stepper button') || (node as Element).matches?.('.mobile-task-nav button'));
   if (event.type === 'keydown') {
     const key = (event as KeyboardEvent).key;
     return !(key === 'Tab' || (navigation && (key === 'Enter' || key === ' ')));
@@ -30,7 +30,7 @@ function createLoadingInteractionLock(root: HTMLElement) {
   const restore = () => { for (const [node, inert] of previous) node.inert = inert; previous.clear(); };
   const apply = () => {
     restore();
-    const allowed = [...root.querySelectorAll<HTMLElement>('.mode-stepper, .loading-status')];
+    const allowed = [...root.querySelectorAll<HTMLElement>('.mode-stepper, .mobile-task-nav, .loading-status')];
     const visit = (parent: HTMLElement) => {
       for (const child of parent.children) {
         const node = child as HTMLElement;
@@ -53,7 +53,8 @@ function createLoadingInteractionLock(root: HTMLElement) {
   // Handles views mounting and the centered card moving to the scene surface.
   const observer = new MutationObserver(apply);
   observer.observe(root, { childList: true, subtree: true });
-  root.querySelector<HTMLElement>('.mode-stepper button[aria-current="step"]')?.focus({ preventScroll: true });
+  (root.querySelector<HTMLElement>('.mobile-task-nav button[aria-current="page"]')
+    ?? root.querySelector<HTMLElement>('.mode-stepper button[aria-current="step"]'))?.focus({ preventScroll: true });
   return () => {
     observer.disconnect();
     for (const event of events) window.removeEventListener(event, stop, true);

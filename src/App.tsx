@@ -6,12 +6,17 @@ import { Button, Icon } from './ui';
 import { ProjectControls } from './ProjectControls';
 import { handlePlannerShortcut } from './core/plannerShortcuts';
 import { LoadingBoundary, LoadingProvider } from './LoadingStatus';
+import { useCompactWorkspace, useMobileWorkspace, type MobileTask } from './mobileWorkspace';
 
 const PlanRoom = lazy(() => import('./PlanRoom').then((module) => ({ default: module.PlanRoom })));
 
 export default function App() {
   const mode = usePlannerStore((s) => s.mode);
   const buildView = usePlannerStore((s) => s.buildView);
+  const planView = usePlannerStore((s) => s.planView);
+  const compact = useCompactWorkspace();
+  const mobileTask = useMobileWorkspace(s => s.task);
+  const setMobileTask = useMobileWorkspace(s => s.setTask);
   const setMode = usePlannerStore((s) => s.setMode);
   const rotate = usePlannerStore((s) => s.rotateSelected);
   const remove = usePlannerStore((s) => s.removeSelected);
@@ -28,6 +33,35 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!compact) return;
+    // New/Open/Import and the existing view buttons can also change workspace.
+    // Synchronize chrome without issuing editor commands or resetting a camera.
+    const task: MobileTask = mode === 'build' ? 'room' : planView === 'walk' ? 'explore'
+      : mobileTask === 'finishes' || mobileTask === 'explore' ? mobileTask : 'furniture';
+    if (task !== mobileTask) useMobileWorkspace.setState({ task,
+      sheet: task === 'room' ? 'room' : task === 'furniture' ? 'catalogue' : task === 'finishes' ? 'finishes' : null, size: 'peek', cornerId: null });
+  }, [compact, mode, planView, mobileTask]);
+
+  useEffect(() => {
+    if (!compact) return;
+    const root = document.documentElement;
+    const measure = () => {
+      root.style.setProperty('--workspace-height', `${window.visualViewport?.height ?? window.innerHeight}px`);
+      root.style.setProperty('--workspace-offset-top', `${window.visualViewport?.offsetTop ?? 0}px`);
+    };
+    measure();
+    window.visualViewport?.addEventListener('resize', measure);
+    window.visualViewport?.addEventListener('scroll', measure);
+    window.addEventListener('resize', measure);
+    return () => {
+      window.visualViewport?.removeEventListener('resize', measure);
+      window.visualViewport?.removeEventListener('scroll', measure);
+      window.removeEventListener('resize', measure);
+      root.style.removeProperty('--workspace-height'); root.style.removeProperty('--workspace-offset-top');
+    };
+  }, [compact]);
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const state = usePlannerStore.getState();
       if (state.mode === 'plan' && state.planView === 'walk') return;
@@ -38,7 +72,7 @@ export default function App() {
   }, [mode, redo, remove, rotate, undo]);
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${compact ? ' is-compact' : ''}`} data-mobile-task={compact ? mobileTask : undefined}>
       <header className="app-header">
         <div className="brand-block" aria-label="Domus room planner">
           <div className="brand-mark">D</div>
@@ -75,6 +109,16 @@ export default function App() {
         </ViewErrorBoundary>
         </LoadingProvider>
       </main>
+
+      {compact && <nav className="mobile-task-nav" aria-label="Phone workspace">
+        {([
+          ['room', 'Room', 'ruler'], ['furniture', 'Furniture', 'cube'],
+          ['finishes', 'Finishes', 'palette'], ['explore', 'Explore', 'eye']
+        ] as const).map(([task, label, icon]) => <button type="button" key={task}
+          aria-current={mobileTask === task ? 'page' : undefined} onClick={() => setMobileTask(task)}>
+          <Icon name={icon} /><span>{label}</span>
+        </button>)}
+      </nav>}
 
     </div>
   );

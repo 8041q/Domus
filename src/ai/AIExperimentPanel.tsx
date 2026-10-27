@@ -17,6 +17,8 @@ import type { AiBrowserSettings, AiChatMessage, AiProviderId, AiTurnResponse } f
 import { removalProposal } from './removalIntent';
 import { operationDescription, proposalIssue } from './proposalPresentation';
 import { AssistantWaiting } from './AssistantWaiting';
+import { MobileSheet } from '../MobileSheet';
+import { useCompactWorkspace } from '../mobileWorkspace';
 
 const SETTINGS_KEY = 'domus-ai-settings-v1';
 const DEFAULT_SETTINGS: AiBrowserSettings = {
@@ -54,7 +56,9 @@ function loadSettings(): AiBrowserSettings {
 }
 
 export function AIExperimentPanel({ onClose }: { onClose: () => void }) {
-  return FEATURES.aiExperiment ? <EnabledAIExperimentPanel onClose={onClose} /> : null;
+  const compact = useCompactWorkspace();
+  if (!FEATURES.aiExperiment) return null;
+  return compact ? <MobileSheet id="assistant" title="Room assistant"><EnabledAIExperimentPanel onClose={onClose} /></MobileSheet> : <EnabledAIExperimentPanel onClose={onClose} />;
 }
 
 function EnabledAIExperimentPanel({ onClose }: { onClose: () => void }) {

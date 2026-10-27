@@ -2,11 +2,11 @@ import { FEATURES } from './config/features';
 import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ChangeEvent } from 'react';
 import { PRODUCT_LIST, PRODUCTS, displayProductDimensions, getProductCatalogueIssues, getProductCatalogueVersion, subscribeProductCatalogue } from './core/products';
 import { PRODUCT_CATEGORIES } from './core/productSchema';
-import { clearanceIssues } from './core/placement';
+import { clearanceIssues, resolvePlacement } from './core/placement';
 import { polygonArea } from './core/roomGeometry';
 import { architectureRoom } from './core/spaces';
 import { effectiveSunAzimuth, normalizeSunAzimuth, SUN_AZIMUTH_MAX, SUN_AZIMUTH_MIN, SUN_ELEVATION_MAX, SUN_ELEVATION_MIN, SUN_SINGLE_WINDOW_LIMIT } from './core/sun';
-import { formatArea, formatLength } from './core/units';
+import { displayLengthValue, displayValueToMetres, formatArea, formatLength } from './core/units';
 import type { PlanCameraView, ProductCategory, SunStylePreset } from './core/types';
 import { FLOOR_FINISHES, ROOM_COLOR_PRESETS } from './core/roomFinishes';
 import { BASEBOARD_STYLES, isSunGlazedOpening } from './core/architecturalStyles';
@@ -17,6 +17,8 @@ import { FloatingPanel } from './FloatingPanel';
 import { EditingSpaceSelector } from './EditingSpaceSelector';
 import { LoadingBoundary, useLoadingSurface } from './LoadingStatus';
 import { AssistantOpening } from './ai/AssistantWaiting';
+import { MobileSheet } from './MobileSheet';
+import { useCompactWorkspace, useMobileBack, useMobileWorkspace } from './mobileWorkspace';
 
 const Viewport3D = lazy(() => import('./Viewport3D').then((module) => ({ default: module.Viewport3D })));
 const AIExperimentPanel = lazy(() => import('./ai/AIExperimentPanel').then((module) => ({ default: module.AIExperimentPanel })));
@@ -50,6 +52,9 @@ function magnetizeRightAngles(degrees: number) {
 }
 
 function SelectionPanel() {
+  const compact = useCompactWorkspace();
+  const freeMove = useMobileWorkspace((s) => s.freeMove);
+  const setFreeMove = useMobileWorkspace((s) => s.setFreeMove);
   useSyncExternalStore(subscribeProductCatalogue, getProductCatalogueVersion, getProductCatalogueVersion);
   const selectedId = usePlannerStore((s) => s.selectedId);
   const measurementSystem = usePlannerStore((s) => s.measurementSystem);
@@ -64,6 +69,9 @@ function SelectionPanel() {
   const remove = usePlannerStore((s) => s.removeSelected);
   const rotationBefore = useRef<ReturnType<typeof getSnapshot> | null>(null);
   const selected = objects.find((o) => o.id === selectedId);
+  const [rotationDraft, setRotationDraft] = useState('0.0');
+  const [rotationError, setRotationError] = useState('');
+  useEffect(() => { setRotationDraft(angleDegrees(selected?.rotationY ?? 0).toFixed(1)); setRotationError(''); }, [selected?.rotationY, selectedId]);
   if (!selected) return null;
   const product = PRODUCTS[selected.productId];
   const displaySize = displayProductDimensions(product);
@@ -75,8 +83,7 @@ function SelectionPanel() {
     rotationBefore.current = null;
   };
 
-  return (
-    <aside className="selection-panel">
+  const content = <>
       <div className="selection-heading">
         <div><span className="eyebrow">Selected</span><h2>{product.name}</h2></div>
         <strong>{product.priceLabel}</strong>
@@ -92,23 +99,36 @@ function SelectionPanel() {
           <span>Rotation</span>
           <label className="angle-input" aria-label="Exact rotation">
             <input
-              type="number"
+              type={compact ? 'text' : 'number'}
+              inputMode="decimal"
               min="0"
               max="359.9"
               step="0.1"
-              value={degrees.toFixed(1)}
+              value={compact ? rotationDraft : degrees.toFixed(1)}
+              aria-invalid={!!rotationError}
               onFocus={() => { if (!rotationBefore.current) rotationBefore.current = getSnapshot(); }}
               onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                if (compact) { setRotationDraft(e.target.value); return; }
                 const value = Number(e.target.value);
                 if (!Number.isFinite(value)) return;
                 const normalized = ((value % 360) + 360) % 360;
                 setSelectedRotation(normalized * Math.PI / 180, false);
               }}
-              onBlur={finishRotation}
+              onBlur={() => {
+                if (compact) {
+                  const value = Number(rotationDraft.trim().replace(',', '.'));
+                  if (!rotationDraft.trim() || !Number.isFinite(value) || value < 0 || value >= 360) {
+                    setRotationError('Enter an angle from 0 to 359.9°.'); setRotationDraft(degrees.toFixed(1));
+                  } else { setRotationError(''); setSelectedRotation(value * Math.PI / 180, false); }
+                }
+                finishRotation();
+              }}
+              onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
             />
             <span>°</span>
           </label>
         </div>
+        {rotationError && <p className="field-error" role="alert">{rotationError}</p>}
         <input
           className="range rotation-range"
           type="range"
@@ -130,6 +150,10 @@ function SelectionPanel() {
         <datalist id="rotation-stops"><option value="0" /><option value="90" /><option value="180" /><option value="270" /></datalist>
         <div className="rotation-ticks" aria-hidden="true"><span>0°</span><span>90°</span><span>180°</span><span>270°</span></div>
       </div>
+      {compact && <>
+        <FurniturePositionFields />
+        <label className="toggle-row"><input type="checkbox" checked={freeMove} onChange={(event) => setFreeMove(event.target.checked)} /><span><strong>Free move</strong><small>Turn off snapping and allow furniture overlap while dragging.</small></span></label>
+      </>}
 
       <div className="action-grid">
         <button type="button" onClick={() => rotate(-1)}><span><Icon name="rotateLeft" /></span>90° left</button>
@@ -148,8 +172,47 @@ function SelectionPanel() {
           <p>{issues.length ? issues[0].message : 'Recommended use space is clear in its current orientation.'}</p>
         </div>
       </div>
-    </aside>
-  );
+    </>;
+  return compact ? <MobileSheet id="selection" title={product.name}>{content}</MobileSheet> : <aside className="selection-panel">{content}</aside>;
+}
+
+function FurniturePositionFields() {
+  const selectedId = usePlannerStore((s) => s.selectedId);
+  const objects = usePlannerStore((s) => s.objects);
+  const system = usePlannerStore((s) => s.measurementSystem);
+  const selected = objects.find((object) => object.id === selectedId);
+  const [x, setX] = useState('');
+  const [z, setZ] = useState('');
+  const [error, setError] = useState('');
+  useEffect(() => {
+    setX(displayLengthValue(selected?.x ?? 0, system).toFixed(2));
+    setZ(displayLengthValue(selected?.z ?? 0, system).toFixed(2));
+    setError('');
+  }, [selected?.x, selected?.z, selectedId, system]);
+  if (!selected) return null;
+  const commit = (axis: 'x' | 'z', draft: string) => {
+    const parsed = Number(draft.trim().replace(',', '.'));
+    const reset = () => (axis === 'x' ? setX : setZ)(displayLengthValue(selected[axis], system).toFixed(2));
+    if (!draft.trim() || !Number.isFinite(parsed)) { setError('Enter a valid position.'); reset(); return; }
+    const metres = displayValueToMetres(parsed, system);
+    if (Math.abs(metres) > 1000) { setError('That position is outside the supported room area.'); reset(); return; }
+    const before = getSnapshot();
+    const freeMove = useMobileWorkspace.getState().freeMove;
+    const resolved = resolvePlacement(selected, axis === 'x' ? metres : selected.x, axis === 'z' ? metres : selected.z,
+      architectureRoom(before), before.objects.filter((object) => object.id !== selected.id),
+      { enterSnapDistance: 0, exitSnapDistance: 0, spatialWallSnap: false, allowOverlap: freeMove });
+    if (resolved.colliding && !freeMove) { setError('This item cannot fit at that position. The previous position has been kept.'); reset(); return; }
+    usePlannerStore.getState().updateObject(selected.id, { x: resolved.x, z: resolved.z });
+    usePlannerStore.getState().commitSnapshot(before);
+    setError(Math.abs(resolved[axis] - metres) > 0.01 ? 'Adjusted to the nearest available position.' : '');
+  };
+  return <div className="mobile-position-fields">
+    {(['x', 'z'] as const).map((axis) => <label key={axis} className="dimension-field"><span>Position {axis.toUpperCase()} ({system === 'metric' ? 'm' : 'ft'})</span>
+      <input aria-label={`Furniture ${axis.toUpperCase()} in ${system === 'metric' ? 'metres' : 'feet'}`} inputMode="decimal" value={axis === 'x' ? x : z}
+        onChange={(event) => (axis === 'x' ? setX : setZ)(event.target.value)} onBlur={(event) => commit(axis, event.target.value)}
+        onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }} /></label>)}
+    {error && <p className="field-error" role="status">{error}</p>}
+  </div>;
 }
 
 function FinishColorPicker({ label, value, onChange }: { label: string; value: string; onChange: (color: string) => void }) {
@@ -324,10 +387,13 @@ function InteractionStatus() {
 }
 
 const ProductCatalog = memo(function ProductCatalog() {
+  const compact = useCompactWorkspace();
+  const openSheet = useMobileWorkspace((s) => s.openSheet);
   const catalogueVersion = useSyncExternalStore(subscribeProductCatalogue, getProductCatalogueVersion, getProductCatalogueVersion);
   const catalogueIssues = getProductCatalogueIssues();
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState<'All' | ProductCategory>('All');
+  const [placementNotice, setPlacementNotice] = useState('');
   const objects = usePlannerStore((s) => s.objects);
   const unplacedObjects = usePlannerStore((s) => s.unplacedObjects);
   const addObject = usePlannerStore((s) => s.addObject);
@@ -347,12 +413,23 @@ const ProductCatalog = memo(function ProductCatalog() {
     return matchesCategory && matchesSearch;
   }), [category, search, catalogueVersion]);
 
-  return (
-    <aside className="catalog-panel">
+  const addProduct = (id: string) => {
+    const before = usePlannerStore.getState().objects.length;
+    addObject(id);
+    if (!compact) return;
+    if (usePlannerStore.getState().objects.length > before) {
+      setPlacementNotice(''); openSheet('selection', 'peek');
+    } else {
+      setPlacementNotice('This item does not fit in a clear position. It is kept in Room items so you can place it later.');
+      openSheet('catalogue', 'half');
+    }
+  };
+  const content = <>
       <div className="catalog-heading">
         <h1>Furniture</h1>
-        <button type="button" className="edit-room-link" onClick={() => setMode('build')}><Icon name="arrowLeft" />Edit room</button>
+        <button type="button" className="edit-room-link" onClick={() => compact ? useMobileWorkspace.getState().setTask('room') : setMode('build')}><Icon name="arrowLeft" />Edit room</button>
       </div>
+      {placementNotice && <p className="mobile-placement-notice" role="status">{placementNotice}</p>}
       <section className="used-furniture" aria-labelledby="used-furniture-heading">
         <div className="used-furniture-heading">
           <h2 id="used-furniture-heading">Room items</h2>
@@ -368,10 +445,14 @@ const ProductCatalog = memo(function ProductCatalog() {
               return (
               <li key={item.id} className={`used-furniture-item ${selectedId === item.id ? 'is-selected' : ''}`}>
                 {item.placed ? <button type="button" className="used-furniture-select" aria-label={`Select ${PRODUCTS[item.productId].name}`}
-                  aria-pressed={selectedId === item.id} onClick={() => select(item.id)}>{details}</button>
+                  aria-pressed={selectedId === item.id} onClick={() => { select(item.id); if (compact) openSheet('selection', 'peek'); }}>{details}</button>
                   : <div className="used-furniture-label">{details}</div>}
                 {!item.placed && <button type="button" className="used-furniture-row-action" aria-label={`Place ${PRODUCTS[item.productId].name}`}
-                  onClick={() => placeUnplacedObject(item.id)}>Place</button>}
+                  onClick={() => {
+                    placeUnplacedObject(item.id);
+                    if (compact && usePlannerStore.getState().objects.some((object) => object.id === item.id)) openSheet('selection', 'peek');
+                    else if (compact) setPlacementNotice('This item still needs more clear floor space. Move another item or adjust the room, then try Place again.');
+                  }}>Place</button>}
                 <button type="button" className="used-furniture-remove" aria-label={`Remove ${PRODUCTS[item.productId].name} from used furniture`} title="Remove furniture" onClick={() => removeFurniture(item.id)}><Icon name="x" /></button>
               </li>
               );
@@ -398,7 +479,7 @@ const ProductCatalog = memo(function ProductCatalog() {
       </div>}
       <div className="product-grid">
         {filtered.map((product) => (
-          <button className="product-card" key={product.id} type="button" onClick={() => addObject(product.id)}>
+          <button className="product-card" key={product.id} type="button" onClick={() => addProduct(product.id)}>
             <div className="product-visual"><ProductGlyph productId={product.id} /></div>
             <strong>{product.name}</strong>
             <small>{Math.round(displayProductDimensions(product).width * 100)} × {Math.round(displayProductDimensions(product).depth * 100)} cm</small>
@@ -407,14 +488,20 @@ const ProductCatalog = memo(function ProductCatalog() {
         ))}
       </div>
       {!filtered.length && <p className="empty-state">No products match that search.</p>}
-    </aside>
-  );
+    </>;
+  return compact ? <MobileSheet id="catalogue" title={unplacedObjects.length ? `Furniture · ${unplacedObjects.length} not placed` : 'Furniture'}><div className="catalog-panel mobile-catalog-content">{content}</div></MobileSheet>
+    : <aside className="catalog-panel">{content}</aside>;
 });
 
 export function PlanRoom({ onExportReady, onPdfExportReady }: {
   onExportReady?: (handler: (() => Promise<void>) | null) => void;
   onPdfExportReady?: (handler: (() => Promise<void>) | null) => void;
 }) {
+  const compact = useCompactWorkspace();
+  const mobileSheet = useMobileWorkspace((s) => s.sheet);
+  const mobileTask = useMobileWorkspace((s) => s.task);
+  const openSheet = useMobileWorkspace((s) => s.openSheet);
+  const closeSheet = useMobileWorkspace((s) => s.closeSheet);
   const loadingSurface = useLoadingSurface();
   const [resetViewRequest, setResetViewRequest] = useState(0);
   const [showFinishes, setShowFinishes] = useState(false);
@@ -433,6 +520,24 @@ export function PlanRoom({ onExportReady, onPdfExportReady }: {
   const interiorWallView = usePlannerStore((s) => s.interiorWallView);
   const setInteriorWallView = usePlannerStore((s) => s.setInteriorWallView);
   const walking = planView === 'walk';
+  const [mobileViewOpen, setMobileViewOpen] = useState(false);
+  useMobileBack(() => setMobileViewOpen(false), compact && mobileViewOpen);
+  const lastSelection = useRef(selectedId);
+
+  useEffect(() => {
+    if (!mobileViewOpen) return;
+    const closeOutside = (event: PointerEvent) => { if (!(event.target as Element | null)?.closest?.('.mobile-canvas-toolbar')) setMobileViewOpen(false); };
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setMobileViewOpen(false); } };
+    document.addEventListener('pointerdown', closeOutside);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => { document.removeEventListener('pointerdown', closeOutside); document.removeEventListener('keydown', closeOnEscape); };
+  }, [mobileViewOpen]);
+
+  useEffect(() => {
+    if (compact && selectedId && selectedId !== lastSelection.current && !walking && mobileTask === 'furniture') openSheet('selection', 'peek');
+    if (compact && !selectedId && mobileSheet === 'selection') openSheet('catalogue', 'peek');
+    lastSelection.current = selectedId;
+  }, [compact, selectedId, walking, mobileTask, mobileSheet, openSheet]);
 
   useEffect(() => {
     if (FEATURES.interiorWalls && spaces.length && !spaces.some((space) => space.id === selectedSpaceId)) selectSpace(spaces[0].id);
@@ -460,7 +565,20 @@ export function PlanRoom({ onExportReady, onPdfExportReady }: {
       <section className="designer-canvas">
         <div className="designer-stage" ref={loadingSurface}>
           {FEATURES.interiorWalls && <EditingSpaceSelector spaces={spaces} value={selectedSpaceId ?? spaces[0]?.id ?? ''} onChange={selectSpace} />}
-          <div className={`designer-topbar ${FEATURES.interiorWalls ? '' : 'without-space-selector'}`} aria-label="Room view controls">
+          {compact && <div className="mobile-canvas-toolbar" aria-label="Room view controls">
+            <button type="button" aria-expanded={mobileViewOpen} onClick={() => setMobileViewOpen((value) => !value)}>View <Icon name="chevronDown" /></button>
+            {mobileTask === 'furniture' && <button type="button" onClick={() => openSheet(selectedId ? 'selection' : 'catalogue')}>{selectedId ? 'Item settings' : 'Furniture'}</button>}
+            {mobileTask === 'finishes' && <button type="button" onClick={() => openSheet('finishes')}>Finish settings</button>}
+            <button type="button" aria-label="Reset view" onClick={() => setResetViewRequest((value) => value + 1)}><Icon name="rotateLeft" /></button>
+            {mobileViewOpen && <div className="mobile-view-menu" role="group" aria-label="Camera and design options">
+              {VIEW_PRESETS.map((view) => <button key={view.id} type="button" aria-pressed={planView === view.id} onClick={() => { setPlanView(view.id); setMobileViewOpen(false); }}>{view.label}</button>)}
+              {FEATURES.interiorWalls && <><button type="button" disabled={walking} aria-pressed={interiorWallView === 'up'} onClick={() => setInteriorWallView('up')}>Walls up</button><button type="button" disabled={walking} aria-pressed={interiorWallView === 'down'} onClick={() => setInteriorWallView('down')}>Walls down</button></>}
+              <button type="button" onClick={() => { openSheet('design'); setMobileViewOpen(false); }}>Design & lighting</button>
+              <button type="button" onClick={() => { openSheet('finishes'); setMobileViewOpen(false); }}>Room finishes</button>
+              {FEATURES.aiExperiment && <button type="button" onClick={() => { openSheet('assistant', 'expanded'); setMobileViewOpen(false); }}>Room assistant</button>}
+            </div>}
+          </div>}
+          {!compact && <div className={`designer-topbar ${FEATURES.interiorWalls ? '' : 'without-space-selector'}`} aria-label="Room view controls">
             <div className="view-preset-bar" role="group" aria-label="3D room view">
               {FEATURES.interiorWalls && <><button type="button" disabled={walking} title={walking ? 'Walk uses full-height walls' : undefined} className={walking || interiorWallView === 'up' ? 'active' : ''} aria-pressed={walking || interiorWallView === 'up'} onClick={() => setInteriorWallView('up')}>Walls up</button>
               <button type="button" disabled={walking} title={walking ? 'Walk uses full-height walls' : undefined} className={!walking && interiorWallView === 'down' ? 'active' : ''} aria-pressed={!walking && interiorWallView === 'down'} onClick={() => setInteriorWallView('down')}>Walls down</button>
@@ -497,15 +615,15 @@ export function PlanRoom({ onExportReady, onPdfExportReady }: {
               ><Icon name="palette" /></button>
               <button className="designer-reset-view" type="button" onClick={() => setResetViewRequest((value) => value + 1)}><Icon name="rotateLeft" />Reset view</button>
             </div>
-          </div>
+          </div>}
 
           <LoadingBoundary label="Preparing your room…" detail="Opening the 3D view">
             <Viewport3D furniture interactive sunRays={sunRaysEnabled} view={planView} resetViewRequest={resetViewRequest} onExportReady={onExportReady} onPdfExportReady={onPdfExportReady} />
           </LoadingBoundary>
-          {FEATURES.aiExperiment && showAi && <Suspense fallback={<AssistantOpening onClose={() => setShowAi(false)} />}><AIExperimentPanel onClose={() => setShowAi(false)} /></Suspense>}
-          {showFinishes && <FinishesPanel onClose={() => setShowFinishes(false)} />}
-          {showViewOptions && <DesignPanel onClose={() => setShowViewOptions(false)} />}
-          {selectedId && !walking && !(FEATURES.aiExperiment && showAi) && <SelectionPanel />}
+          {FEATURES.aiExperiment && (compact ? mobileSheet === 'assistant' : showAi) && <Suspense fallback={compact ? <MobileSheet id="assistant" title="Room assistant"><p role="status">Opening assistant…</p></MobileSheet> : <AssistantOpening onClose={() => setShowAi(false)} />}><AIExperimentPanel onClose={compact ? closeSheet : () => setShowAi(false)} /></Suspense>}
+          {(compact ? mobileSheet === 'finishes' : showFinishes) && <FinishesPanel onClose={compact ? closeSheet : () => setShowFinishes(false)} />}
+          {(compact ? mobileSheet === 'design' : showViewOptions) && <DesignPanel onClose={compact ? closeSheet : () => setShowViewOptions(false)} />}
+          {selectedId && !walking && (compact ? mobileSheet === 'selection' : !(FEATURES.aiExperiment && showAi)) && <SelectionPanel />}
         </div>
 
         <InteractionStatus />

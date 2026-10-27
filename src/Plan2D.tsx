@@ -29,6 +29,8 @@ import { createFrameQueue } from './core/frameQueue';
 import { APP_FONT_FAMILY, setCanvasFont } from './core/reportFonts';
 import { Icon } from './ui';
 import { openingPositionAtPoint } from './core/openingPlacement';
+import { nearestPlanTouchTarget, PlanTouchController, resizedPlanView, shouldRefitPlanView, type PlanTouchAction, type PlanTouchPoint, type PlanViewTransform } from './core/planTouch';
+import { useMobileWorkspace } from './mobileWorkspace';
 
 const PAD = 64;
 const MIN_VIEW_SCALE = 6;
@@ -44,12 +46,12 @@ type DragState =
   | { type: 'wall'; id: string; before: PlannerSnapshot; view: DragView }
   | { type: 'corner'; id: string; before: PlannerSnapshot; view: DragView; grabOffset: Vec2 }
   | { type: 'pan'; view: DragView; lastX: number; lastY: number }
-  | { type: 'object'; id: string; before: PlannerSnapshot; snap: SnapFeedback }
+  | { type: 'object'; id: string; before: PlannerSnapshot; snap: SnapFeedback; grabOffset?: Vec2; view?: DragView }
   | { type: 'opening'; id: string; before: PlannerSnapshot; view: DragView; grabOffset: number }
   | { type: 'divider-end'; id: string; end: 'start' | 'end'; before: PlannerSnapshot; view: DragView };
 
 type HoverTarget = { type: 'wall' | 'corner' | 'split'; id: string } | null;
-type PointerSample = Pick<ReactPointerEvent<HTMLCanvasElement>, 'clientX' | 'clientY' | 'shiftKey' | 'currentTarget'>;
+type PointerSample = Pick<ReactPointerEvent<HTMLCanvasElement>, 'clientX' | 'clientY' | 'shiftKey' | 'currentTarget'> & { touch?: boolean; projectGeneration?: number };
 
 
 type RoomWall = ReturnType<typeof getRoomWalls>[number];
@@ -188,6 +190,7 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
   const catalogueVersion = useSyncExternalStore(subscribeProductCatalogue, getProductCatalogueVersion, getProductCatalogueVersion);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const room = usePlannerStore((s) => s.room);
+  const projectGeneration = usePlannerStore((s) => s.projectGeneration);
   const measurementSystem = usePlannerStore((s) => s.measurementSystem);
   const savedOpenings = usePlannerStore((s) => s.openings);
   const savedDividers = usePlannerStore((s) => s.dividers);
@@ -199,6 +202,7 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
   const selectedId = usePlannerStore((s) => s.selectedId);
   const selectedOpeningId = usePlannerStore((s) => s.selectedOpeningId);
   const selectedWallId = usePlannerStore((s) => s.selectedWallId);
+  const selectedCornerId = useMobileWorkspace((s) => s.cornerId);
   const activeSnap = usePlannerStore((s) => s.activeSnap);
   const showClearance = usePlannerStore((s) => s.showClearance);
   const select = usePlannerStore((s) => s.select);
@@ -222,12 +226,14 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
   const setDrag = (next: DragState | null) => { dragRef.current = next; setDragState(next); };
   const moveHandler = useRef<(event: PointerSample) => void>(() => {});
   const finishHandler = useRef<() => void>(() => {});
+  const touchController = useRef<PlanTouchController | null>(null);
+  const touchNavigation = useRef<ReturnType<typeof createFrameQueue<PlanViewTransform>> | null>(null);
   const moveQueue = useRef<ReturnType<typeof createFrameQueue<PointerSample>> | null>(null);
   if (!moveQueue.current) moveQueue.current = createFrameQueue<PointerSample>((event) => moveHandler.current(event));
   useEffect(() => {
     const finish = () => finishHandler.current();
     window.addEventListener('blur', finish);
-    return () => { window.removeEventListener('blur', finish); moveQueue.current?.clear(); };
+    return () => { window.removeEventListener('blur', finish); touchController.current?.cancel(); moveQueue.current?.clear(); touchNavigation.current?.clear(); };
   }, []);
   const [hover, setHover] = useState<HoverTarget>(null);
   const [moveHint, setMoveHint] = useState<{ x: number; y: number } | null>(null);
@@ -247,7 +253,9 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
     const canvas = canvasRef.current;
     if (!canvas) return;
     const observer = new ResizeObserver(() => {
-      viewRef.current = null;
+      if (touchController.current?.active) { touchController.current.cancel(); touchNavigation.current?.clear(); }
+      const { width, height } = canvas.getBoundingClientRect();
+      if (viewRef.current && width && height) viewRef.current = resizedPlanView(viewRef.current, width, height);
       setResizeTick((v) => v + 1);
     });
     observer.observe(canvas);
@@ -259,14 +267,16 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
     // Build drags pin the view transform and canvas rect at pointer-down. This avoids a
     // synchronous layout read on every pointermove and keeps world/screen mapping stable.
     const active = dragRef.current;
-    if (active && active.type !== 'object') return { rect: active.view.rect, scale: active.view.scale, ox: active.view.ox, oz: active.view.oz };
+    if (active?.view) return { rect: active.view.rect, scale: active.view.scale, ox: active.view.ox, oz: active.view.oz };
     const rect = canvas.getBoundingClientRect();
 
     // The drafting viewport is intentionally stable while dimensions change. Grid cells
     // represent world units, so growing a room makes it cover more cells instead of
     // auto-zooming the room back to the same apparent size.
     const cached = viewRef.current;
-    if (!cached || Math.abs(cached.width - rect.width) > 1 || Math.abs(cached.height - rect.height) > 1) {
+    if (cached && (Math.abs(cached.width - rect.width) > 1 || Math.abs(cached.height - rect.height) > 1)) {
+      viewRef.current = resizedPlanView(cached, rect.width, rect.height);
+    } else if (!cached) {
       const bounds = roomBounds(room.vertices);
       const frameW = Math.max(bounds.width, 6.4);
       const frameD = Math.max(bounds.depth, 5.0);
@@ -315,12 +325,20 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
       rect);
   };
 
+  const previousRoomFrame = useRef({ room, projectGeneration });
   useEffect(() => {
-    if (room.shapeKind !== 'custom') {
+    const previous = previousRoomFrame.current;
+    if (previous.projectGeneration !== projectGeneration) {
+      touchController.current?.cancel();
+      moveQueue.current?.clear(); touchNavigation.current?.clear();
+      setDrawStart(null); setDrawHover(null); setDividerError(''); setWallLabelEdit(null);
+    }
+    if (shouldRefitPlanView(previous.room, room, previous.projectGeneration, projectGeneration)) {
       viewRef.current = null;
       setResizeTick((value) => value + 1);
     }
-  }, [room.shapeKind, room.shapeKind === 'circle' ? room.width : null]);
+    previousRoomFrame.current = { room, projectGeneration };
+  }, [room, projectGeneration]);
 
   useEffect(() => {
     if (!wallLabelEdit) return;
@@ -917,7 +935,7 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
       // Corner handles: neutral by default, highlighted yellow on hover/drag.
       for (const vertex of room.vertices) {
         const point = toPx(vertex.x, vertex.z);
-        const active = (hover?.type === 'corner' && hover.id === vertex.id) || (drag?.type === 'corner' && drag.id === vertex.id);
+        const active = selectedCornerId === vertex.id || (hover?.type === 'corner' && hover.id === vertex.id) || (drag?.type === 'corner' && drag.id === vertex.id);
         ctx.fillStyle = active ? interaction : '#27272a';
         ctx.beginPath(); ctx.arc(point.x, point.y, active ? 8 : 7, 0, Math.PI * 2); ctx.fill();
         ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.stroke();
@@ -993,7 +1011,7 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
       // controls already reserved these rectangles, so the three annotation systems
       // no longer paint directly over one another in tight recesses.
       for (const label of angleLabels) {
-        const active = (hover?.type === 'corner' && hover.id === label.vertex.id) || (drag?.type === 'corner' && drag.id === label.vertex.id);
+        const active = selectedCornerId === label.vertex.id || (hover?.type === 'corner' && hover.id === label.vertex.id) || (drag?.type === 'corner' && drag.id === label.vertex.id);
         ctx.save();
         ctx.beginPath();
         ctx.roundRect(label.rect.x, label.rect.y, label.rect.width, label.rect.height, 5);
@@ -1020,7 +1038,7 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
       ctx.fillText(`Diameter ${formatLength(room.width, measurementSystem)}`, (left.x + right.x) / 2, left.y - 12);
       ctx.restore();
     }
-  }, [activeSnap, drag, hover, measurementSystem, objects, openings, dividers, spaces, purpose, resizeTick, room, selected, selectedId, selectedOpeningId, selectedWallId, selectedDividerId, selectedSpaceId, showClearance, drawStart, drawHover, dividerTool, catalogueVersion]);
+  }, [activeSnap, drag, hover, measurementSystem, objects, openings, dividers, spaces, purpose, resizeTick, room, selected, selectedId, selectedOpeningId, selectedWallId, selectedDividerId, selectedSpaceId, selectedCornerId, showClearance, drawStart, drawHover, dividerTool, catalogueVersion]);
 
   const hitWallLabel = (px: number, py: number) => {
     for (const [wallId, rect] of wallLabelRectsRef.current) {
@@ -1059,45 +1077,58 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
     setWallLabelEdit(null);
   };
 
-  const hitDividerEnd = (px: number, py: number, scale: number, ox: number, oz: number) => {
+  const hitDividerEnd = (px: number, py: number, scale: number, ox: number, oz: number, radius = 12) => {
+    let nearest: { id: string; end: 'start' | 'end'; distance: number } | null = null;
     for (const divider of [...resolveDividers(room, dividers)].reverse()) {
       for (const end of ['start', 'end'] as const) {
         const point = end === 'start' ? divider.a : divider.b;
-        if (Math.hypot(px - (ox + point.x * scale), py - (oz + point.z * scale)) <= 12) return { id: divider.id, end };
+        const distance = Math.hypot(px - (ox + point.x * scale), py - (oz + point.z * scale));
+        if (distance <= radius) {
+          const hit = { id: divider.id, end, distance };
+          if (radius !== 22) return hit;
+          if (!nearest || distance < nearest.distance) nearest = hit;
+        }
       }
     }
-    return null;
+    return nearest;
   };
 
-  const hitDivider = (px: number, py: number, scale: number, ox: number, oz: number) => {
+  const hitDivider = (px: number, py: number, scale: number, ox: number, oz: number, radius = 11) => {
     return [...resolveDividers(room, dividers)].reverse().find((divider) =>
       pointSegmentDistance(px, py, ox + divider.a.x * scale, oz + divider.a.z * scale,
-        ox + divider.b.x * scale, oz + divider.b.z * scale) <= 11) ?? null;
+        ox + divider.b.x * scale, oz + divider.b.z * scale) <= radius) ?? null;
   };
 
-  const hitCorner = (px: number, py: number, scale: number, ox: number, oz: number) => {
-    return room.vertices.find((vertex) => Math.hypot(px - (ox + vertex.x * scale), py - (oz + vertex.z * scale)) <= 15) ?? null;
+  const hitCorner = (px: number, py: number, scale: number, ox: number, oz: number, radius = 15) => {
+    if (radius === 15) return room.vertices.find(vertex => Math.hypot(px - (ox + vertex.x * scale), py - (oz + vertex.z * scale)) <= radius) ?? null;
+    return room.vertices.map(vertex => ({ vertex, distance: Math.hypot(px - (ox + vertex.x * scale), py - (oz + vertex.z * scale)) }))
+      .filter(candidate => candidate.distance <= radius).sort((a, b) => a.distance - b.distance)[0]?.vertex ?? null;
   };
 
-  const hitOpening = (px: number, py: number, scale: number, ox: number, oz: number) => {
+  const hitOpening = (px: number, py: number, scale: number, ox: number, oz: number, radius = 11) => {
+    let nearest: { opening: RoomOpening; wall: ReturnType<typeof getPhysicalWalls>[number]; distance: number } | null = null;
+    const walls = getPhysicalWalls(room, dividers);
     for (const opening of [...openings].reverse()) {
-      for (const wall of getPhysicalWalls(room, dividers)) {
+      for (const wall of walls) {
         for (const piece of openingsOnWall(room, [opening], wall.id)) {
           const a = wallPoint(wall, piece.offset - piece.width / 2), b = wallPoint(wall, piece.offset + piece.width / 2);
-          if (pointSegmentDistance(px, py, ox + a.x * scale, oz + a.z * scale, ox + b.x * scale, oz + b.z * scale) <= 11) {
-            return { opening, wall };
+          const distance = pointSegmentDistance(px, py, ox + a.x * scale, oz + a.z * scale, ox + b.x * scale, oz + b.z * scale);
+          if (distance <= radius) {
+            const hit = { opening, wall, distance };
+            if (radius !== 22) return hit;
+            if (!nearest || distance < nearest.distance) nearest = hit;
           }
         }
       }
     }
-    return null;
+    return nearest;
   };
 
-  const hitWall = (px: number, py: number, scale: number, ox: number, oz: number) => {
+  const hitWall = (px: number, py: number, scale: number, ox: number, oz: number, radius = 14) => {
     const world = { x: (px - ox) / scale, z: (py - oz) / scale };
     return getRoomWalls(room)
       .map((wall) => ({ wall, distance: distanceToWall(wall, world) }))
-      .filter(({ distance }) => distance <= 14 / scale)
+      .filter(({ distance }) => distance <= radius / scale)
       .sort((a, b) => a.distance - b.distance)[0]?.wall ?? null;
   };
 
@@ -1138,8 +1169,148 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
     canvas.style.cursor = 'default';
   };
 
+  const cancelTouchEdit = (generation: number) => {
+    moveQueue.current!.clear();
+    const active = dragRef.current;
+    const state = usePlannerStore.getState();
+    if (active && active.type !== 'pan' && state.projectGeneration === generation) state.cancelInteraction(active.before);
+    setDrag(null);
+    dragPointerId.current = null;
+    setFeedback({ kind: 'none' }, null, false);
+    if (canvasRef.current) canvasRef.current.style.cursor = 'default';
+  };
+
+  const beginTouch = (point: PlanTouchPoint): PlanTouchAction | null => {
+    const canvas = canvasRef.current!;
+    canvas.focus({ preventScroll: true });
+    setMoveHint(null); setHover(null);
+    moveQueue.current!.clear();
+    const { rect, scale, ox, oz } = metrics();
+    const { x: px, y: py } = point;
+    const before = getSnapshot();
+    const state = usePlannerStore.getState(), mobile = useMobileWorkspace.getState();
+    const generation = state.projectGeneration;
+    const view: DragView = { scale, ox, oz, rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height } };
+    const world = { x: (px - ox) / scale, z: (py - oz) / scale };
+    const action = (next: DragState): PlanTouchAction => {
+      dragPointerId.current = point.id;
+      setDrag(next);
+      return {
+        move: sample => {
+          if (usePlannerStore.getState().projectGeneration !== generation) { cancelTouchEdit(generation); return; }
+          moveQueue.current!.push({ clientX: sample.x + rect.left, clientY: sample.y + rect.top,
+            shiftKey: false, currentTarget: canvas, touch: true, projectGeneration: generation });
+        },
+        finish: () => {
+          if (usePlannerStore.getState().projectGeneration !== generation) { cancelTouchEdit(generation); return; }
+          finishExistingDrag();
+        },
+        cancel: () => cancelTouchEdit(generation)
+      };
+    };
+    if (purpose === 'build' && FEATURES.interiorWalls && dividerTool) {
+      const target = closestBoundaryAnchor(room, dividers, world, 22 / scale);
+      return { move() {}, finish() {}, cancel() {}, tap: () => {
+        if (usePlannerStore.getState().projectGeneration !== generation) return;
+        if (!target) { setDividerError('Start and end each divider on an existing boundary.'); return; }
+        if (!drawStart) { setDrawStart({ anchor: target.anchor, point: target.point }); setDividerError(''); }
+        else if (!addDivider(dividerTool, drawStart.anchor, target.anchor)) setDividerError('This divider does not create a valid separate space.');
+        else { setDividerError(''); setDrawStart(null); setDrawHover(null); onDividerAdded?.(); }
+      } };
+    }
+    const aperture = hitOpening(px, py, scale, ox, oz, 22);
+    const corner = purpose === 'build' ? hitCorner(px, py, scale, ox, oz, 22) : null;
+    const end = purpose === 'build' ? hitDividerEnd(px, py, scale, ox, oz, 22) : null;
+    type TouchHit = { kind: 'opening'; hit: NonNullable<typeof aperture> }
+      | { kind: 'corner'; hit: NonNullable<typeof corner> }
+      | { kind: 'divider-end'; hit: NonNullable<typeof end> };
+    const targets: Array<{ target: TouchHit; distance: number; selected: boolean }> = [];
+    if (corner) targets.push({ target: { kind: 'corner', hit: corner },
+      distance: Math.hypot(px - (ox + corner.x * scale), py - (oz + corner.z * scale)), selected: mobile.cornerId === corner.id });
+    if (end) targets.push({ target: { kind: 'divider-end', hit: end }, distance: end.distance, selected: state.selectedDividerId === end.id });
+    if (aperture) targets.push({ target: { kind: 'opening', hit: aperture }, distance: aperture.distance, selected: state.selectedOpeningId === aperture.opening.id });
+    const target = nearestPlanTouchTarget(targets);
+    if (target?.kind === 'opening') {
+      const aperture = target.hit;
+      const alreadySelected = state.selectedOpeningId === aperture.opening.id;
+      mobile.setCornerId(null); selectOpening(aperture.opening.id); mobile.openSheet('room', 'peek');
+      if (!alreadySelected) return null;
+      const along = wallProjectionDistance(aperture.wall, world);
+      const centre = perimeterDistance(room, aperture.opening.wallId, aperture.opening.offset);
+      const grabbed = perimeterDistance(room, aperture.wall.id, along);
+      const perimeter = getRoomWalls(room).reduce((sum, wall) => sum + wall.length, 0);
+      const delta = centre != null && grabbed != null ? centre - grabbed : aperture.opening.offset - along;
+      const grabOffset = centre != null ? ((delta + perimeter / 2) % perimeter + perimeter) % perimeter - perimeter / 2 : delta;
+      return action({ type: 'opening', id: aperture.opening.id, before, view, grabOffset });
+    }
+    if (purpose === 'build') {
+      if (target?.kind === 'corner') {
+        const corner = target.hit;
+        const alreadySelected = mobile.cornerId === corner.id;
+        selectWall(null); mobile.setCornerId(corner.id); mobile.openSheet('room', 'peek');
+        if (!alreadySelected) return null;
+        return action({ type: 'corner', id: corner.id, before, view,
+          grabOffset: { x: corner.x - world.x, z: corner.z - world.z } });
+      }
+      if (target?.kind === 'divider-end') {
+        const end = target.hit;
+        const alreadySelected = state.selectedDividerId === end.id;
+        mobile.setCornerId(null); selectDivider(end.id); mobile.openSheet('room', 'peek');
+        return alreadySelected ? action({ type: 'divider-end', ...end, before, view }) : null;
+      }
+      const divider = hitDivider(px, py, scale, ox, oz, 22);
+      if (divider) { mobile.setCornerId(null); selectDivider(divider.id); mobile.openSheet('room', 'peek'); return null; }
+      const label = hitWallLabel(px, py);
+      const wall = label ? getWall(room, label.wallId) : hitWall(px, py, scale, ox, oz, 22);
+      if (wall) {
+        const alreadySelected = state.selectedWallId === wall.id;
+        mobile.setCornerId(null); selectWall(wall.id); mobile.openSheet('room', 'peek');
+        return alreadySelected ? action({ type: 'wall', id: wall.id, before, view }) : null;
+      }
+      mobile.setCornerId(null); selectWall(null);
+      const space = spaceAtPoint(before, world); if (space) selectSpace(space.id);
+    } else {
+      const hit = [...objects].reverse().find(obj => {
+        const size = rotatedFootprint(PRODUCTS[obj.productId], obj.rotationY);
+        return Math.abs(world.x - obj.x) <= Math.max(size.width / 2, 22 / scale)
+          && Math.abs(world.z - obj.z) <= Math.max(size.depth / 2, 22 / scale);
+      });
+      if (hit) {
+        const alreadySelected = state.selectedId === hit.id;
+        mobile.setCornerId(null); select(hit.id); mobile.openSheet('selection', 'peek');
+        return alreadySelected ? action({ type: 'object', id: hit.id, before, view, snap: { kind: 'none' },
+          grabOffset: { x: hit.x - world.x, z: hit.z - world.z } }) : null;
+      }
+      select(null); mobile.setCornerId(null);
+    }
+    return action({ type: 'pan', view, lastX: px, lastY: py });
+  };
+
+  if (!touchNavigation.current) touchNavigation.current = createFrameQueue<PlanViewTransform>((next) => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (rect) changeView(next.scale, next.ox, next.oz, rect);
+  });
+  const touchCallbacks = {
+    begin: beginTouch,
+    view: () => { const { scale, ox, oz } = metrics(); return { scale, ox, oz }; },
+    navigate: (next: PlanViewTransform) => touchNavigation.current!.push(next),
+    release: (id: number) => { if (canvasRef.current?.hasPointerCapture(id)) canvasRef.current.releasePointerCapture(id); }
+  };
+  if (!touchController.current) touchController.current = new PlanTouchController(touchCallbacks);
+  else touchController.current.callbacks = touchCallbacks;
+  const touchPoint = (event: ReactPointerEvent<HTMLCanvasElement>): PlanTouchPoint => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return { id: event.pointerId, x: event.clientX - rect.left, y: event.clientY - rect.top };
+  };
+
   const onPointerDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (e.pointerType === 'touch') {
+      e.preventDefault();
+      if (touchController.current!.down(touchPoint(e))) e.currentTarget.setPointerCapture(e.pointerId);
+      return;
+    }
     if (e.button !== 0 || dragRef.current) return;
+    useMobileWorkspace.getState().setCornerId(null);
     // Returning to the drawing ends input editing before selection/drag snapshots.
     e.currentTarget.focus({ preventScroll: true });
     setMoveHint(null);
@@ -1250,6 +1421,9 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
   };
 
   const applyPointerMove = (e: PointerSample) => {
+    if (e.touch && e.projectGeneration !== usePlannerStore.getState().projectGeneration) {
+      cancelTouchEdit(e.projectGeneration!); return;
+    }
     const drag = dragRef.current;
     const { rect, scale, ox, oz } = metrics();
     const px = e.clientX - rect.left;
@@ -1309,7 +1483,7 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
 
     e.currentTarget.style.cursor = purpose === 'build' ? 'grabbing' : e.currentTarget.style.cursor;
     if (drag.type === 'corner' || drag.type === 'wall') {
-      moveDraggedRoom(drag, px, py, e.shiftKey);
+      moveDraggedRoom(drag, px, py, e.shiftKey || !!e.touch && useMobileWorkspace.getState().fineSnap);
       return;
     }
     const world = { x: (px - ox) / scale, z: (py - oz) / scale };
@@ -1322,8 +1496,8 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
       const obj = objects.find((o) => o.id === drag.id);
       if (!obj) return;
       const others = objects.filter((o) => o.id !== obj.id);
-      const freeMove = e.shiftKey;
-      const resolved = resolvePlacement(obj, world.x, world.z, architectureRoom(getSnapshot()), others, {
+      const freeMove = e.shiftKey || !!e.touch && useMobileWorkspace.getState().freeMove;
+      const resolved = resolvePlacement(obj, world.x + (drag.grabOffset?.x ?? 0), world.z + (drag.grabOffset?.z ?? 0), architectureRoom(getSnapshot()), others, {
         previousSnap: freeMove ? undefined : drag.snap,
         enterSnapDistance: freeMove ? 0 : undefined,
         exitSnapDistance: freeMove ? 0 : undefined,
@@ -1337,11 +1511,12 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
   };
   moveHandler.current = applyPointerMove;
   const onPointerMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (e.pointerType === 'touch' || touchController.current!.has(e.pointerId)) { touchController.current!.move(touchPoint(e)); return; }
     if (dragRef.current && e.pointerId !== dragPointerId.current) return;
     moveQueue.current!.push({ clientX: e.clientX, clientY: e.clientY, shiftKey: e.shiftKey, currentTarget: e.currentTarget });
   };
 
-  const onPointerUp = (e?: ReactPointerEvent<HTMLCanvasElement>) => {
+  const finishExistingDrag = (e?: ReactPointerEvent<HTMLCanvasElement>) => {
     const drag = dragRef.current;
     if (!drag) return;
     if (e && e.pointerId !== dragPointerId.current) return;
@@ -1356,9 +1531,26 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
     setFeedback({ kind: 'none' }, null, false);
     if (e && purpose === 'build') e.currentTarget.style.cursor = 'default';
   };
-  finishHandler.current = () => onPointerUp();
+  const onPointerUp = (e: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (e.pointerType === 'touch' || touchController.current!.has(e.pointerId)) {
+      touchController.current!.up(touchPoint(e));
+      touchNavigation.current!.flush();
+      return;
+    }
+    finishExistingDrag(e);
+  };
+  const cancelPointer = (e: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (touchController.current!.has(e.pointerId)) { touchController.current!.cancel(); touchNavigation.current!.clear(); return; }
+    if (e.pointerType === 'touch' || e.pointerId !== dragPointerId.current) return;
+    finishExistingDrag();
+  };
+  finishHandler.current = () => {
+    if (touchController.current!.active) { touchController.current!.cancel(); touchNavigation.current!.clear(); }
+    else finishExistingDrag();
+  };
 
   const onPointerLeave = (e: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (e.pointerType === 'touch' || touchController.current!.has(e.pointerId)) return;
     setMoveHint(null);
     if (drag) return;
     moveQueue.current!.clear();
@@ -1375,8 +1567,8 @@ export function Plan2D({ purpose, dividerTool = null, onDividerAdded }: { purpos
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        onPointerCancel={() => onPointerUp()}
-        onLostPointerCapture={() => onPointerUp()}
+        onPointerCancel={cancelPointer}
+        onLostPointerCapture={cancelPointer}
         onPointerLeave={onPointerLeave}
       />
       {purpose === 'build' && (

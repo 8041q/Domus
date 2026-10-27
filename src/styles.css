@@ -232,7 +232,6 @@ input[type="range"]:disabled { opacity: .45; }
 .viewport { width: 100%; height: 100%; min-height: 420px; background: #d2d2d2; }
 .viewport canvas { display: block; width: 100%; height: 100%; touch-action: none; outline: none; }
 .viewport-stage { background: #d2d2d2; }
-.viewport canvas:focus-visible { outline: 2px solid var(--primary); outline-offset: -3px; }
 .walk-controls { position: absolute; z-index: 6; bottom: 12px; left: 12px; right: 12px; width: fit-content; max-width: calc(100% - 24px); display: grid; gap: 8px; padding: 8px; border: 1px solid var(--border); border-radius: 12px; background: rgba(255,255,255,.96); backdrop-filter: blur(14px); box-shadow: var(--shadow-float); color: var(--foreground); }
 .walk-control-tools { display: flex; align-items: center; gap: 8px; }
 .walk-tool-switch, .walk-zoom-tools { display: flex; gap: 3px; }

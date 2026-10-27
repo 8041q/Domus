@@ -6,9 +6,12 @@ import { Button, Icon, type IconName } from './ui';
 import { usePlannerStore } from './store';
 import { lockLoadingInteraction } from './core/loadingInteraction';
 import { normalizeProjectDetails, PROJECT_DETAIL_FIELDS, PROJECT_STATUSES } from './core/projectDetails';
+import { useCompactWorkspace, useMobileBack, useMobileWorkspace, type MobileSheetSize } from './mobileWorkspace';
 
 type DialogKind = 'new' | 'save' | 'open' | 'guard' | 'delete' | 'details' | 'storage';
 function ProjectDialog({ title, onCancel, children, className = '' }: { title: string; onCancel: () => void; children: ReactNode; className?: string }) {
+  const compact = useCompactWorkspace();
+  useMobileBack(onCancel, compact);
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const dialog = ref.current!;
@@ -31,8 +34,11 @@ function errorMessage(error: unknown) {
 }
 
 export function ProjectControls({ canExport, onExport, onExportPdf }: { canExport: boolean; onExport?: () => void; onExportPdf?: () => void }) {
+  const compact = useCompactWorkspace();
   const project = useRoomProjects();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [menuSize, setMenuSize] = useState<MobileSheetSize>('half');
+  useMobileBack(() => setMenuOpen(false), compact && menuOpen);
   const [dialog, setDialog] = useState<DialogKind | null>(null);
   const [name, setName] = useState('');
   const [shape, setShape] = useState<Exclude<RoomShapeKind, 'custom'>>('rectangle');
@@ -52,13 +58,14 @@ export function ProjectControls({ canExport, onExport, onExportPdf }: { canExpor
   }, [notice]);
   useEffect(() => {
     if (!menuOpen) return;
-    const items = () => [...(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])];
+    const items = () => [...(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])].filter(item => item.getClientRects().length > 0);
     items()[0]?.focus();
     const close = (event: PointerEvent) => { if (event.target instanceof Node && !menuRef.current?.contains(event.target)) setMenuOpen(false); };
     const escape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') { event.preventDefault(); setMenuOpen(false); menuRef.current?.querySelector<HTMLButtonElement>('.project-menu-trigger')?.focus(); return; }
       if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
       event.preventDefault(); const choices = items(), current = choices.indexOf(document.activeElement as HTMLButtonElement);
+      if (!choices.length) { setMenuSize('half'); requestAnimationFrame(() => items()[0]?.focus()); return; }
       const index = event.key === 'Home' ? 0 : event.key === 'End' ? choices.length - 1 : (current + (event.key === 'ArrowDown' ? 1 : -1) + choices.length) % choices.length;
       choices[index]?.focus();
     };
@@ -101,7 +108,13 @@ export function ProjectControls({ canExport, onExport, onExportPdf }: { canExpor
   };
   const replace = (action: () => void | Promise<void>) => {
     roomProjects.changed();
-    pending.current = action;
+    pending.current = async () => {
+      await action();
+      if (compact) {
+        useMobileWorkspace.getState().setCornerId(null);
+        useMobileWorkspace.getState().setTask('room');
+      }
+    };
     if (roomProjects.getState().dirty) { setError(''); setDialog('guard'); }
     else { void run(finishPending); }
   };
@@ -129,27 +142,37 @@ export function ProjectControls({ canExport, onExport, onExportPdf }: { canExpor
   const menuItem = (icon: IconName, title: string, description: string, action: () => void, disabled = false) => <button type="button" role="menuitem" disabled={disabled} onClick={() => { setMenuOpen(false); setError(''); action(); }}>
     <Icon name={icon} /><span><strong>{title}</strong><small>{description}</small></span>
   </button>;
+  const menuContent = <>
+    {menuItem('plus', 'New room', 'Choose a name and starting shape', () => { setName('Untitled room'); setShape('rectangle'); setDialog('new'); })}
+    {menuItem('folder', 'Project details', 'Company, client and PDF information', () => {
+      setDetails(normalizeProjectDetails(usePlannerStore.getState().room.projectDetails)); setDialog('details');
+    })}
+    {menuItem('save', 'Save as', 'Save or name a copy · Ctrl/Cmd+S', () => save())}
+    {menuItem('folder', 'Open room', 'Choose a saved room', () => { void run(async () => { await roomProjects.refreshRooms(); setDialog('open'); }); })}
+    <span className="project-menu-divider" role="separator" />
+    {menuItem('download', 'Download room', 'Editable backup with compact models', () => { setDialog('storage'); void run(() => roomProjects.inspect()); })}
+    {menuItem('download', 'Download layout only', 'Small JSON file without model assets', downloadLayout)}
+    {menuItem('folder', 'Room storage', 'Usage, recovery drafts and unused assets', () => { setDialog('storage'); void run(() => roomProjects.storageInfo()); })}
+    {menuItem('folder', 'Import room', 'Open a Domus room or legacy layout', () => fileRef.current?.click())}
+    {onExport && <><span className="project-menu-divider" role="separator" />{menuItem('cube', 'Export Room', 'Download the complete 3D room as GLB', onExport, !canExport)}</>}
+    {onExportPdf && menuItem('download', 'Export to PDF', 'Project summary, furniture and five room views', onExportPdf, !canExport)}
+  </>;
 
   return <>
     <div className="project-status" title={project.name} aria-live="polite"><strong>{project.name}</strong><small>{project.dirty ? 'Unsaved changes' : project.activeId ? 'Saved in this browser' : 'Not saved yet'}</small></div>
     <div className="project-menu-wrap" ref={menuRef}>
       <Button variant="outline" size="sm" className="project-menu-trigger" aria-haspopup="menu" aria-expanded={menuOpen} disabled={!project.initialized}
-        onClick={() => setMenuOpen(!menuOpen)}><Icon name="folder" />Project<Icon name="chevronDown" /></Button>
-      {menuOpen && <div className="project-menu" role="menu" aria-label="Project actions">
-        {menuItem('plus', 'New room', 'Choose a name and starting shape', () => { setName('Untitled room'); setShape('rectangle'); setDialog('new'); })}
-        {menuItem('folder', 'Project details', 'Company, client and PDF information', () => {
-          setDetails(normalizeProjectDetails(usePlannerStore.getState().room.projectDetails)); setDialog('details');
-        })}
-        {menuItem('save', 'Save as', 'Save or name a copy · Ctrl/Cmd+S', () => save())}
-        {menuItem('folder', 'Open room', 'Choose a saved room', () => { void run(async () => { await roomProjects.refreshRooms(); setDialog('open'); }); })}
-        <span className="project-menu-divider" role="separator" />
-        {menuItem('download', 'Download room', 'Editable backup with compact models', () => { setDialog('storage'); void run(() => roomProjects.inspect()); })}
-        {menuItem('download', 'Download layout only', 'Small JSON file without model assets', downloadLayout)}
-        {menuItem('folder', 'Room storage', 'Usage, recovery drafts and unused assets', () => { setDialog('storage'); void run(() => roomProjects.storageInfo()); })}
-        {menuItem('folder', 'Import room', 'Open a Domus room or legacy layout', () => fileRef.current?.click())}
-        {onExport && <><span className="project-menu-divider" role="separator" />{menuItem('cube', 'Export Room', 'Download the complete 3D room as GLB', onExport, !canExport)}</>}
-        {onExportPdf && menuItem('download', 'Export to PDF', 'Project summary, furniture and five room views', onExportPdf, !canExport)}
-      </div>}
+        onClick={() => { if (!menuOpen) setMenuSize('half'); setMenuOpen(!menuOpen); }}><Icon name="folder" />Project<Icon name="chevronDown" /></Button>
+      {menuOpen && (compact ? <section className="project-menu mobile-project-sheet" data-size={menuSize} aria-label="Project tools">
+        <header className="mobile-project-heading">
+          <button type="button" className="mobile-project-handle" aria-label={`${menuSize === 'expanded' ? 'Collapse' : 'Expand'} Project tools`} aria-expanded={menuSize !== 'peek'}
+            onClick={() => setMenuSize(menuSize === 'peek' ? 'half' : menuSize === 'half' ? 'expanded' : 'peek')}>
+            <span className="mobile-sheet-grip" /><strong>Project</strong><small>{menuSize === 'peek' ? 'Tap for project actions' : 'Tap to resize'}</small>
+          </button>
+          <button type="button" className="mobile-project-close" aria-label="Close Project tools" onClick={() => setMenuOpen(false)}><Icon name="x" /></button>
+        </header>
+        <div className="mobile-project-body" role="menu" aria-label="Project actions" hidden={menuSize === 'peek'}>{menuContent}</div>
+      </section> : <div className="project-menu" role="menu" aria-label="Project actions">{menuContent}</div>)}
     </div>
     <input ref={fileRef} type="file" accept=".domus,.json,application/json,application/zip" hidden aria-label="Import Domus draft" onChange={async (event) => {
       const file = event.target.files?.[0]; event.target.value = '';

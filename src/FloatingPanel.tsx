@@ -1,5 +1,7 @@
 import { useLayoutEffect, useRef, useState, type PointerEvent, type ReactNode } from 'react';
 import { Icon } from './ui';
+import { MobileSheet } from './MobileSheet';
+import { useCompactWorkspace } from './mobileWorkspace';
 
 type Position = { x: number; y: number };
 
@@ -12,6 +14,7 @@ export function FloatingPanel({ id, title, side = 'left', className = '', onClos
   onClose: () => void;
   children: ReactNode;
 }) {
+  const compact = useCompactWorkspace();
   const panelRef = useRef<HTMLElement>(null);
   const positionRef = useRef<Position | null>(null);
   const dragRef = useRef<{ pointerId: number; x: number; y: number; start: Position } | null>(null);
@@ -35,6 +38,7 @@ export function FloatingPanel({ id, title, side = 'left', className = '', onClos
   };
 
   useLayoutEffect(() => {
+    if (compact) return;
     const panel = panelRef.current, parent = panel?.parentElement;
     if (!panel || !parent) return;
     let saved: Position | null = null;
@@ -49,7 +53,7 @@ export function FloatingPanel({ id, title, side = 'left', className = '', onClos
     observer.observe(parent);
     observer.observe(panel);
     return () => observer.disconnect();
-  }, [storageKey, side]);
+  }, [storageKey, side, compact]);
 
   const finishDrag = (event: PointerEvent<HTMLButtonElement>) => {
     if (dragRef.current?.pointerId !== event.pointerId) return;
@@ -58,6 +62,9 @@ export function FloatingPanel({ id, title, side = 'left', className = '', onClos
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   };
 
+  if (compact && (id === 'finishes' || id === 'design')) {
+    return <MobileSheet id={id} title={title}><div className={`${className} mobile-panel-content`}>{children}</div></MobileSheet>;
+  }
   return <aside ref={panelRef} className={`floating-panel ${className}`} aria-label={title}
     style={{ ...(position ? { left: position.x, top: position.y } : { top: 58, [side]: 12 }), maxHeight: `calc(100% - ${position?.y ?? 58}px - 12px)` }}>
     <div className="floating-panel-heading">

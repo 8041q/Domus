@@ -194,9 +194,9 @@ frame. Keyboard acceleration and braking use elapsed time. Wheel, trackpad pinch
 touch pinch and zoom buttons adjust a bounded 30–85° field of view without moving
 the camera; zoomed-in drags have lower sensitivity. Touch tracks both pointers,
 distinguishes two-finger pan from pinch after a small intent threshold, and
-rebases when fingers lift. One finger uses the selected Look/Pan tool. Mobile
-Walk hides the catalogue and sizes the workspace to the dynamic viewport; exiting
-restores the catalogue. Blur, hidden tabs and input composition
+rebases when fingers lift. One finger uses the selected Look/Pan tool. Compact
+Explore hides authoring tools and sizes the workspace to the visual viewport.
+Blur, hidden tabs and input composition
 clear pending motion. Cached wall bases and bounds reject distant collision
 candidates before continuous sweeps; recovery searches near the walker and can
 fall back outside an unusably narrow editing space.
@@ -216,6 +216,25 @@ Placement resolves in core code before rendering. It keeps oriented footprints
 inside arbitrary room polygons, applies magnetic wall/object/centre snaps, and
 checks product-specific overlap and clearance rules. Holding Shift during an
 item drag permits free movement and intentional overlap.
+
+The compact shell uses the same mounted editor, store and commands as desktop.
+`mobileWorkspace.ts` owns transient task, sheet, snap and selection-handle state;
+none of these fields enter project documents. Layout follows a media query
+(820px width, or a short coarse-pointer landscape viewport). Editing follows each
+event's pointer type, so touch and mouse can coexist on larger screens.
+`MobileSheet` portals reusable tool content into the main workspace. The shell
+tracks `visualViewport` for keyboard-aware sizing and safe-area padding. A shared
+transient history entry dismisses the top mobile menu/dialog/sheet on Back.
+
+`core/planTouch.ts` and `renderer/SceneTouchControls.ts` arbitrate selection,
+editing and navigation. Only an already-selected touch target starts editing;
+empty-space drags navigate. A second pointer restores the pre-edit semantic
+snapshot through `cancelInteraction` before rebasing pan/pinch navigation.
+Cancellation leaves undo/redo untouched; completion records one semantic change.
+Each gesture captures a project generation so deferred work cannot overwrite a
+New/Open/Import replacement. Resizing keeps 2D world centre/scale and the mounted
+3D camera. Explore and Finishes turn off furniture editing through the scene
+bridge without rebuilding the renderer.
 
 ## Geometry and architecture
 

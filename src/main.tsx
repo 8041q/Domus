@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import './styles.css';
+import './mobile.css';
 import { applyThemeTokens } from './theme';
 import { initializeProductCatalogue, startProductCatalogueUpdates } from './core/products';
 import { loadInterfaceFonts } from './core/reportFonts';

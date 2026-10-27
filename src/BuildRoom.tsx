@@ -2,15 +2,17 @@ import { FEATURES } from './config/features';
 import { activeArchitecture } from './core/activeArchitecture';
 import { lazy, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type KeyboardEvent } from 'react';
 import { Plan2D } from './Plan2D';
-import { getRoomWalls, getWall, MIN_WALL_LENGTH, MIN_CIRCLE_DIAMETER, openingFollowsPerimeter, perimeterLocation, polygonArea } from './core/roomGeometry';
+import { getRoomWalls, getWall, MIN_WALL_LENGTH, MIN_CIRCLE_DIAMETER, moveCorner, roomBounds, openingFollowsPerimeter, perimeterLocation, polygonArea } from './core/roomGeometry';
 import { deriveSpaces, getPhysicalWalls, resolveDividers } from './core/spaces';
 import { dimensionStepMetres, displayLengthValue, displayValueToMetres, formatArea, formatLength, lengthInputSuffix } from './core/units';
 import type { MeasurementSystem, OpeningVariant, RoomOpening, RoomShapeKind } from './core/types';
 import { getSnapshot, usePlannerStore } from './store';
-import { Icon } from './ui';
+import { Button, Icon } from './ui';
 import { openingVisibleInActiveView, openingVisibilityRevision, subscribeOpeningVisibility } from './core/openingVisibility';
 import { openingSliderRange } from './core/openingSliderRange';
 import { LoadingBoundary, useLoadingSurface } from './LoadingStatus';
+import { MobileSheet } from './MobileSheet';
+import { useCompactWorkspace, useMobileWorkspace } from './mobileWorkspace';
 
 const Viewport3D = lazy(() => import('./Viewport3D').then((module) => ({ default: module.Viewport3D })));
 
@@ -61,21 +63,31 @@ function DimensionField({ label, value, min, max, system, metricStep = 0.05, onC
   metricStep?: number;
   onCommit: (value: number) => void | boolean;
 }) {
+  const compact = useCompactWorkspace();
   const display = displayLengthValue(value, system);
   const [draft, setDraft] = useState(display.toFixed(2));
-  useEffect(() => setDraft(displayLengthValue(value, system).toFixed(2)), [system, value]);
+  const [error, setError] = useState('');
+  useEffect(() => { setDraft(displayLengthValue(value, system).toFixed(2)); setError(''); }, [system, value]);
 
   const commit = () => {
-    const parsed = Number(draft);
-    if (!Number.isFinite(parsed)) {
+    const parsed = Number(draft.trim().replace(',', '.'));
+    if (!draft.trim() || !Number.isFinite(parsed)) {
+      setError('Enter a valid length.');
       setDraft(displayLengthValue(value, system).toFixed(2));
       return;
     }
     const rawMetres = displayValueToMetres(parsed, system);
+    if (compact && (rawMetres < min || rawMetres > max)) {
+      setError(`Enter a value from ${formatLength(min, system)} to ${formatLength(max, system)}.`);
+      setDraft(displayLengthValue(value, system).toFixed(2));
+      return;
+    }
+    setError('');
     const step = dimensionStepMetres(system, metricStep);
     const next = Math.max(min, Math.min(max, Math.round(rawMetres / step) * step));
     if (Math.abs(next - value) > 0.0001) {
       const accepted = onCommit(next);
+      if (accepted === false) setError('That size does not fit the current room. The previous value has been kept.');
       setDraft(displayLengthValue(accepted === false ? value : next, system).toFixed(2));
     } else {
       setDraft(displayLengthValue(next, system).toFixed(2));
@@ -88,6 +100,7 @@ function DimensionField({ label, value, min, max, system, metricStep = 0.05, onC
       <span className="input-with-suffix">
         <input
           inputMode="decimal"
+          aria-invalid={!!error}
           value={draft}
           onChange={(e: ChangeEvent<HTMLInputElement>) => setDraft(e.target.value)}
           onBlur={commit}
@@ -96,6 +109,7 @@ function DimensionField({ label, value, min, max, system, metricStep = 0.05, onC
         />
         <small>{lengthInputSuffix(system)}</small>
       </span>
+      {error && <small className="field-error" role="alert">{error}</small>}
     </label>
   );
 }
@@ -109,23 +123,34 @@ function EditableRangeValue({ label, value, min, max, system, metricStep = 0.01,
   metricStep?: number;
   onCommit: (value: number) => void | boolean;
 }) {
+  const compact = useCompactWorkspace();
   const [draft, setDraft] = useState(displayLengthValue(value, system).toFixed(2));
+  const [error, setError] = useState('');
 
   useEffect(() => {
     setDraft(displayLengthValue(value, system).toFixed(2));
+    setError('');
   }, [system, value]);
 
   const commit = () => {
-    const parsed = Number(draft);
-    if (!Number.isFinite(parsed)) {
+    const parsed = Number(draft.trim().replace(',', '.'));
+    if (!draft.trim() || !Number.isFinite(parsed)) {
+      setError('Enter a valid length.');
       setDraft(displayLengthValue(value, system).toFixed(2));
       return;
     }
 
     const rawMetres = displayValueToMetres(parsed, system);
+    if (compact && (rawMetres < min || rawMetres > max)) {
+      setError(`Enter a value from ${formatLength(min, system)} to ${formatLength(max, system)}.`);
+      setDraft(displayLengthValue(value, system).toFixed(2));
+      return;
+    }
+    setError('');
     const step = dimensionStepMetres(system, metricStep);
     const next = Math.max(min, Math.min(max, Math.round(rawMetres / step) * step));
     const accepted = Math.abs(next - value) > 0.0001 ? onCommit(next) : true;
+    if (accepted === false) setError('That size does not fit the current room. The previous value has been kept.');
     setDraft(displayLengthValue(accepted === false ? value : next, system).toFixed(2));
   };
 
@@ -135,6 +160,7 @@ function EditableRangeValue({ label, value, min, max, system, metricStep = 0.01,
       <span className="range-editable-value">
         <input
           inputMode="decimal"
+          aria-invalid={!!error}
           value={draft}
           onFocus={(e) => e.currentTarget.select()}
           onChange={(e: ChangeEvent<HTMLInputElement>) => setDraft(e.target.value)}
@@ -144,6 +170,7 @@ function EditableRangeValue({ label, value, min, max, system, metricStep = 0.01,
         />
         <small>{lengthInputSuffix(system)}</small>
       </span>
+      {error && <small className="field-error" role="alert">{error}</small>}
     </div>
   );
 }
@@ -343,10 +370,12 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
 }
 
 function WallEditor({ wallId }: { wallId: string }) {
+  const compact = useCompactWorkspace();
   const room = usePlannerStore((s) => s.room);
   const system = usePlannerStore((s) => s.measurementSystem);
   const resizeWallById = usePlannerStore((s) => s.resizeWallById);
   const syncSpaces = usePlannerStore((s) => s.syncSpaces);
+  const splitWallById = usePlannerStore((s) => s.splitWallById);
   const sliderBefore = useRef<ReturnType<typeof getSnapshot> | null>(null);
   const wall = getWall(room, wallId);
   if (!wall) return null;
@@ -381,11 +410,42 @@ function WallEditor({ wallId }: { wallId: string }) {
         />
       </label>
       <p className="hint">Drag the highlighted wall in the plan, or use the slider for symmetric resizing.</p>
+      {compact && <button type="button" className="secondary-button" onClick={() => splitWallById(wallId)}>Split wall</button>}
     </div>
   );
 }
 
+function CornerEditor({ cornerId }: { cornerId: string }) {
+  const room = usePlannerStore((s) => s.room);
+  const system = usePlannerStore((s) => s.measurementSystem);
+  const corner = room.vertices.find((vertex) => vertex.id === cornerId);
+  if (!corner) return null;
+  const update = (axis: 'x' | 'z', value: number) => {
+    const before = getSnapshot();
+    const vertices = moveCorner(before.room, cornerId, axis === 'x' ? value : corner.x, axis === 'z' ? value : corner.z);
+    if (!vertices) return false;
+    const bounds = roomBounds(vertices);
+    if (bounds.width > 20 || bounds.depth > 20 || getRoomWalls({ ...before.room, vertices }).some((wall) => wall.length > 20)) return false;
+    const state = usePlannerStore.getState();
+    state.setRoomVertices(vertices, 'custom');
+    if (state.room === usePlannerStore.getState().room) return false;
+    state.syncSpaces(before);
+    return true;
+  };
+  return <div className="wall-editor">
+    <div className="opening-editor-title"><strong>Corner {room.vertices.indexOf(corner) + 1}</strong></div>
+    <DimensionField label="Corner X" value={corner.x} min={corner.x - 20} max={corner.x + 20} system={system} metricStep={0.01} onCommit={(value) => update('x', value)} />
+    <DimensionField label="Corner Z" value={corner.z} min={corner.z - 20} max={corner.z + 20} system={system} metricStep={0.01} onCommit={(value) => update('z', value)} />
+    <p className="hint">Set the corner position or drag its selected handle in the plan.</p>
+  </div>;
+}
+
 export function BuildRoom() {
+  const compact = useCompactWorkspace();
+  const cornerId = useMobileWorkspace((s) => s.cornerId);
+  const fineSnap = useMobileWorkspace((s) => s.fineSnap);
+  const setFineSnap = useMobileWorkspace((s) => s.setFineSnap);
+  const openSheet = useMobileWorkspace((s) => s.openSheet);
   const loadingSurface = useLoadingSurface();
   const [resetViewRequest, setResetViewRequest] = useState(0);
   const [dividerTool, setDividerTool] = useState<'wall' | 'open' | null>(null);
@@ -431,7 +491,9 @@ export function BuildRoom() {
   const selectedSpace = FEATURES.interiorWalls ? derivedSpaces.find((space) => space.id === selectedSpaceId) ?? null : null;
   const selectedDivider = FEATURES.interiorWalls ? resolveDividers(room, dividers).find((divider) => divider.id === selectedDividerId) ?? null : null;
   const insertOpening = (type: RoomOpening['type']) => {
-    setOpeningWarning(addOpening(type) ? '' : 'No free gap on this wall. Choose another wall or move an existing opening.');
+    const accepted = addOpening(type);
+    setOpeningWarning(accepted ? '' : 'No free gap on this wall. Choose another wall or move an existing opening.');
+    if (compact && accepted) useMobileWorkspace.getState().setCornerId(null);
   };
   useEffect(() => { setOpeningWarning(''); }, [selectedWallId, selectedDividerId, savedOpenings]);
 
@@ -446,16 +508,16 @@ export function BuildRoom() {
       if (!window.confirm(`Changing the room shape will ${effects}. Continue?`)) return;
     }
     setRoomTemplate(shape);
+    if (compact) useMobileWorkspace.getState().setCornerId(null);
   };
 
-  return (
-    <div className="mode-layout builder-layout">
-      <aside className="tool-panel builder-panel">
+  const tools = <>
         <div className="builder-scroll-content">
         <div className="panel-intro">
           <h1>Room builder</h1>
           <p>{buildView === 'plan' ? (FEATURES.interiorWalls ? 'Arrange outer walls and interior divisions in 2D.' : 'Arrange outer walls in 2D.') : room.shapeKind === 'circle' ? 'Add and adjust doors and openings in 3D.' : 'Add and adjust doors, windows and openings in 3D.'}</p>
         </div>
+        {compact && <label className="toggle-row"><input type="checkbox" checked={fineSnap} onChange={(event) => setFineSnap(event.target.checked)} /><span><strong>Fine snap</strong><small>Use smaller steps for precise wall and corner adjustments.</small></span></label>}
 
         {buildView === 'plan' && <><section className="tool-section">
           <div className="section-title-row">
@@ -524,7 +586,7 @@ export function BuildRoom() {
               <span>Selected opening</span>
               <select
                 value={selectedOpeningId ?? ''}
-                onChange={(e: ChangeEvent<HTMLSelectElement>) => selectOpening(e.target.value || null)}
+                onChange={(e: ChangeEvent<HTMLSelectElement>) => { selectOpening(e.target.value || null); if (compact) useMobileWorkspace.getState().setCornerId(null); }}
                 aria-label="Selected opening"
               >
                 <option value="">Choose an opening…</option>
@@ -561,7 +623,7 @@ export function BuildRoom() {
         </div>
 
         <div className="builder-inspector-dock" aria-live="polite">
-          {selectedOpening ? (
+          {compact && cornerId ? <CornerEditor cornerId={cornerId} /> : selectedOpening ? (
             <OpeningEditor key={selectedOpening.id} opening={selectedOpening} />
           ) : room.shapeKind === 'circle' && buildView === 'plan' && !selectedDivider && !selectedWallId ? (
             <div className="wall-editor">
@@ -588,7 +650,7 @@ export function BuildRoom() {
               {openings.some((opening) => opening.wallId === selectedDivider.id) && <p className="hint">Remove this wall’s doors and openings before changing it to an open boundary.</p>}
               <p className="hint">Drag an endpoint in the plan to move its connection.</p>
             </div>
-          ) : selectedSpace ? (
+          ) : selectedSpace && !(compact && selectedWallId) ? (
             <div className="wall-editor">
               <div className="opening-editor-title"><strong>{selectedSpace.name}</strong><span>{formatArea(selectedSpace.area, system)}</span></div>
               <p className="hint">Edit this space’s name and finishes in Plan Room.</p>
@@ -611,14 +673,20 @@ export function BuildRoom() {
         </div>
 
         <div className="builder-continue">
-          <button className="primary-button" type="button" onClick={() => setMode('plan')}>Continue to Plan Room <Icon name="chevronRight" /></button>
+          <button className="primary-button" type="button" onClick={() => compact ? useMobileWorkspace.getState().setTask('furniture') : setMode('plan')}>Continue to Plan Room <Icon name="chevronRight" /></button>
         </div>
-      </aside>
+      </>;
+
+  return (
+    <div className="mode-layout builder-layout">
+      {compact ? <MobileSheet id="room" title={cornerId ? 'Corner settings' : selectedOpening ? openingDisplayName(selectedOpening, openings) : selectedWallId ? 'Wall settings' : 'Room'}><div className="mobile-room-tools">{tools}</div></MobileSheet>
+        : <aside className="tool-panel builder-panel">{tools}</aside>}
 
       <section className="workspace-panel">
         <div className="workspace-content" ref={loadingSurface}>
           <div className="workspace-toolbar" aria-label="Room builder view controls">
             <div className="workspace-toolbar-actions">
+              {compact && <Button variant="outline" style={{ minHeight: 44 }} onClick={() => openSheet('room')}>Room tools</Button>}
               <span className="workspace-area-badge" title="Room area"><small>Room area</small><strong>{formatArea(roomArea, system)}</strong></span>
               <div className="segmented-control" role="group" aria-label="Room builder view">
                 <button type="button" className={buildView === 'plan' ? 'active' : ''} onClick={() => { selectOpening(null); setBuildView('plan'); }} aria-pressed={buildView === 'plan'}>2D</button>

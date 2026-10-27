@@ -4,8 +4,14 @@ import { readFile } from 'node:fs/promises';
 async function readyToPlan(page: Page) {
   await page.goto('/');
   await expect(page.getByRole('button', { name: 'Project', exact: true })).toBeEnabled();
-  await page.getByRole('button', { name: 'Plan room', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Catalogue', exact: true })).toBeVisible();
+  const phoneNavigation = page.getByRole('navigation', { name: 'Phone workspace' });
+  if (await phoneNavigation.isVisible()) {
+    await phoneNavigation.getByRole('button', { name: 'Furniture', exact: true }).click();
+    await expect(page.locator('[data-sheet="catalogue"]')).toBeVisible();
+  } else {
+    await page.getByRole('button', { name: 'Plan room', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Catalogue', exact: true })).toBeVisible();
+  }
   await expect(page.locator('.loading-status')).toHaveCount(0);
   await expect(page.locator('.viewport canvas')).toBeVisible();
 }
@@ -54,10 +60,12 @@ test('Walk supports keyboard and mouse navigation without editing furniture, and
   await expect(page.getByRole('region', { name: 'Walk controls' })).toBeVisible();
   await expect(canvas).toHaveAttribute('aria-label', 'Walk through room');
   await expect(canvas).toBeFocused();
+  await expect(canvas).toHaveCSS('outline-style', 'none');
   await expect(page.locator('.selection-panel')).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath('walk-view.png') });
 
   await changesView(page, () => page.keyboard.press('w', { delay: 220 }), 'W walks forward');
+  await expect(canvas).toHaveCSS('outline-style', 'none');
   await changesView(page, () => page.keyboard.press('ArrowRight', { delay: 220 }), 'Arrow keys move across the floor');
   await changesView(page, () => dragView(page, 'left', 90, 30), 'Left drag looks around');
   await changesView(page, () => dragView(page, 'right', 55, 15), 'Right drag moves across the floor');
@@ -126,7 +134,7 @@ test('phone Walk keeps controls in reach and supports touch navigation without a
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   try {
     await readyToPlan(page);
-    await page.getByRole('button', { name: 'Walk', exact: true }).tap();
+    await page.getByRole('navigation', { name: 'Phone workspace' }).getByRole('button', { name: 'Explore', exact: true }).tap();
     const canvas = page.locator('.viewport canvas');
     const controls = page.getByRole('region', { name: 'Walk controls' });
     await expect(controls).toBeVisible();
@@ -179,7 +187,7 @@ test('phone Walk keeps controls in reach and supports touch navigation without a
       await page.screenshot({ path: testInfo.outputPath(`phone-walk-${size.width}.png`) });
     }
     await page.getByRole('button', { name: /Exit walk/ }).tap();
-    await expect(page.locator('.catalog-panel')).toBeVisible();
+    await expect(page.locator('[data-sheet="catalogue"]')).toBeVisible();
     await expect(controls).toHaveCount(0);
     expect(errors).toEqual([]);
   } finally { await context.close(); }

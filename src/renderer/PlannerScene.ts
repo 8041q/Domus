@@ -44,12 +44,17 @@ import { wallCornerShading } from '../core/wallShading';
 import { createMoveHint } from '../core/moveHint';
 import { architectureSpacingMeasurements } from '../core/architectureSpacing';
 import { createWalkNavigation, findWalkSpawn, isWalkPositionValid, moveWalkPosition, type WalkNavigation } from '../core/walkNavigation';
+import { SceneTouchControls, type SceneTouchTarget } from './SceneTouchControls';
 
 export interface SceneSnapshot extends PlannerSnapshot {
   selectedId?: string | null;
   selectedSpaceId?: string | null;
   interiorWallView?: 'up' | 'down';
   selectedOpeningId?: string | null;
+  selectedWallId?: string | null;
+  selectedDividerId?: string | null;
+  touchFreeMove?: boolean;
+  projectGeneration?: number;
   activeSnap?: SnapFeedback;
   showClearance?: boolean;
   showRoomDimensions?: boolean;
@@ -68,6 +73,7 @@ export interface SceneBridge {
   updateObject: (id: string, patch: Partial<PlacedObject>) => void;
   updateOpening: (id: string, patch: Partial<RoomOpening>, recordHistory?: boolean) => void;
   commitDrag: (before: PlannerSnapshot) => void;
+  cancelDrag?: (before: PlannerSnapshot) => void;
   feedback: (snap: SnapFeedback, collisionId: string | null, collisionPush: boolean) => void;
   cameraViewChanged?: (view: PlanCameraView) => void;
 }
@@ -148,6 +154,24 @@ interface DomusExportItem {
   sources: DomusExportSource[];
 }
 
+type OrbitTouchSample = { pointerId: number; pageX: number; pageY: number; pointerType: 'touch' };
+// Adapter for the OrbitControls implementation shipped with Three r180. These
+// private handlers let an edit hand over its existing fingers without synthetic
+// DOM events or a camera jump. Keep the real-OrbitControls takeover test in
+// mobile3DTouch.test.mjs when updating Three: its pointer tracking/state contract
+// is the only private API this adapter depends on.
+type TouchOrbit = OrbitControls & {
+  _pointers: number[];
+  _pointerPositions: Record<number, THREE.Vector2>;
+  _addPointer: (event: OrbitTouchSample) => void;
+  _onTouchStart: (event: OrbitTouchSample) => void;
+  _onTouchMove: (event: OrbitTouchSample) => void;
+  _sphericalDelta?: THREE.Spherical;
+  _panOffset?: THREE.Vector3;
+  _scale?: number;
+  state: number;
+};
+
 export class PlannerScene {
   private scene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(43, 1, 0.08, 100);
@@ -156,6 +180,8 @@ export class PlannerScene {
   private outlinePass: OutlinePass;
   private controls: OrbitControls;
   private walkControls: WalkControls;
+  private sceneTouchControls?: SceneTouchControls;
+  private touchProjectGeneration?: number;
   private walkNavigation: WalkNavigation | null = null;
   private walkMotionUntil = 0;
   private walkReturnView: {
@@ -216,6 +242,7 @@ export class PlannerScene {
     screenUp: Vec2;
     worldPerPixelX: number;
     worldPerPixelY: number;
+    pointerId?: number;
   } | null = null;
   private openingDragging: { id: string; before: PlannerSnapshot; grabOffset: number; grabWallId?: string; pointerId: number } | null = null;
   private openingMoves = createFrameQueue<PointerEvent>((event) => this.renderOpeningMove(event));
@@ -388,6 +415,11 @@ export class PlannerScene {
       // before they enter a camera gesture. Shift+empty-space is allowed through so
       // the user can orbit without clearing the active furniture selection.
       this.renderer.domElement.addEventListener('pointerdown', this.onPointerDown, true);
+      this.renderer.domElement.addEventListener('pointermove', this.onTouchPointerMove, true);
+      this.renderer.domElement.addEventListener('pointerup', this.onTouchPointerUp, true);
+      this.renderer.domElement.addEventListener('pointercancel', this.onTouchPointerCancel, true);
+      this.renderer.domElement.addEventListener('lostpointercapture', this.onLostTouchCapture);
+      this.renderer.domElement.addEventListener('blur', this.onSceneCanvasBlur);
       this.renderer.domElement.addEventListener('pointerleave', this.onPointerLeave);
       this.renderer.domElement.addEventListener('webglcontextlost', this.onContextLost);
       window.addEventListener('pointermove', this.onPointerMove);
@@ -409,11 +441,17 @@ export class PlannerScene {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    if (this.sceneTouchControls?.active) this.sceneTouchControls.cancel();
     this.floorFinishRequest += 1;
     if (this.animationFrame) cancelAnimationFrame(this.animationFrame);
     this.animationFrame = 0;
     this.resizeObserver?.disconnect();
     this.renderer?.domElement.removeEventListener('pointerdown', this.onPointerDown, true);
+    this.renderer?.domElement.removeEventListener('pointermove', this.onTouchPointerMove, true);
+    this.renderer?.domElement.removeEventListener('pointerup', this.onTouchPointerUp, true);
+    this.renderer?.domElement.removeEventListener('pointercancel', this.onTouchPointerCancel, true);
+    this.renderer?.domElement.removeEventListener('lostpointercapture', this.onLostTouchCapture);
+    this.renderer?.domElement.removeEventListener('blur', this.onSceneCanvasBlur);
     this.renderer?.domElement.removeEventListener('pointerleave', this.onPointerLeave);
     this.moveHint?.remove();
     this.renderer?.domElement.removeEventListener('webglcontextlost', this.onContextLost);
@@ -471,6 +509,23 @@ export class PlannerScene {
 
   zoomWalk(factor: number) {
     if (this.currentCameraView === 'walk') this.walkControls.zoomBy(factor);
+  }
+
+  setFurnitureInteraction(enabled: boolean) {
+    if (this.options.interactiveFurniture !== enabled) {
+      if (this.sceneTouchControls?.active) this.sceneTouchControls.cancel();
+      else if (this.dragging) this.onWindowBlur();
+      this.options.interactiveFurniture = enabled;
+      this.pointerMoves.clear();
+      if (this.moveHint) this.moveHint.hidden = true;
+    }
+    this.helperGroup.visible = this.editingHelpersVisible();
+    this.syncOpeningHighlight(this.sceneSnapshot());
+    this.requestRender();
+  }
+
+  private editingHelpersVisible() {
+    return this.currentCameraView !== 'walk' && (this.options.interactiveFurniture !== false || this.options.interactiveArchitecture);
   }
 
   /**
@@ -890,6 +945,7 @@ export class PlannerScene {
   }
 
   setCameraView(view: PlanCameraView) {
+    if (this.sceneTouchControls?.active) this.sceneTouchControls.cancel();
     if (view === 'walk') {
       this.enterWalkView();
       return;
@@ -1042,7 +1098,7 @@ export class PlannerScene {
       this.controls.enableDamping = saved.damping;
     } else this.currentCameraView = 'free';
     this.controls.enabled = true;
-    this.helperGroup.visible = true;
+    this.helperGroup.visible = this.editingHelpersVisible();
     this.renderer.domElement.setAttribute('aria-label', '3D room view');
     this.updateCeilingVisibility(true);
     this.updateCutawayWalls(true);
@@ -3082,7 +3138,7 @@ export class PlannerScene {
       return;
     }
     const outlined: THREE.Object3D[] = [];
-    const model = this.options.showFurniture && snapshot.selectedId ? this.objectModels.get(snapshot.selectedId) : null;
+    const model = this.options.showFurniture && this.options.interactiveFurniture !== false && snapshot.selectedId ? this.objectModels.get(snapshot.selectedId) : null;
     if (model) outlined.push(model);
     const selected = this.options.interactiveArchitecture ? snapshot.selectedOpeningId : null;
     const hovered = this.options.interactiveArchitecture ? this.hoverOpeningId : null;
@@ -5216,8 +5272,167 @@ export class PlannerScene {
     };
   }
 
+  private touchControls() {
+    return this.sceneTouchControls ??= new SceneTouchControls(this.renderer.domElement, {
+      pick: (event) => this.pickTouchTarget(event),
+      select: (target) => this.selectTouchTarget(target),
+      beginEdit: (target, event) => {
+        // Damping or another editor can change the target during the intent
+        // threshold. Only the same still-selected item may begin an edit.
+        const current = this.pickTouchTarget(event);
+        if (!current?.selected || current.kind !== target.kind || current.id !== target.id) return false;
+        this.stopTouchNavigation(true);
+        this.onPointerDown(this.asMousePointer(event));
+        return target.kind === 'opening' ? !!this.openingDragging : !!this.dragging;
+      },
+      moveEdit: (event) => {
+        if (this.openingDragging) this.openingMoves.push(event);
+        else this.pointerMoves.push(event);
+      },
+      commitEdit: (event) => this.onPointerUp(this.asMousePointer(event)),
+      cancelEdit: () => this.cancelTouchEdit(),
+      startNavigation: (points) => this.startTouchNavigation(points),
+      moveNavigation: (event) => {
+        const controls = this.controls as TouchOrbit;
+        controls._onTouchMove(this.orbitTouchSample(event));
+      },
+      stopNavigation: () => this.stopTouchNavigation()
+    });
+  }
+
+  private asMousePointer(event: PointerEvent) {
+    // Reuse the established picking/drag-start and commit paths without letting
+    // their touch branch recurse into the gesture arbiter.
+    return new Proxy(event, { get(target, property) {
+      if (property === 'pointerType') return 'mouse';
+      return Reflect.get(target, property, target);
+    } });
+  }
+
+  private pickTouchTarget(event: PointerEvent): SceneTouchTarget | null {
+    this.setPointer(event);
+    const snapshot = this.sceneSnapshot();
+    if (this.options.interactiveArchitecture) {
+      const hits = this.raycaster.intersectObjects(this.wallsGroup.children.filter((object) => object.visible), true);
+      const opening = this.findOpeningId(hits[0]?.object ?? null);
+      if (opening) return { kind: 'opening', id: opening, editable: true, selected: snapshot.selectedOpeningId === opening };
+      const wall = hits.find((hit) => hit.object.visible && hit.object.userData.cutawayWallId)?.object.userData.cutawayWallId as string | undefined;
+      if (wall) return { kind: wall.startsWith('divider-') ? 'divider' : 'wall', id: wall, editable: false,
+        selected: wall === snapshot.selectedWallId || wall === snapshot.selectedDividerId };
+    }
+    if (this.options.interactiveFurniture) {
+      const hits = this.raycaster.intersectObjects([...this.objectModels.values()], true);
+      const id = this.findObjectId(hits[0]?.object ?? null);
+      if (id) return { kind: 'object', id, editable: true, selected: snapshot.selectedId === id };
+      const floor = this.raycaster.intersectObjects(this.floorGroup.children, true).find((hit) => hit.object.userData.domusSpaceId);
+      if (floor) return { kind: 'space', id: floor.object.userData.domusSpaceId, editable: false, selected: false };
+    }
+    return null;
+  }
+
+  private selectTouchTarget(target: SceneTouchTarget | null) {
+    if (!this.options.interactiveFurniture && !this.options.interactiveArchitecture) return;
+    if (target?.kind === 'object') this.bridge.select(target.id);
+    else if (target?.kind === 'opening') this.bridge.selectOpening(target.id);
+    else if (target?.kind === 'wall') this.bridge.selectWall?.(target.id);
+    else if (target?.kind === 'divider') this.bridge.selectDivider?.(target.id);
+    else {
+      this.bridge.select(null);
+      if (target?.kind === 'space') this.bridge.selectSpace?.(target.id);
+    }
+    this.requestRender();
+  }
+
+  private orbitTouchSample(event: PointerEvent): OrbitTouchSample {
+    return { pointerId: event.pointerId, pointerType: 'touch', pageX: event.pageX ?? event.clientX, pageY: event.pageY ?? event.clientY };
+  }
+
+  private startTouchNavigation(points: PointerEvent[]) {
+    this.stopTouchNavigation();
+    const controls = this.controls as TouchOrbit;
+    controls.enabled = true;
+    // OrbitControls' normal pointer listener is intentionally bypassed. Seeding
+    // its existing touch handlers with current points rebases a second-finger
+    // takeover without replaying the previous geometry drag as a camera delta.
+    for (const point of points) {
+      const sample = this.orbitTouchSample(point);
+      controls._addPointer(sample);
+      controls._onTouchStart(sample);
+    }
+  }
+
+  private stopTouchNavigation(stopMotion = false) {
+    const controls = this.controls as TouchOrbit;
+    controls._pointers.length = 0;
+    controls._pointerPositions = {};
+    controls.state = -1;
+    if (stopMotion) {
+      controls._sphericalDelta?.set(0, 0, 0);
+      controls._panOffset?.set(0, 0, 0);
+      controls._scale = 1;
+    }
+    controls.enabled = this.currentCameraView !== 'walk';
+    this.controlsInteracting = false;
+    this.requestRender();
+  }
+
+  private cancelTouchEdit() {
+    this.pointerMoves.clear();
+    this.openingMoves.clear();
+    const before = this.dragging?.before ?? this.openingDragging?.before;
+    this.dragging = null;
+    this.openingDragging = null;
+    this.spaceClick = null;
+    this.wallClick = null;
+    this.controls.enabled = this.currentCameraView !== 'walk';
+    this.renderer.domElement.style.cursor = '';
+    const generation = (before as SceneSnapshot | undefined)?.projectGeneration;
+    if (before && (generation == null || generation === this.bridge.getSnapshot().projectGeneration)) {
+      this.bridge.cancelDrag?.(before);
+      this.renderFromState();
+    }
+    this.bridge.feedback({ kind: 'none' }, null, false);
+    this.requestRender();
+  }
+
+  private onTouchPointerMove = (event: PointerEvent) => {
+    if (this.currentCameraView !== 'walk' && this.sceneTouchControls?.hasPointer(event.pointerId)) {
+      if (!this.cancelStaleTouchGesture()) this.sceneTouchControls.pointerMove(event);
+    }
+  };
+  private onTouchPointerUp = (event: PointerEvent) => {
+    if (this.currentCameraView !== 'walk' && this.sceneTouchControls?.hasPointer(event.pointerId)) {
+      if (!this.cancelStaleTouchGesture()) this.sceneTouchControls.pointerUp(event);
+    }
+  };
+  private onTouchPointerCancel = (event: PointerEvent) => {
+    if (this.sceneTouchControls?.hasPointer(event.pointerId)) {
+      event.preventDefault(); event.stopImmediatePropagation();
+      this.sceneTouchControls.cancel();
+    }
+  };
+  private onLostTouchCapture = (event: PointerEvent) => {
+    if (this.sceneTouchControls?.hasPointer(event.pointerId)) this.sceneTouchControls.cancel();
+  };
+  private onSceneCanvasBlur = () => {
+    if (this.sceneTouchControls?.active) this.sceneTouchControls.cancel();
+  };
+
+  private cancelStaleTouchGesture() {
+    if (!this.sceneTouchControls?.active || this.touchProjectGeneration == null
+      || this.touchProjectGeneration === this.bridge.getSnapshot().projectGeneration) return false;
+    this.sceneTouchControls.cancel();
+    return true;
+  }
+
   private onPointerDown = (event: PointerEvent) => {
     if (this.currentCameraView === 'walk') return;
+    if (event.pointerType === 'touch') {
+      this.cancelStaleTouchGesture();
+      if (!this.sceneTouchControls?.active) this.touchProjectGeneration = this.bridge.getSnapshot().projectGeneration;
+      this.touchControls().pointerDown(event);
+      return;
+    }
     this.pointerMoves.clear();
     if (event.button !== 0) return;
     // A room selection takes keyboard focus away from the architecture inputs.
@@ -5283,6 +5498,7 @@ export class PlannerScene {
       startClientY: event.clientY,
       startX: selected.x,
       startZ: selected.z,
+      pointerId: event.pointerId,
       ...mapping
     };
     this.controls.enabled = false;
@@ -5292,6 +5508,10 @@ export class PlannerScene {
 
   private onPointerMove = (event: PointerEvent) => {
     if (this.currentCameraView === 'walk') return;
+    if (event.pointerType === 'touch' && this.sceneTouchControls?.hasPointer(event.pointerId)) {
+      this.onTouchPointerMove(event);
+      return;
+    }
     if (this.openingDragging) {
       if (this.moveHint) this.moveHint.hidden = true;
       if (event.pointerId === this.openingDragging.pointerId) this.openingMoves.push(event);
@@ -5314,6 +5534,7 @@ export class PlannerScene {
     this.setPointer(event);
 
     if (this.dragging) {
+      if (this.dragging.pointerId != null && event.pointerId !== this.dragging.pointerId) return;
       if (this.moveHint) this.moveHint.hidden = true;
       const snapshot = this.sceneSnapshot();
       const moving = snapshot.objects.find((o) => o.id === this.dragging!.id);
@@ -5331,7 +5552,7 @@ export class PlannerScene {
         + this.dragging.screenUp.z * upDistance;
 
       const others = snapshot.objects.filter((o) => o.id !== moving.id);
-      const freeMove = event.shiftKey;
+      const freeMove = event.pointerType === 'touch' ? !!snapshot.touchFreeMove : event.shiftKey;
       if (freeMove) this.dragging.snap = { kind: 'none' };
       const resolved = resolvePlacement(moving, rawX, rawZ, architectureRoom(snapshot), others, {
         previousSnap: freeMove ? undefined : this.dragging.snap,
@@ -5403,6 +5624,10 @@ export class PlannerScene {
 
   private onPointerUp = (event: PointerEvent) => {
     if (this.currentCameraView === 'walk') return;
+    if (event.pointerType === 'touch' && this.sceneTouchControls?.hasPointer(event.pointerId)) {
+      this.onTouchPointerUp(event);
+      return;
+    }
     this.pointerMoves.flush();
     if (this.wallClick?.pointerId === event.pointerId) {
       const click = this.wallClick;
@@ -5425,6 +5650,7 @@ export class PlannerScene {
       return;
     }
     if (!this.dragging) return;
+    if (this.dragging.pointerId != null && event.pointerId !== this.dragging.pointerId) return;
     this.bridge.commitDrag(this.dragging.before);
     this.dragging = null;
     this.controls.enabled = true;
@@ -5565,6 +5791,10 @@ export class PlannerScene {
   }
 
   private onPointerCancel = (event: PointerEvent) => {
+    if (this.sceneTouchControls?.hasPointer(event.pointerId)) {
+      this.sceneTouchControls.cancel();
+      return;
+    }
     this.wallClick = null;
     this.spaceClick = null;
     if (this.openingDragging?.pointerId === event.pointerId) this.finishOpeningDrag();
@@ -5572,6 +5802,10 @@ export class PlannerScene {
   };
 
   private onWindowBlur = () => {
+    if (this.sceneTouchControls?.active) {
+      this.sceneTouchControls.cancel();
+      return;
+    }
     this.pointerMoves.flush();
     this.wallClick = null;
     this.spaceClick = null;
@@ -5658,6 +5892,9 @@ export class PlannerScene {
   };
 
   scheduleStateSync() {
+    // Project replacement also invalidates a pending tap, not just an edit
+    // preview. Drop its pointer ownership before any queued sample can run.
+    this.cancelStaleTouchGesture();
     this.stateSyncPending = true;
     this.requestRender();
   }

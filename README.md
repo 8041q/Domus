@@ -165,8 +165,8 @@ pan across the floor, and scroll to zoom. **Look** and **Pan** buttons let you
 choose what a primary drag does; **− / +** also control zoom. Zoom magnifies the
 view without changing your position. On phones, drag with one finger to look,
 drag with two fingers to pan, or pinch to zoom. Choose **Pan** for a one-finger
-alternative. Walk fills the phone workspace and brings the catalogue back when
-you exit. `Esc` or **Exit walk** returns to the previous
+alternative. On phones, choose **Explore** to enter Walk; **View → Free cam**
+switches to orbit. `Esc` or **Exit walk** returns to the previous
 planner camera. Walk shows full-height walls and the ceiling; your wall display
 preference returns when you leave. Furniture editing shortcuts are paused while
 walking. Walls, windows and closed doors block movement. Bare passages and door
@@ -175,6 +175,22 @@ boundary always keeps you inside the room.
 
 Build Room walls, corners, and openings can be dragged directly. Selecting an
 item opens its numeric controls for precise edits.
+
+On screens up to 820px wide, and short landscape touch screens, the same editor
+uses a canvas-first phone interface. **Room**, **Furniture**, **Finishes**, and
+**Explore** switch tasks. Tools share one bottom sheet: tap or swipe its heading
+to resize it, close it to reveal the whole room, or use device Back to dismiss
+the top sheet or menu. Sheets scroll independently of the room. Project actions
+remain available from the header, including local saves and portable files.
+
+With touch, tap a wall, corner, opening, or item to select it before dragging it
+to edit. Drag empty space to navigate, or use two fingers to pan and pinch zoom.
+A second finger cancels an unfinished edit before navigating; the cancelled edit
+does not use an undo step. Selected geometry has numeric fields and explicit
+split/remove actions. **Fine snap** replaces the Build Room Shift modifier, and
+**Free move** replaces Shift while moving furniture. Adding furniture selects it
+and collapses its tools so placement stays visible. Items that cannot fit remain
+listed in the catalogue for removal or placement after the room changes.
 
 ## Saving and export
 

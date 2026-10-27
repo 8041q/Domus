@@ -55,6 +55,7 @@ import type {
 } from './core/types';
 
 interface PlannerStore extends PlannerSnapshot {
+  projectGeneration: number;
   mode: AppMode;
   buildView: BuildWorkspaceView;
   planView: PlanCameraView;
@@ -91,6 +92,7 @@ interface PlannerStore extends PlannerSnapshot {
   select: (id: string | null) => void;
   updateObject: (id: string, patch: Partial<PlacedObject>) => void;
   commitSnapshot: (before: PlannerSnapshot) => void;
+  cancelInteraction: (before: PlannerSnapshot) => void;
   applyAiProposal: (proposal: AiProposal) => AiApplyResult;
   setRoom: (room: RoomState) => void;
   setRoomVertices: (vertices: RoomVertex[], shapeKind?: RoomShapeKind) => void;
@@ -308,6 +310,9 @@ function normalizeSnapshot(snapshot: Omit<PlannerSnapshot, 'dividers' | 'spaces'
   const objects = snapshot.objects.filter((object) => Object.hasOwn(PRODUCTS, object.productId)).map((o) => {
     const product = PRODUCTS[o.productId];
     if (!product) return o;
+    // A rotated footprint may fit where its axis-aligned bounds do not. Keep
+    // exact valid positions through finish changes, imports and undo/redo.
+    if (isPlacementValid(o, room, [])) return o;
     const size = rotatedFootprint(product, o.rotationY);
     const nearest = findNearestValidPosition(room, size.width, size.depth, { x: o.x, z: o.z });
     return nearest ? { ...o, ...nearest } : o;
@@ -443,6 +448,7 @@ export function emptyRoomSnapshot(shape: Exclude<RoomShapeKind, 'custom'> = 'rec
 }
 
 export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
+  projectGeneration: 0,
   room: defaultRoom,
   openings: defaultOpenings,
   dividers: [],
@@ -555,12 +561,22 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
   }),
   updateObject: (id, patch) => set((state) => ({ objects: state.objects.map((o) => o.id === id ? { ...o, ...patch } : o) })),
   commitSnapshot: (before) => {
+    const generation = (before as PlannerSnapshot & { projectGeneration?: number }).projectGeneration;
+    if (generation != null && generation !== get().projectGeneration) return;
+    const semanticBefore = snapshotOf(before);
     const current = snapshotOf(get());
-    if (JSON.stringify(before) !== JSON.stringify(current)) {
-      history.push(before);
+    if (JSON.stringify(semanticBefore) !== JSON.stringify(current)) {
+      history.push(semanticBefore);
       const selected = current.objects.find((object) => object.id === get().selectedId);
       if (selected) set({ selectedSpaceId: (FEATURES.interiorWalls ? spaceAtPoint(current, selected) : null)?.id ?? get().selectedSpaceId });
     }
+  },
+  cancelInteraction: before => {
+    // A touch gesture can become navigation when another finger arrives.
+    // Restore its preview exactly without consuming undo/redo or resetting UI.
+    const generation = (before as PlannerSnapshot & { projectGeneration?: number }).projectGeneration;
+    if (generation != null && generation !== get().projectGeneration) return;
+    set({ ...snapshotOf(before), activeSnap: { kind: 'none' }, collisionId: null, collisionPush: false });
   },
   applyAiProposal: (proposal) => {
     if (!FEATURES.aiExperiment) return { ok: false, error: 'The AI experiment is disabled.' };
@@ -982,7 +998,7 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
   openProject: (value) => {
     const snapshot = parseProjectSnapshot(value);
     if (!snapshot) return false;
-    set({ ...snapshot, mode: 'build', buildView: 'plan', planView: 'free', interiorWallView: 'up',
+    set({ ...snapshot, projectGeneration: (get().projectGeneration ?? 0) + 1, mode: 'build', buildView: 'plan', planView: 'free', interiorWallView: 'up',
       selectedId: null, selectedOpeningId: null, selectedWallId: null, selectedDividerId: null, selectedSpaceId: null,
       activeSnap: { kind: 'none' }, collisionId: null, collisionPush: false });
     history.clear();
@@ -992,6 +1008,7 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
   resetProject: () => {
     const before = snapshotOf(get());
     set({
+      projectGeneration: (get().projectGeneration ?? 0) + 1,
       room: structuredClone(defaultRoom),
       openings: structuredClone(defaultOpenings),
       dividers: [],

@@ -10,6 +10,7 @@ import { roomProjects } from './roomProjects';
 import { registerOpeningVisibility } from './core/openingVisibility';
 import { Icon } from './ui';
 import type { WalkPointerMode } from './renderer/WalkControls';
+import { useCompactWorkspace, useMobileWorkspace } from './mobileWorkspace';
 
 export function Viewport3D({
   furniture = true,
@@ -30,6 +31,8 @@ export function Viewport3D({
   onExportReady?: (handler: (() => Promise<void>) | null) => void;
   onPdfExportReady?: (handler: (() => Promise<void>) | null) => void;
 }) {
+  const compact = useCompactWorkspace();
+  const mobileTask = useMobileWorkspace(state => state.task);
   const [failure, setFailure] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [modelStatus, setModelStatus] = useState<ModelLoadStatus>({ loading: false, error: null, completed: 0, total: 0 });
@@ -115,6 +118,10 @@ export function Viewport3D({
             selectedSpaceId: state.selectedSpaceId,
             interiorWallView: state.interiorWallView,
             selectedOpeningId: state.selectedOpeningId,
+            selectedWallId: state.selectedWallId,
+            selectedDividerId: state.selectedDividerId,
+            touchFreeMove: useMobileWorkspace.getState().freeMove,
+            projectGeneration: state.projectGeneration,
             activeSnap: state.activeSnap,
             showClearance: state.showClearance,
             showRoomDimensions: state.showRoomDimensions,
@@ -123,14 +130,15 @@ export function Viewport3D({
             measurementSystem: state.measurementSystem
           };
         },
-        select: (id) => usePlannerStore.getState().select(id),
+        select: (id) => { useMobileWorkspace.getState().setCornerId(null); usePlannerStore.getState().select(id); },
         selectSpace: (id) => usePlannerStore.getState().selectSpace(id),
-        selectOpening: (id) => usePlannerStore.getState().selectOpening(id),
-        selectWall: (id) => usePlannerStore.getState().selectWall(id),
-        selectDivider: (id) => usePlannerStore.getState().selectDivider(id),
+        selectOpening: (id) => { useMobileWorkspace.getState().setCornerId(null); usePlannerStore.getState().selectOpening(id); },
+        selectWall: (id) => { useMobileWorkspace.getState().setCornerId(null); usePlannerStore.getState().selectWall(id); },
+        selectDivider: (id) => { useMobileWorkspace.getState().setCornerId(null); usePlannerStore.getState().selectDivider(id); },
         updateObject: (id, patch) => usePlannerStore.getState().updateObject(id, patch),
         updateOpening: (id, patch, recordHistory = true) => usePlannerStore.getState().updateOpening(id, patch, recordHistory),
         commitDrag: (before) => usePlannerStore.getState().commitSnapshot(before),
+        cancelDrag: (before) => usePlannerStore.getState().cancelInteraction(before),
         feedback: (snap, collisionId, collisionPush) => usePlannerStore.getState().setFeedback(snap, collisionId, collisionPush),
         cameraViewChanged: (nextView) => {
           const state = usePlannerStore.getState();
@@ -141,7 +149,7 @@ export function Viewport3D({
         }
       }, {
         showFurniture: furniture,
-        interactiveFurniture: interactive,
+        interactiveFurniture: interactive && (!compact || mobileTask === 'furniture'),
         interactiveArchitecture: architectureInteractive,
         sunRays,
         onModelStatus: setModelStatus,
@@ -162,6 +170,7 @@ export function Viewport3D({
       if (view) scene.setCameraView(view);
       unsubscribe = usePlannerStore.subscribe((state, previous) => {
         const sceneStateChanged = state.room !== previous.room
+          || state.projectGeneration !== previous.projectGeneration
           || state.spaces !== previous.spaces
           || state.dividers !== previous.dividers
           || state.openings !== previous.openings
@@ -191,6 +200,10 @@ export function Viewport3D({
       sceneRef.current = null;
     };
   }, [furniture, interactive, architectureInteractive, sunRays, attempt]);
+
+  useEffect(() => {
+    sceneRef.current?.setFurnitureInteraction(interactive && (!compact || mobileTask === 'furniture'));
+  }, [interactive, compact, mobileTask]);
 
   useEffect(() => {
     if (!view) return;
@@ -232,7 +245,7 @@ export function Viewport3D({
             <button type="button" aria-label="Zoom out" onClick={() => sceneRef.current?.zoomWalk(1 / 1.2)}>−</button>
             <button type="button" aria-label="Zoom in" onClick={() => sceneRef.current?.zoomWalk(1.2)}>+</button>
           </div>
-          <button type="button" className="walk-exit" onClick={() => usePlannerStore.getState().setPlanView('free')}>Exit walk <kbd>Esc</kbd></button>
+          <button type="button" className="walk-exit" onClick={() => compact ? useMobileWorkspace.getState().setTask('furniture') : usePlannerStore.getState().setPlanView('free')}>Exit walk <kbd>Esc</kbd></button>
         </div>
         <p className="walk-help-pointer">Drag to {walkPointerMode} · Scroll to zoom · <kbd>WASD</kbd> to walk</p>
         <p className="walk-help-touch">Drag to {walkPointerMode} · Two fingers to pan · Pinch to zoom</p>

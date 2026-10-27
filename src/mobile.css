@@ -1,0 +1,125 @@
+/* Compact chrome shares the editor and document model with the desktop shell. */
+body:has(.app-shell.is-compact) { overflow: hidden; overscroll-behavior: none; }
+.app-shell.is-compact { --mobile-nav-height: calc(62px + env(safe-area-inset-bottom)); position: fixed; inset-inline: 0; top: var(--workspace-offset-top, 0px); height: var(--workspace-height, 100dvh); min-height: 0; width: 100%; grid-template-rows: calc(56px + env(safe-area-inset-top)) minmax(0, 1fr) var(--mobile-nav-height); overflow: hidden; }
+.is-compact .app-header { position: relative; top: auto; height: auto; padding: env(safe-area-inset-top) 8px 0; grid-template-columns: 30px minmax(0, 1fr) auto auto; grid-template-rows: 1fr; gap: 6px; z-index: 60; backdrop-filter: none; }
+.is-compact .brand-block { grid-column: 1; grid-row: 1; }
+.is-compact .brand-block > div:last-child { display: none; }
+.is-compact .brand-mark { width: 28px; height: 30px; }
+.is-compact .mode-stepper { display: none; }
+.is-compact .header-actions { display: contents; }
+.is-compact .app-header .project-status { grid-column: 2; grid-row: 1; max-width: none; gap: 2px; display: grid; }
+.is-compact .project-status strong { font-size: 12px; max-width: 100%; }
+.is-compact .project-status small { font-size: 10px; }
+.is-compact .history-actions { grid-column: 3; grid-row: 1; gap: 0; }
+.is-compact .history-actions .ui-button { width: 44px; height: 44px; }
+.is-compact .app-header .project-menu-wrap { grid-column: 4; grid-row: 1; }
+.is-compact .project-menu-trigger { min-width: 44px; min-height: 44px; padding-inline: 9px; font-size: 12px; }
+.is-compact .project-menu-trigger svg:last-child { display: none; }
+.is-compact .app-main { position: relative; min-height: 0; overflow: hidden; isolation: isolate; }
+.mobile-task-nav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: start; padding: 3px 8px env(safe-area-inset-bottom); border-top: 1px solid var(--border); background: var(--card); z-index: 50; }
+.mobile-task-nav button { display: grid; justify-items: center; align-content: center; gap: 4px; min-width: 0; min-height: 54px; border: 0; border-radius: 10px; background: transparent; color: var(--muted-foreground); font: inherit; font-size: 11px; font-weight: 550; touch-action: manipulation; }
+.mobile-task-nav button[aria-current] { background: var(--muted); color: var(--foreground); }
+.mobile-task-nav svg { width: 20px; height: 20px; }
+.mobile-task-nav button:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.is-compact .mode-layout, .is-compact .plan-room-layout.is-walking { display: block; height: 100%; min-height: 0; overflow: hidden; }
+.is-compact .workspace-panel { height: 100%; min-height: 0; padding: 6px; }
+.is-compact .workspace-content { min-height: 0; height: 100%; }
+.is-compact .designer-canvas, .is-compact .plan-room-layout.is-walking .designer-canvas { display: block; height: 100%; min-height: 0; padding: 6px; overflow: hidden; }
+.is-compact .designer-stage { height: 100%; min-height: 0; }
+.is-compact .viewport, .is-compact .plan-stage canvas { min-height: 0; height: 100%; }
+.is-compact .interaction-status, .is-compact .plan-help { display: none; }
+.is-compact .workspace-toolbar { top: 8px; left: 8px; transform: none; width: auto; max-width: calc(100% - 16px); min-height: 44px; padding: 3px; }
+.is-compact .workspace-toolbar-copy, .is-compact .workspace-area-badge { display: none; }
+.is-compact .workspace-toolbar-actions { gap: 5px; }
+.is-compact .segmented-control button { min-width: 44px; min-height: 44px; padding: 8px; font-size: 13px; }
+.is-compact .floating-reset-view { top: 8px; right: 8px; min-height: 44px; padding-inline: 10px; font-size: 12px; }
+.is-compact .plan-view-controls { top: 64px; right: 8px; gap: 3px; }
+.is-compact .plan-view-controls button { min-width: 44px; min-height: 44px; font-size: 21px; }
+.is-compact .plan-view-controls .plan-fit-button { font-size: 12px; }
+.is-compact .editing-space-selector { top: 65px; width: 175px; font-size: 11px; }
+.is-compact .editing-space-trigger, .is-compact .editing-space-list button { min-height: 44px; font-size: 13px; }
+.mobile-canvas-toolbar { position: absolute; z-index: 10; top: 8px; left: 8px; right: 8px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; pointer-events: none; }
+.mobile-canvas-toolbar > * { pointer-events: auto; }
+.mobile-canvas-toolbar button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 44px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 9px; background: rgba(255,255,255,.96); color: var(--foreground); box-shadow: 0 2px 8px #0000000b; font: inherit; font-size: 12px; font-weight: 550; }
+.mobile-canvas-toolbar button[aria-pressed="true"] { background: var(--muted); }
+.mobile-view-menu { position: absolute; top: 50px; right: 0; max-height: min(420px, calc(var(--workspace-height, 100dvh) - 185px)); width: min(270px, calc(100vw - 32px)); display: grid; padding: 5px; border: 1px solid var(--border); border-radius: 12px; overflow-y: auto; background: var(--card); box-shadow: 0 10px 35px #0002; }
+.mobile-view-menu button { box-shadow: none; border-color: transparent; justify-content: flex-start; width: 100%; }
+.mobile-sheet { position: absolute; z-index: 40; inset-inline: 6px; bottom: 0; display: flex; flex-direction: column; min-width: 0; max-height: calc(100% - 8px); min-height: 64px; border: 1px solid var(--border); border-bottom: 0; border-radius: 17px 17px 0 0; background: var(--card); box-shadow: 0 -8px 30px #00000015; overflow: hidden; }
+.mobile-sheet-peek { height: 64px; }
+.mobile-sheet-half { height: 48%; min-height: 180px; }
+.mobile-sheet-expanded { height: 92%; }
+.mobile-sheet-heading { display: flex; align-items: center; flex: 0 0 64px; padding: 3px 10px; border-bottom: 1px solid var(--border); gap: 8px; }
+.mobile-sheet-heading button { border: 0; background: transparent; color: var(--foreground); font: inherit; cursor: pointer; }
+.mobile-sheet-handle { min-width: 0; min-height: 54px; flex: 1; display: grid; justify-items: start; align-content: center; gap: 2px; padding: 0 5px; touch-action: none; }
+.mobile-sheet-handle strong { font-size: 15px; font-weight: 600; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mobile-sheet-handle small { font-size: 11px; color: var(--muted-foreground); }
+.mobile-sheet-grip { display: block; width: 30px; height: 3px; border-radius: 4px; background: var(--border); }
+.mobile-sheet-close { width: 44px; min-height: 44px; display: grid; place-items: center; }
+.mobile-sheet-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px 14px 18px; scroll-padding-block: 12px; -webkit-overflow-scrolling: touch; }
+.mobile-sheet-body[hidden] { display: none; }
+.mobile-sheet button { min-height: 44px; }
+.mobile-sheet button:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.mobile-sheet :is(input:not([type="checkbox"]):not([type="color"]):not([type="range"]), select, textarea) { min-height: 44px; font-size: 16px; }
+.mobile-sheet :is(.field-label, .dimension-field) { font-size: 13px; }
+.mobile-sheet :is(.dimension-field > span:first-child, .sub-label, .range-value-row > span, .field-label > span) { font-size: 12px; }
+.mobile-sheet :is(.hint, .eyebrow, .quiet-pill, p, small) { font-size: 12px; line-height: 1.5; }
+.mobile-sheet :is(.tool-section h2, h3) { font-size: 13px; }
+.mobile-sheet .range { height: 44px; }
+.mobile-sheet input[type="range"]::-webkit-slider-thumb { width: 25px; height: 25px; margin-top: -11px; }
+.mobile-sheet input[type="range"]::-moz-range-thumb { width: 25px; height: 25px; }
+.mobile-sheet .toggle-row, .mobile-sheet .view-options-content label { min-height: 44px; align-items: center; }
+.mobile-sheet input[type="checkbox"] { width: 22px; height: 22px; }
+.mobile-room-tools { display: flex; flex-direction: column; }
+.mobile-room-tools .builder-inspector-dock { order: -1; height: auto; max-height: none; overflow: visible; border: 0; }
+.mobile-room-tools .builder-inspector-empty, .mobile-room-tools .panel-intro { display: none; }
+.mobile-room-tools .builder-scroll-content { overflow: visible; }
+.mobile-room-tools .tool-section, .mobile-room-tools .opening-editor, .mobile-room-tools .builder-inspector-dock > * { padding-inline: 0; }
+.mobile-room-tools .builder-continue { padding-inline: 0; }
+.mobile-room-tools .shape-options button { font-size: 12px; }
+.mobile-room-tools .opening-quick-add button { font-size: 12px; }
+.mobile-room-tools .dimension-grid, .mobile-position-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.mobile-sheet .mobile-catalog-content { display: block; max-height: none; overflow: visible; border: 0; padding: 0; }
+.mobile-catalog-content .catalog-heading { display: none; }
+.mobile-catalog-content .catalog-filters { position: sticky; top: -12px; z-index: 1; background: var(--card); padding-block: 6px; }
+.mobile-catalog-content .product-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.mobile-catalog-content .product-card strong { font-size: 13px; }
+.mobile-catalog-content .used-furniture-remove { min-width: 44px; }
+.mobile-panel-content { position: static; width: auto; max-width: none; padding: 0; max-height: none; background: transparent; border: 0; box-shadow: none; }
+.mobile-sheet .selection-panel { position: static; width: auto; max-width: none; padding: 0; border: 0; box-shadow: none; }
+.mobile-sheet .action-grid button { font-size: 13px; }
+.mobile-sheet .finish-colour-row { align-items: flex-start; gap: 10px; flex-direction: column; }
+.mobile-sheet .swatch-row { flex-wrap: wrap; gap: 7px; }
+.mobile-sheet .swatch, .mobile-sheet .finish-custom-color { width: 44px; height: 44px; flex: 0 0 44px; }
+.mobile-sheet .floor-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.mobile-sheet .floor-option { min-height: 54px; font-size: 12px; padding: 6px; }
+.mobile-sheet .floor-option > span { flex-basis: 30px; width: 30px; height: 34px; }
+.mobile-sheet .finish-fields label { font-size: 12px; }
+.mobile-sheet .finish-style-select, .mobile-sheet .view-options-section select { min-height: 44px; font-size: 16px; }
+.mobile-sheet .ai-experiment-panel { position: static; width: 100%; max-width: none; max-height: none; padding: 0; background: transparent; border: 0; box-shadow: none; overflow: visible; }
+.mobile-sheet .ai-messages { max-height: 38vh; min-height: 160px; }
+.mobile-sheet .ai-composer { position: sticky; bottom: -18px; padding-bottom: 10px; background: var(--card); }
+.field-error, .mobile-placement-notice { color: #a42929; font-size: 12px; line-height: 1.5; }
+.is-compact .project-menu { position: fixed; top: auto; bottom: calc(var(--mobile-nav-height) + max(0px, 100dvh - var(--workspace-height, 100dvh) - var(--workspace-offset-top, 0px))); left: 8px; right: 8px; width: auto; max-height: calc(var(--workspace-height, 100dvh) - 130px); overflow-y: auto; overscroll-behavior: contain; padding: 8px; border-radius: 16px; }
+.is-compact .project-menu button { min-height: 52px; }
+.is-compact .project-menu strong { font-size: 14px; }
+.is-compact .project-menu small { font-size: 12px; }
+.is-compact:has(.mobile-project-sheet, dialog[open]) .mobile-sheet { visibility: hidden; }
+.is-compact .mobile-project-sheet { display: flex; flex-direction: column; padding: 0; height: 48%; min-height: 180px; max-height: calc(var(--workspace-height, 100dvh) - 70px); overflow: hidden; }
+.is-compact .mobile-project-sheet[data-size="peek"] { height: 64px; min-height: 64px; }
+.is-compact .mobile-project-sheet[data-size="expanded"] { height: calc(var(--workspace-height, 100dvh) - var(--mobile-nav-height) - 64px); }
+.mobile-project-heading { display: flex; gap: 8px; align-items: center; padding: 3px 10px; flex: 0 0 64px; border-bottom: 1px solid var(--border); }
+.is-compact .mobile-project-heading .mobile-project-handle { display: grid; justify-content: start; align-content: center; flex: 1; min-width: 0; gap: 2px; min-height: 54px; touch-action: none; }
+.mobile-project-handle small { color: var(--muted-foreground); }
+.is-compact .mobile-project-heading .mobile-project-close { width: 44px; min-height: 44px; flex: 0 0 44px; justify-content: center; padding: 0; }
+.is-compact .mobile-project-close svg { width: 20px; height: 20px; }
+.mobile-project-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 8px; }
+.mobile-project-body[hidden] { display: none; }
+.is-compact .project-dialog { max-height: calc(var(--workspace-height, 100dvh) - 16px); width: calc(100vw - 16px); padding: 16px; font-size: 14px; }
+.is-compact .project-dialog :is(button, input, select, textarea) { min-height: 44px; }
+.is-compact .project-dialog input, .is-compact .project-dialog select, .is-compact .project-dialog textarea { font-size: 16px; }
+.is-compact .project-warning { bottom: calc(var(--mobile-nav-height) + 8px); padding: 10px; gap: 8px; }
+.is-compact .project-warning button { min-width: 44px; min-height: 44px; }
+.is-compact .toast { bottom: calc(var(--mobile-nav-height) + 8px); max-width: calc(100vw - 16px); }
+.is-compact .walk-controls { bottom: 8px; }
+@media (max-height: 430px) { .is-compact .mobile-sheet-half { height: 55%; min-height: 140px; } .mobile-sheet-heading { flex-basis: 54px; } .mobile-sheet-handle { min-height: 44px; } }
+@media (prefers-reduced-motion: reduce) { .mobile-sheet { scroll-behavior: auto; } }
