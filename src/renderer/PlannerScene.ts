@@ -1,3 +1,4 @@
+import { normalizeLightingControls } from '../core/lighting';
 import { embedRoomDocumentGLB } from '../core/roomGlb';
 import type { RoomDocumentV2 } from '../core/projectDocument';
 import { activeArchitecture } from '../core/activeArchitecture';
@@ -474,7 +475,7 @@ export class PlannerScene {
     this.disposeGroup(this.ceilingGroup);
     this.disposeGroup(this.architecturalShadeGroup);
     this.disposeGroup(this.lightFixtureGroup);
-    this.disposeGroup(this.interiorLightGroup);
+    this.disposeCeilingLights();
     this.disposeDaylightRig();
     this.disposeSunsetRig();
     this.disposeGroup(this.contactShadowGroup);
@@ -1168,7 +1169,7 @@ export class PlannerScene {
     this.stateSyncPending = false;
     const snapshot = this.sceneSnapshot();
     const { floorFinish, ...roomWithoutFloorFinish } = snapshot.room;
-    const { sunAzimuth, sunElevation, ...lightingWithoutSunAngles } = roomWithoutFloorFinish.lighting;
+    const { sunAzimuth, sunElevation, ceilingBrightness, ceilingWarmth, sunlightStrength, ambientBrightness, ...lightingWithoutSunAngles } = roomWithoutFloorFinish.lighting;
     const roomKey = JSON.stringify({ ...roomWithoutFloorFinish, lighting: lightingWithoutSunAngles, dividers: snapshot.dividers, spaces: snapshot.spaces });
     const openingsKey = JSON.stringify(snapshot.openings);
     let architectureChanged = false;
@@ -1980,9 +1981,16 @@ export class PlannerScene {
     };
   }
 
+  private disposeCeilingLights() {
+    for (const child of this.interiorLightGroup.children) {
+      if (child instanceof THREE.SpotLight) child.shadow.dispose();
+    }
+    this.disposeGroup(this.interiorLightGroup);
+  }
+
   private rebuildCeilingLighting(snapshot: PlannerSnapshot) {
     this.disposeGroup(this.lightFixtureGroup);
-    this.disposeGroup(this.interiorLightGroup);
+    this.disposeCeilingLights();
     const lighting = snapshot.room.lighting;
     if (!lighting.enabled) {
       this.updateLightFixtureVisibility(snapshot);
@@ -2005,15 +2013,24 @@ export class PlannerScene {
       this.lightFixtureGroup.add(fixture);
     }
 
-    // Every visible fixture has a matching light. None adds a shadow map;
-    // scale intensity with the grid size to keep total exposure controlled.
+    // Only divided rooms need extra maps to keep fixture light behind walls.
+    // The automatic grid is capped at nine fixtures; maps reuse the existing
+    // shadow invalidation cycle and are released when the rig is rebuilt.
+    const hasDividers = getPhysicalWalls(snapshot.room, snapshot.dividers).some((wall) => wall.id.startsWith('divider-'));
+    // Scale intensity with the grid size to keep total exposure controlled.
     const intensity = 1.1 * Math.sqrt(4 / positions.length);
     for (const position of positions) {
       const light = new THREE.SpotLight(0xfff1e5, intensity, Math.max(3.4, snapshot.room.height * 1.4), THREE.MathUtils.degToRad(78), 0.8, 2);
       light.userData.baseIntensity = intensity;
       light.position.set(position.x, position.y - 0.07, position.z);
       light.target.position.set(position.x, 0.2, position.z);
-      light.castShadow = false;
+      light.castShadow = hasDividers;
+      light.shadow.mapSize.set(512, 512);
+      light.shadow.camera.near = 0.05;
+      light.shadow.camera.far = light.distance;
+      light.shadow.bias = -0.0001;
+      light.shadow.normalBias = 0.002;
+      light.shadow.radius = 2;
       this.interiorLightGroup.add(light, light.target);
     }
 
@@ -2369,6 +2386,7 @@ export class PlannerScene {
 
   private applyRoomLighting(snapshot: PlannerSnapshot) {
     const enabled = snapshot.room.lighting.enabled;
+    const controls = normalizeLightingControls(snapshot.room.lighting);
     const hasDaylight = this.daylightGroup.children.some((child) => child instanceof THREE.SpotLight);
     const hasSunset = this.sunsetLights !== null;
     const pairedSuns = hasSunset && snapshot.room.lighting.sunStylePreset === 'paired-suns';
@@ -2377,7 +2395,7 @@ export class PlannerScene {
     this.ambientLight.color.setHex(pairedSuns ? 0xffead8 : 0xffffff);
     this.fillLight.color.setHex(pairedSuns ? 0xbacfff : 0xe9edf0);
     this.scene.environment = pairedSuns ? this.pairedSunsEnvironment() : null;
-    this.scene.environmentIntensity = pairedSuns ? 0.28 : 1;
+    this.scene.environmentIntensity = pairedSuns ? 0.28 * controls.ambientBrightness : 1;
     // Imported architectural finishes need reflections in the builder too.
     this.productModels?.setEnvironment(pairedSuns ? null : this.productEnvironment());
     this.productModels?.setOpeningEnvironment?.(this.productEnvironment());
@@ -2391,11 +2409,30 @@ export class PlannerScene {
     this.ambientLight.intensity = hasSunset ? (enabled ? 0.16 : 0.12) : (enabled ? 0.38 : 0.28);
     this.mainLight.intensity = hasSunset ? (enabled ? 0.52 : 0.46) : (enabled ? 0.82 : (hasDaylight ? 0.78 : 0.88));
     this.fillLight.intensity = hasSunset ? (enabled ? 0.15 : 0.12) : (enabled ? 0.34 : 0.26);
+    this.hemiLight.intensity *= controls.ambientBrightness;
+    this.ambientLight.intensity *= controls.ambientBrightness;
+    this.mainLight.intensity *= controls.ambientBrightness;
+    this.fillLight.intensity *= controls.ambientBrightness;
+    for (const child of this.daylightGroup.children) {
+      if (child instanceof THREE.SpotLight) child.intensity = 0.12 * controls.ambientBrightness;
+    }
+    if (this.sunsetLights) for (const light of this.sunsetLights) {
+      light.intensity = SUN_PAIR_INTENSITY * controls.sunlightStrength;
+    }
+    const ceilingColor = controls.ceilingWarmth <= 0.5
+      ? new THREE.Color(0xe9f1ff).lerp(new THREE.Color(0xfff1e5), controls.ceilingWarmth * 2)
+      : new THREE.Color(0xfff1e5).lerp(new THREE.Color(0xffba75), (controls.ceilingWarmth - 0.5) * 2);
     for (const child of this.interiorLightGroup.children) {
       if (child instanceof THREE.SpotLight) {
-        child.intensity = child.userData.baseIntensity * (hasSunset ? 0.55 : 1);
+        child.color.copy(ceilingColor);
+        child.intensity = child.userData.baseIntensity * (hasSunset ? 0.55 : 1) * controls.ceilingBrightness;
       }
     }
+    this.lightFixtureGroup.traverse((node) => {
+      if (node instanceof THREE.Mesh && node.material instanceof THREE.MeshBasicMaterial) {
+        node.material.color.copy(ceilingColor).multiplyScalar(Math.min(1, controls.ceilingBrightness));
+      }
+    });
     this.renderer.toneMappingExposure = hasSunset ? 0.91 : 0.98;
     this.scene.background = new THREE.Color(0xd4d5d6);
   }

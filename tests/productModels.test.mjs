@@ -185,7 +185,7 @@ test('room lighting uses furniture reflections without changing the architectura
   Object.assign(scene, {
     scene: new THREE.Scene(), renderer: { toneMappingExposure: 0 },
     options: { showFurniture: true }, productModels: library,
-    daylightGroup: new THREE.Group(), interiorLightGroup: new THREE.Group(), sunsetLights: null,
+    lightFixtureGroup: new THREE.Group(), daylightGroup: new THREE.Group(), interiorLightGroup: new THREE.Group(), sunsetLights: null,
     hemiLight: new THREE.HemisphereLight(), ambientLight: new THREE.AmbientLight(),
     mainLight: new THREE.DirectionalLight(), fillLight: new THREE.DirectionalLight(),
     productEnvironment: () => studio, pairedSunsEnvironment: () => sunset

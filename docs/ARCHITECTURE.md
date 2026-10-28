@@ -311,6 +311,15 @@ that could pre-shadow glazing on an adjacent wall. Disabling sun light disposes
 the complete rig and returns to the fallback lighting path. The selected style,
 angles, and enablement are saved with the room.
 
+Lighting mood starting points (Neutral daylight, Warm evening, Soft overcast)
+apply ordinary saved lighting values and remain manually editable. Ceiling
+brightness, ceiling warmth, sunlight strength, and ambient fill update lights
+without rebuilding room geometry. Missing controls in older files default to
+unit brightness and the previous warm ceiling colour. Ambient fill scales the
+broad key/fill rig, window fill, and paired-suns environment together. Ceiling
+lights use up to nine 512px shadow maps only when physical dividers are present;
+the existing invalidation cycle refreshes them and rig disposal releases them.
+
 ## GLB export
 
 Plan Room builds a fresh export scene instead of serializing the live cutaway.

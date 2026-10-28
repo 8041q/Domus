@@ -1,3 +1,4 @@
+import { normalizeLightingControls } from './core/lighting';
 import { FEATURES } from './config/features';
 import { createId } from './core/id';
 import { normalizeProjectDetails } from './core/projectDetails';
@@ -142,6 +143,7 @@ const defaultRoom: RoomState = {
   baseboardMaterial: 'paint',
   floorFinish: 'carpet-011',
   lighting: {
+    ...normalizeLightingControls(),
     enabled: true,
     sunRaysEnabled: true,
     sunStylePreset: 'paired-suns',
@@ -217,6 +219,7 @@ function ensureRoom(raw: Partial<RoomState>): RoomState {
       : 'paint',
     floorFinish: normalizeFloorFinish(raw.floorFinish),
     lighting: {
+      ...normalizeLightingControls(raw.lighting),
       enabled: typeof raw.lighting?.enabled === 'boolean' ? raw.lighting.enabled : defaultRoom.lighting.enabled,
       sunRaysEnabled: typeof raw.lighting?.sunRaysEnabled === 'boolean'
         ? raw.lighting.sunRaysEnabled

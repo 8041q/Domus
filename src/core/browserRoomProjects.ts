@@ -135,7 +135,6 @@ export class BrowserRoomProjects {
         this.update({ name: document.name, activeId: room?.id ?? null, savedAt: room?.updatedAt ?? null });
       }
       this.update({ recoveries: drafts.filter(draft => draft.id !== this.tabId) });
-      if (!own && drafts.length && !this.state.warning) this.update({ warning: 'Recovery drafts are available under Project → Open saved room → Storage & recovery.' });
     } catch (error) { this.draftWritable = false; this.update({ warning: message(error) }); }
     this.update({ initialized: true, dirty: this.serialize() !== this.baseline });
     await this.storageInfo().catch(() => {});

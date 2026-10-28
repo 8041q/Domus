@@ -34,6 +34,11 @@ export type BaseboardStyle = 'flat' | 'flush' | 'rounded' | 'stepped' | 'sculpte
 export type BaseboardMaterial = 'paint' | 'materials';
 
 export interface RoomLighting {
+  /** Optional for compatibility with older saved rooms; multipliers default to 1. */
+  ceilingBrightness?: number;
+  ceilingWarmth?: number;
+  sunlightStrength?: number;
+  ambientBrightness?: number;
   enabled: boolean;
   sunRaysEnabled: boolean;
   sunStylePreset: SunStylePreset;

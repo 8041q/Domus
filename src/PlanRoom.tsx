@@ -1,3 +1,4 @@
+import { LIGHTING_CONTROLS, LIGHTING_MOODS, normalizeLightingControls } from './core/lighting';
 import { FEATURES } from './config/features';
 import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ChangeEvent } from 'react';
 import { PRODUCT_LIST, PRODUCTS, displayProductDimensions, getProductCatalogueIssues, getProductCatalogueVersion, subscribeProductCatalogue } from './core/products';
@@ -326,6 +327,29 @@ function DesignPanel({ onClose }: { onClose: () => void }) {
       <label><input type="checkbox" checked={showRoomDimensions} onChange={(e) => setShowRoomDimensions(e.target.checked)} /><span>Room dimensions</span></label>
       <label><input type="checkbox" checked={showProductDimensions} onChange={(e) => setShowProductDimensions(e.target.checked)} /><span>Product dimensions</span></label>
       <label><input type="checkbox" checked={showSpacingDimensions} onChange={(e) => setShowSpacingDimensions(e.target.checked)} /><span>Item spacing</span></label>
+      <div className="view-options-section sun-angle-section">
+        <strong>Lighting mood</strong>
+        <label><span>Starting point</span><select aria-label="Lighting mood" value="" onChange={(event) => {
+          const mood = LIGHTING_MOODS.find((candidate) => candidate.id === event.target.value);
+          if (mood) setRoomLighting(mood.lighting);
+        }}>
+          <option value="" disabled>Choose a mood…</option>
+          {LIGHTING_MOODS.map((mood) => <option key={mood.id} value={mood.id}>{mood.label}</option>)}
+        </select></label>
+        <small>Apply a mood, then adjust the light below.</small>
+        {LIGHTING_CONTROLS.map((control) => {
+          const value = normalizeLightingControls(lighting)[control.key];
+          const disabled = control.key.startsWith('ceiling') ? !lighting.enabled
+            : control.key === 'sunlightStrength' ? !hasWindow || !lighting.sunRaysEnabled : false;
+          return <div className="sun-angle-control" key={control.key}>
+            <div><span>{control.label}</span><output>{Math.round(value * 100)}%</output></div>
+            <input type="range" aria-label={control.label} min={control.min} max={control.max} step={control.step}
+              value={value} disabled={disabled} {...sunAngleEvents}
+              onChange={(event) => setRoomLighting({ [control.key]: Number(event.target.value) }, false)} />
+          </div>;
+        })}
+        <small>Warmth runs from cool to warm. Ambient fill controls the room’s background illumination.</small>
+      </div>
       <div className="view-options-section">
         <strong>Ceiling lighting</strong>
         <label><input type="checkbox" checked={lighting.enabled} onChange={(e) => setRoomLighting({ enabled: e.target.checked })} /><span>Room lights</span></label>
