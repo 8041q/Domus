@@ -95,14 +95,14 @@ button:disabled { cursor: default; opacity: .45; }
 .history-actions { display: flex; align-items: center; gap: 2px; }
 .project-menu-wrap { position: relative; }
 .project-menu-trigger svg:last-child { width: 13px; height: 13px; margin-left: 2px; }
-.project-menu { position: absolute; z-index: 30; top: calc(100% + 9px); right: 0; width: 230px; padding: 6px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); box-shadow: 0 14px 36px rgba(0,0,0,.14); }
+.project-menu { position: absolute; z-index: 30; top: calc(100% + 9px); right: 0; width: 270px; padding: 6px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); box-shadow: 0 14px 36px rgba(0,0,0,.14); }
 .project-menu button { width: 100%; min-height: 45px; display: flex; align-items: center; gap: 10px; border: 0; border-radius: 7px; background: transparent; padding: 6px 9px; text-align: left; cursor: pointer; }
 .project-menu button:hover { background: var(--accent); }
 .project-menu button:disabled { opacity: .5; cursor: default; }
 .project-menu button > svg { flex: 0 0 auto; width: 16px; height: 16px; color: var(--muted-foreground); }
 .project-menu button > span { display: grid; gap: 2px; }
-.project-menu strong { font-size: 11px; font-weight: 550; letter-spacing: var(--font-strong-spacing); }
-.project-menu small { color: var(--muted-foreground); font-size: 9px; line-height: 1.4; }
+.project-menu strong { font-size: 13px; font-weight: 550; letter-spacing: var(--font-strong-spacing); }
+.project-menu small { color: var(--muted-foreground); font-size: 11px; line-height: 1.4; }
 .project-menu-divider { display: block; height: 1px; margin: 5px 7px; background: var(--border); }
 
 .app-main { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
@@ -775,10 +775,42 @@ input[type="range"]:disabled { opacity: .45; }
 .circle-diameter-control { display: grid; gap: 8px; margin-top: 12px; }
 .opening-quick-add.circle-openings { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .project-details-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; }
-.project-details-dialog { width: min(600px, calc(100vw - 32px)); }
-.project-details-dialog .project-field { margin-top: 12px; }
-.project-details-dialog p { margin-bottom: 12px; }
-.project-details-dialog footer { margin-top: 16px; }
+.project-details-dialog { width: min(660px, calc(100vw - 32px)); padding: 20px; border-radius: 10px; }
+.project-details-dialog h2 { font-size: 17px; }
+.project-details-dialog .project-details-intro { margin: 4px 0 14px; font-size: 12px; }
+.project-details-sections { display: grid; gap: 12px; }
+.project-details-section { min-width: 0; margin: 0; padding: 0; border: 0; }
+.project-details-section + .project-details-section { border-top: 1px solid var(--border); padding-top: 12px; }
+.project-details-section legend { float: left; width: 100%; margin: 0 0 9px; padding: 0; font-size: 12px; font-weight: 600; color: var(--muted-foreground); }
+.project-details-section .project-notes-legend { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); }
+.project-details-section .project-details-grid { clear: both; }
+.project-details-dialog .project-field { margin-top: 0; }
+.project-details-dialog .project-details-grid { gap: 10px 16px; }
+.project-details-dialog .project-field { gap: 5px; font-size: 11px; }
+.project-details-dialog .project-field :is(input, select) { height: 34px; padding: 6px 9px; border-radius: 5px; background: var(--card); font-size: 12px; }
+.project-details-dialog .project-field textarea { min-height: 62px; padding: 7px 9px; border-radius: 5px; background: var(--card); font-size: 12px; }
+.project-details-dialog .project-field :is(input, select, textarea):focus { outline: 1px solid var(--foreground); outline-offset: 0; border-color: var(--foreground); }
+.project-details-dialog footer { position: sticky; bottom: -20px; margin-top: 18px; padding-block: 12px; background: var(--card); }
+.project-client-field { grid-column: 1 / -1; }
+.project-client-contacts { margin-top: 10px; }
+.project-contact-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 11px; font-weight: 600; }
+.project-contact-heading .ui-button { min-height: 30px; }
+.project-contact-row { display: grid; grid-template-columns: 1fr 1fr 1.25fr 32px; gap: 10px; align-items: end; margin-top: 10px; }
+.project-contact-remove { width: 32px; height: 34px; font-size: 20px; }
+@media (max-width: 480px) {
+  .project-contact-row { grid-template-columns: minmax(0, 1fr) 44px; padding-block: 10px; border-top: 1px solid var(--border); }
+  .project-contact-row .project-field { grid-column: 1; }
+  .project-contact-remove { grid-column: 2; grid-row: 1; width: 44px; }
+}
+.project-import-formats { display: grid; gap: 0; margin: 0; border-block: 1px solid var(--border); }
+.project-import-formats > div { padding: 14px 0; }
+.project-import-formats > div + div { border-top: 1px solid var(--border); }
+.project-import-formats dt { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 13px; font-weight: 600; }
+.project-import-formats dt span { color: var(--muted-foreground); font-size: 12px; font-weight: 400; }
+.project-import-formats dd { margin: 5px 0 0; color: var(--muted-foreground); font-size: 12px; line-height: 1.5; }
+.project-dialog .project-import-note { margin-bottom: 8px; color: var(--foreground); }
+.project-dialog .project-import-connection { margin: 0; font-size: 12px; }
+.saved-room-footer > .ui-button:first-child { margin-right: auto; }
 .project-notes { grid-column: 1 / -1; }
 .project-field textarea { width: 100%; resize: vertical; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--background); color: var(--foreground); font: inherit; font-weight: 400; letter-spacing: normal; }
 .project-field textarea:focus { outline: 2px solid var(--ring); outline-offset: 2px; }

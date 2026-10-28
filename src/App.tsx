@@ -93,7 +93,7 @@ export default function App() {
             <Button variant="ghost" size="icon" title="Undo (Ctrl/Cmd+Z)" aria-label="Undo" onClick={undo}><Icon name="undo" /></Button>
             <Button variant="ghost" size="icon" title="Redo (Ctrl/Cmd+Y)" aria-label="Redo" onClick={redo}><Icon name="redo" /></Button>
           </div>
-          <ProjectControls canExport={canExport} onExport={mode === 'plan' ? () => { void exportAction.current?.(); } : undefined}
+          <ProjectControls canExport={canExport} onExport={mode === 'plan' && canExport ? () => exportAction.current!() : undefined}
             onExportPdf={mode === 'plan' ? () => { void pdfAction.current?.(); } : undefined} />
         </div>
       </header>

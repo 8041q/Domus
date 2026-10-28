@@ -47,11 +47,19 @@ export interface RoomVertex extends Vec2 {
   id: string;
 }
 
+export interface ClientContact {
+  name: string;
+  phone: string;
+  email: string;
+}
+
 export interface ProjectDetails {
   company: string;
   companyContact: string;
   client: string;
+  /** Legacy single-field contact; normalized into clientContacts when present. */
   clientContact: string;
+  clientContacts?: ClientContact[];
   reference: string;
   preparedBy: string;
   revision?: string;

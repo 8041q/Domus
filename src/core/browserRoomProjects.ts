@@ -1,3 +1,4 @@
+import { readRoomGLB } from './roomGlb';
 import { OPENING_MODELS, architecturalRevision } from './architecturalRevisions';
 import { createId } from './id';
 import { RoomProjects, ROOM_DRAFT_KEY, ROOM_LIBRARY_KEY, type ProjectStatus } from './roomProjects';
@@ -134,7 +135,7 @@ export class BrowserRoomProjects {
         this.update({ name: document.name, activeId: room?.id ?? null, savedAt: room?.updatedAt ?? null });
       }
       this.update({ recoveries: drafts.filter(draft => draft.id !== this.tabId) });
-      if (!own && drafts.length && !this.state.warning) this.update({ warning: 'Recovery drafts are available under Project → Room storage.' });
+      if (!own && drafts.length && !this.state.warning) this.update({ warning: 'Recovery drafts are available under Project → Open saved room → Storage & recovery.' });
     } catch (error) { this.draftWritable = false; this.update({ warning: message(error) }); }
     this.update({ initialized: true, dirty: this.serialize() !== this.baseline });
     await this.storageInfo().catch(() => {});
@@ -229,7 +230,7 @@ export class BrowserRoomProjects {
       await this.database.commit(async stores => {
         const rooms = await requestValue(stores.rooms.getAll()) as StoredRoom[];
         const existing = rooms.find(room => room.id === id);
-        if (id && (!existing || existing.revision !== expected)) throw new Error('This room changed in another tab. Use Save as to keep both versions.');
+        if (id && (!existing || existing.revision !== expected)) throw new Error('This room changed in another tab. Choose Save and enter a different name to keep both versions.');
         if (rooms.some(room => room.id !== id && room.name.toLocaleLowerCase() === name.toLocaleLowerCase())) throw new Error('A room with this name already exists. Choose another name.');
         record = { id: id ?? createId(), name, createdAt: existing?.createdAt ?? now, updatedAt: now, revision: createId(), snapshot: prepared.document.snapshot, document: prepared.document };
         for (const asset of storedAssets) stores.assets.put(asset);
@@ -285,6 +286,7 @@ export class BrowserRoomProjects {
   async readFile(file: File): Promise<PreparedRoom> {
     if (file.size > 1024 ** 3) throw new Error('This room file exceeds the 1 GiB limit.');
     const header = new Uint8Array(await file.slice(0, 4).arrayBuffer());
+    if (header[0] === 0x67 && header[1] === 0x6c && header[2] === 0x54 && header[3] === 0x46) return { document: this.decode(await readRoomGLB(file)), assets: [] };
     if (header[0] === 0x50 && header[1] === 0x4b) {
       const prepared = await readRoomArchive(file); prepared.document = this.decode(prepared.document); return prepared;
     }
@@ -320,7 +322,7 @@ export class BrowserRoomProjects {
       const owner = id.replace(/^import:/, '');
       const discard = async () => this.database.commit(async stores => {
         const draft = await requestValue(stores.drafts.get(id)) as RecoveryDraft | undefined;
-        if (!draft || draft.updatedAt !== updatedAt) throw new Error('This draft changed. Reopen Room storage before discarding it.');
+        if (!draft || draft.updatedAt !== updatedAt) throw new Error('This draft changed. Reopen Storage & recovery before discarding it.');
         stores.drafts.delete(id);
       });
       if (typeof window !== 'undefined' && navigator.locks && owner !== this.tabId) {

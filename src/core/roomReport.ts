@@ -58,8 +58,9 @@ export type RoomReportData = ReturnType<typeof roomReportData>;
 /** One furniture inventory, followed by architectural measurements and recommendations. */
 export function renderRoomReport(data: RoomReportData, roomName: string, date: string, _views: ReportViewSummary[] = []): PdfSnapshot[] {
   const doc = new ReportDocument(roomName);
-  const populated = PROJECT_DETAIL_FIELDS.filter((field) => field.key !== 'notes' && data.details[field.key]);
+  const populated = PROJECT_DETAIL_FIELDS.filter((field) => field.key !== 'notes' && field.key !== 'clientContact' && data.details[field.key]);
   if (populated.length) { doc.section('Project', 150); for (const entry of populated) doc.field(entry.label, data.details[entry.key]!); }
+  if (data.details.clientContacts?.length) doc.table('Client contacts', ['Contact', 'Phone', 'Email'], [550, 450, 660], data.details.clientContacts.map(contact => [contact.name || '—', contact.phone || '—', contact.email || '—']));
   doc.section('Room'); doc.field('Shape and size', `${data.shape} · ${data.dimensions}`);
   doc.field('Floor area / perimeter', `${reportMetres(data.area)} m² · ${reportMetres(data.perimeter)} m`);
   doc.field('Finishes', data.finishes); doc.field('Baseboard', data.baseboard);

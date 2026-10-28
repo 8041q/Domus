@@ -199,31 +199,35 @@ Use **Project** in the header to manage rooms:
 
 - **New room** creates a named preset with a door and window. Circle rooms have
   a diameter input and slider; resizing preserves their circular shape and opening sizes.
-- **Save as** saves the current room under the entered name. Keep its name to
+- **Save** saves the current room under the entered name. Keep its name to
   update it, or enter a new name to keep a separate copy. Ctrl/Cmd+S opens this dialog;
   Ctrl/Cmd+Shift+S suggests a copy name.
-- **Open room** lists all rooms saved in this browser, with their last save time.
+- **Open saved room** lists all rooms saved in this browser, with their last save time.
   Each row has a delete icon with confirmation. Deleting the active saved room
   keeps your working layout open as an unsaved room.
-- **Download room** creates a small reference-only `.domus` JSON document. It
-  contains the layout, finishes, project details and exact published model revisions,
-  with no furniture model binaries. Send this file through any channel; the recipient
-  imports it into Domus with an internet connection to the same model library.
-- **Import room** also accepts legacy layout JSON and model-containing archives.
+- **Export room** creates one `.glb` file. Other 3D software opens its architecture,
+  doors/windows, materials and textures. Domus also reads the editable layout,
+  project details and exact furniture references embedded in the GLB metadata.
+  Furniture geometry is excluded. Send the same file to another user; reopening
+  furniture in Domus requires internet access to the same model library. Keep the
+  original exported file: another editor may discard the Domus metadata when resaving.
+- **Import room** explains accepted formats before choosing a file: Domus `.glb`,
+  older `.domus` files and layout JSON. Regular GLB models without Domus room data
+  are rejected without replacing the current room. It also accepts legacy model-containing archives.
   Embedded models are validated but never rendered or saved. Known asset hashes
   resolve to published revisions; unresolved items retain their data as placeholders.
-- **Room storage** shows browser/model usage, estimates additional storage and
+- **Storage & recovery** (inside Open saved room) shows browser/model usage and
   offers recovery drafts, discarding of closed-tab drafts, and cleanup of assets
   unreferenced by saves or drafts.
 
 New, Open and Import ask you to Save, Discard or Cancel when the current room has
 unsaved changes. Failed saves keep the current room and stop the replacement.
 Opening another room starts fresh undo history. Names cannot duplicate an existing
-saved room, and stale saves from another tab are rejected; use Save as to keep both.
+saved room, and stale saves from another tab are rejected; use Save to keep both.
 
 A debounced recovery draft restores the same tab's latest layout after reloading,
 including unsaved changes. Drafts are isolated by tab. A duplicated tab receives
-its own identity; drafts from other tabs are offered under Room storage. A changed layout also triggers the browser's leave-page warning.
+its own identity; drafts from other tabs are offered under Open saved room → Storage & recovery. A changed layout also triggers the browser's leave-page warning.
 Named saves and recovery drafts use IndexedDB transactions with revision checks.
 New saves contain references only. Old embedded assets remain until explicit cleanup.
 A failed connection or import leaves the current room intact. Missing individual
@@ -231,9 +235,9 @@ revisions retain item positions and dimensions with a warning; they are never si
 replaced by the newest catalogue item. Clearing site data removes local saves and
 recovery drafts; keep downloaded room files as backups. Cloud backup is not provided.
 
-**Project → Export Room** downloads architecture only as GLB: walls, floor,
-baseboards, doors/windows, ceiling, materials and textures. Placed furniture is
-excluded, regardless of visibility or selection. PDF reports retain furniture.
+**Project → Export room** includes architectural GLB geometry: walls, floor,
+baseboards, doors/windows, ceiling, materials and textures. Placed furniture geometry is
+excluded, regardless of visibility or selection. Furniture references remain in the editable room metadata. PDF reports retain furniture.
 There is no private staff workflow or furniture-containing GLB export.
 
 ### Publishing and hosting
@@ -281,9 +285,12 @@ trusted loopback-only developer tools. Published display geometry remains
 extractable by old or modified browsers. Masters are protected by their absence
 from the deployment; public display URLs and room references remain compatible.
 
-**Project → Project details** edits optional company/client names and contacts,
-project reference, preparer, revision, status, room purpose, site/department and notes. These details are kept with saves,
-recovery drafts and draft imports/exports; use Save as to persist changes.
+**Project → Project details** edits the project name, revision, status, preparer,
+room purpose, site, company and client information, and notes. Clients can be
+companies or individuals, with multiple named contacts and separate phone/email
+fields. Use + Add contact and the minus button to manage contacts; older single-field
+contacts are retained when opening existing rooms. These details are kept with saves,
+recovery drafts and draft imports/exports; use Save to persist changes.
 
 **Project → Export to PDF** starts with a room summary, project details,
 furniture quantities and entered real-life dimensions, opening sizes and notes.
@@ -340,7 +347,7 @@ open planners. For preview or a different port, pass the server URL:
 - Most catalogue furniture uses procedural placeholder models and sample prices.
   GLBs in `private/models/` are processed locally. Public hosting requires the runtime
   and durable published library; a static-only deployment cannot resolve room files.
-- Saved rooms are local to one browser origin; portable `.domus` files are the backup and transfer mechanism. Browser storage is not an external backup.
+- Saved rooms are local to one browser origin; portable Domus `.glb` files are the backup and transfer mechanism. Browser storage is not an external backup.
 - The renderer requires a browser with WebGL support.
 - AI assistance is experimental, furniture-only, non-streaming, and intended
   for trusted local use. A static `dist` deployment does not provide its API

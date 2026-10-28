@@ -1,5 +1,5 @@
+import { readExportedRoom } from './roomFile';
 import { test, expect, type Page } from '@playwright/test';
-import { readFile } from 'node:fs/promises';
 
 type Vertex = { id: string; x: number; z: number };
 type Opening = { id: string; wallId: string; width: number; height: number };
@@ -9,8 +9,11 @@ const roomSheet = (page: Page) => page.locator('[data-sheet="room"]');
 async function layout(page: Page): Promise<RoomSnapshot> {
   const download = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Project', exact: true }).tap();
-  await page.getByRole('menuitem', { name: /^Download room/ }).tap();
-  return JSON.parse(await readFile((await (await download).path())!, 'utf8')).snapshot;
+  await page.getByRole('menuitem', { name: /^Export room/ }).tap();
+  const document = await readExportedRoom((await (await download).path())!);
+  await expect(page.locator('.loading-status')).toHaveCount(0);
+  await expect(page.locator('.app-shell')).not.toHaveAttribute('data-loading-locked', 'true');
+  return document.snapshot;
 }
 
 async function expandRoom(page: Page) {

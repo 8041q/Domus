@@ -1,3 +1,4 @@
+import { readExportedRoom } from './roomFile';
 import { test, expect, type Page } from '@playwright/test';
 import { readFile, writeFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
@@ -18,17 +19,20 @@ async function plan(page: Page) {
   await expect(page.locator('canvas')).toBeVisible();
 }
 async function save(page: Page, name: string) {
-  await menu(page, /^Save as/);
+  await menu(page, /^Save/);
   await expect(page.locator('.project-progress')).toHaveCount(0);
   await page.getByRole('textbox', { name: 'Room name', exact: true }).fill(name);
-  await page.getByRole('button', { name: 'Save as', exact: true }).click();
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.locator('.project-progress')).toHaveCount(0);
   await expect(page.locator('.project-status')).toContainText(name);
   await expect(page.locator('.project-status')).toContainText('Saved in this browser');
 }
 async function layout(page: Page) {
-  const downloaded = page.waitForEvent('download'); await menu(page, /^Download room/);
-  return JSON.parse(await readFile((await (await downloaded).path())!, 'utf8')).snapshot;
+  const downloaded = page.waitForEvent('download'); await menu(page, /^Export room/);
+  const document = await readExportedRoom((await (await downloaded).path())!);
+  await expect(page.locator('.loading-status')).toHaveCount(0);
+  await expect(page.locator('.app-shell')).not.toHaveAttribute('data-loading-locked', 'true');
+  return document.snapshot;
 }
 
 test('room editing, typed values, named saving, undo and recovery survive reload', async ({ page }) => {
@@ -56,7 +60,7 @@ test('reference room reopens its retained model after the source is removed', as
   await page.getByRole('button', { name: /^fixture-bed/ }).click();
   await save(page, 'Portable fixture');
   const downloadEvent = page.waitForEvent('download');
-  await menu(page, /^Download room/);
+  await menu(page, /^Export room/);
   await expect(page.locator('.project-progress')).toHaveCount(0);
   const download = await downloadEvent; const filename = await download.path(); expect(filename).toBeTruthy();
   const { root } = JSON.parse(await readFile(path.join(os.tmpdir(), 'domus-browser-5199.json'), 'utf8'));
@@ -94,7 +98,7 @@ test('malformed imports preserve the active room and unsaved-change dialogs prot
 
 test('PDF retains furniture while GLB exports architecture only and preserves the editor', async ({ page }, testInfo) => {
   await ready(page); await plan(page); await page.getByRole('button', { name: /^3-seat sofa/ }).click();
-  for (const [action, signature] of [[/^Export Room/, 'glTF'], [/^Export to PDF/, '%PDF']] as const) {
+  for (const [action, signature] of [[/^Export room/, 'glTF'], [/^Export to PDF/, '%PDF']] as const) {
     const downloaded = page.waitForEvent('download'); await menu(page, action);
     const download = await downloaded;
     const filename = testInfo.outputPath(signature === '%PDF' ? 'room-report.pdf' : 'room.glb');
@@ -184,12 +188,12 @@ test('duplicated tabs get independent recovery identities and cannot overwrite s
   const other = await opened;
   await expect(other.getByRole('button', { name: 'Project', exact: true })).toBeEnabled();
   expect(await other.evaluate(() => sessionStorage.getItem('domus-tab-id'))).not.toBe(await page.evaluate(() => sessionStorage.getItem('domus-tab-id')));
-  await menu(other, /^Open room/); await other.getByRole('button', { name: /^Two tabs/ }).click();
+  await menu(other, /^Open saved room/); await other.getByRole('button', { name: /^Two tabs/ }).click();
   await expect(other.locator('.project-status')).toContainText('Two tabs');
   await page.getByLabel('Room height in metres').fill('3.00'); await save(page, 'Two tabs');
   await other.getByLabel('Room height in metres').fill('3.10');
-  await menu(other, /^Save as/); await expect(other.locator('.project-progress')).toHaveCount(0);
-  await other.getByRole('button', { name: 'Save as', exact: true }).click();
+  await menu(other, /^Save/); await expect(other.locator('.project-progress')).toHaveCount(0);
+  await other.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(other.getByRole('alert')).toContainText('another tab');
   await other.close();
 });

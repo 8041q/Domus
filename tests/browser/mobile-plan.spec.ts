@@ -1,5 +1,5 @@
+import { readExportedRoom } from './roomFile';
 import { test, expect, type CDPSession, type Page } from '@playwright/test';
-import { readFile } from 'node:fs/promises';
 
 type Point = { x: number; y: number };
 type Finger = Point & { id: number };
@@ -15,9 +15,12 @@ async function ready(page: Page) {
 async function layout(page: Page) {
   const downloaded = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Project', exact: true }).tap();
-  await page.getByRole('menuitem', { name: /^Download room/ }).tap();
+  await page.getByRole('menuitem', { name: /^Export room/ }).tap();
   const filename = await (await downloaded).path();
-  return JSON.parse(await readFile(filename!, 'utf8')).snapshot;
+  const document = await readExportedRoom(filename!);
+  await expect(page.locator('.loading-status')).toHaveCount(0);
+  await expect(page.locator('.app-shell')).not.toHaveAttribute('data-loading-locked', 'true');
+  return document.snapshot;
 }
 
 async function frame(page: Page) {
@@ -116,6 +119,7 @@ test('a second finger cancels a 2D edit before navigation and preserves history 
     await canvas.evaluate(element => { element.dataset.mobileCanvasIdentity = 'same-canvas'; });
     await page.setViewportSize({ width: 844, height: 390 });
     await expect(canvas).toHaveAttribute('data-mobile-canvas-identity', 'same-canvas');
+    await expect.poll(async () => { const bounds = (await canvas.boundingBox())!; return bounds.y + bounds.height; }).toBeLessThanOrEqual(391);
     const bounds = (await canvas.boundingBox())!;
     expect(bounds.y).toBeGreaterThanOrEqual(0); expect(bounds.y + bounds.height).toBeLessThanOrEqual(391);
     await page.screenshot({ path: testInfo.outputPath('phone-plan-landscape.png') });

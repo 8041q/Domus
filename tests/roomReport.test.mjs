@@ -479,3 +479,34 @@ test('a failed PDF capture restores camera, render size, helper visibility and c
   assert.equal(scene.controls.enableDamping, true); assert.equal(scene.helperGroup.visible, true); assert.equal(scene.currentCameraView, 'free');
   assert.deepEqual(renderer.size, [800, 600]); assert.equal(renderer.ratio, 2);
 });
+
+test('client contact lists migrate old text, validate new entries and respect explicit removals', () => {
+  for (const [legacy, key] of [['Jane Smith — Project lead', 'name'], ['jane@example.test', 'email'], ['+351 210 000 000', 'phone']]) {
+    const details = normalizeProjectDetails({ clientContact: legacy });
+    assert.equal(details.clientContacts[0][key], legacy);
+    assert.equal(details.clientContact, '');
+    assert.deepEqual(normalizeProjectDetails(details), details);
+  }
+  assert.deepEqual(normalizeProjectDetails({ clientContact: 'Old contact', clientContacts: [] }).clientContacts, []);
+  assert.deepEqual(normalizeProjectDetails({ clientContacts: [{ name: '', phone: '', email: '' }] }).clientContacts, []);
+  assert.throws(() => normalizeProjectDetails({ clientContacts: [{ email: 'invalid email' }] }), /email/);
+  assert.throws(() => normalizeProjectDetails({ clientContacts: Array(21).fill({ name: 'Contact' }) }), /contacts/);
+  assert.throws(() => normalizeProjectDetails({ clientContacts: [null] }), /contact/);
+  assert.throws(() => normalizeProjectDetails({ clientContacts: [{ phone: '1'.repeat(81) }] }), /phone/);
+});
+
+test('PDF report includes the project name, site and separate client people, phones and emails', () => {
+  const snapshot = emptyRoomSnapshot();
+  snapshot.room.projectDetails = normalizeProjectDetails({ reference: 'Hospital expansion', location: 'Lisbon', client: 'Example Client Ltd', clientContacts: [
+    { name: 'Jane Smith', phone: '+351 210 000 000', email: 'jane@example.test' },
+    { name: 'Accounts', email: 'accounts@example.test' }
+  ] });
+  const canvases = [], previousDocument = globalThis.document;
+  globalThis.document = { createElement() { const canvas = recordingCanvas(); canvas.toDataURL = () => 'data:image/jpeg;base64,/9j/2Q=='; canvases.push(canvas); return canvas; } };
+  try {
+    renderRoomReport(roomReportData(snapshot, {}), 'Contact report', '2026-10-28');
+    const text = canvases.flatMap(canvas => canvas.operations.filter(op => op.kind === 'text').map(op => op.text)).join('\n');
+    for (const value of ['Hospital expansion', 'Site', 'Lisbon', 'Example Client Ltd', 'Client contacts', 'Jane Smith', '+351 210 000 000', 'jane@example.test', 'Accounts', 'accounts@example.test']) assert.ok(text.includes(value), value);
+    assert.ok(!text.includes('Project reference')); assert.ok(!text.includes('Site / department'));
+  } finally { globalThis.document = previousDocument; }
+});

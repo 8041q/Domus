@@ -1,3 +1,4 @@
+import { readExportedRoom } from './roomFile';
 import { test, expect, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 
@@ -14,8 +15,11 @@ async function project(page: Page, action: RegExp) {
 }
 async function snapshot(page: Page) {
   const result = page.waitForEvent('download');
-  await project(page, /^Download room/);
-  return JSON.parse(await readFile((await (await result).path())!, 'utf8')).snapshot;
+  await project(page, /^Export room/);
+  const document = await readExportedRoom((await (await result).path())!);
+  await expect(page.locator('.loading-status')).toHaveCount(0);
+  await expect(page.locator('.app-shell')).not.toHaveAttribute('data-loading-locked', 'true');
+  return document.snapshot;
 }
 async function expand(page: Page, id: string) {
   const sheet = page.locator(`[data-sheet="${id}"]`);
@@ -80,18 +84,18 @@ test('phone project files, local saves and Back dismissal preserve the current w
   await page.goBack();
   await expect(page.locator('.mobile-sheet')).toHaveCount(0);
   await expect(navigation(page)).toBeVisible();
-  await project(page, /^Save as/);
+  await project(page, /^Save/);
   await expect(page.locator('.project-progress')).toHaveCount(0);
   await page.getByRole('textbox', { name: 'Room name', exact: true }).fill('Phone room');
-  await page.getByRole('button', { name: 'Save as', exact: true }).click();
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(page.locator('.project-status')).toContainText('Saved in this browser');
   await page.reload();
   await expect(page.locator('.project-status')).toContainText('Phone room');
-  await project(page, /^Open room/);
+  await project(page, /^Open saved room/);
   await page.getByRole('button', { name: /^Phone room/ }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.locator('.project-status')).toContainText('Phone room');
-  const download = page.waitForEvent('download'); await project(page, /^Download room(?! layout)/);
+  const download = page.waitForEvent('download'); await project(page, /^Export room(?! layout)/);
   await expect(page.locator('.project-progress')).toHaveCount(0);
   const file = await (await download).path(); expect(file).toBeTruthy();
   await page.getByLabel('Import Domus draft').setInputFiles(file!);
@@ -100,6 +104,7 @@ test('phone project files, local saves and Back dismissal preserve the current w
   const before = await snapshot(page);
   await page.getByLabel('Import Domus draft').setInputFiles({ name: 'bad.json', mimeType: 'application/json', buffer: Buffer.from('{"broken":true}') });
   await expect(page.getByRole('alert')).toBeVisible();
+  await page.getByRole('dialog', { name: 'Import room', exact: true }).getByRole('button', { name: 'Cancel', exact: true }).click();
   expect(await snapshot(page)).toEqual(before);
 });
 
@@ -110,7 +115,7 @@ test('phone project actions export PDF and GLB while retaining furniture and can
   const catalogue = await expand(page, 'catalogue');
   await catalogue.getByRole('button', { name: /^3-seat sofa/ }).click();
   const before = await snapshot(page);
-  for (const [action, signature] of [[/^Export Room/, 'glTF'], [/^Export to PDF/, '%PDF']] as const) {
+  for (const [action, signature] of [[/^Export room/, 'glTF'], [/^Export to PDF/, '%PDF']] as const) {
     const downloaded = page.waitForEvent('download'); await project(page, action);
     const file = await (await downloaded).path();
     expect((await readFile(file!)).subarray(0, 4).toString()).toBe(signature);

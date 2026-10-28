@@ -1,14 +1,14 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import type { SavedRoom } from './core/roomProjects';
 import type { RoomShapeKind } from './core/types';
 import { roomProjects, useRoomProjects } from './roomProjects';
 import { Button, Icon, type IconName } from './ui';
 import { usePlannerStore } from './store';
 import { lockLoadingInteraction } from './core/loadingInteraction';
-import { normalizeProjectDetails, PROJECT_DETAIL_FIELDS, PROJECT_STATUSES } from './core/projectDetails';
+import { MAX_CLIENT_CONTACTS, normalizeProjectDetails, PROJECT_DETAIL_FIELDS, PROJECT_STATUSES } from './core/projectDetails';
 import { useCompactWorkspace, useMobileBack, useMobileWorkspace, type MobileSheetSize } from './mobileWorkspace';
 
-type DialogKind = 'new' | 'save' | 'open' | 'guard' | 'delete' | 'details' | 'storage';
+type DialogKind = 'new' | 'save' | 'open' | 'guard' | 'delete' | 'details' | 'storage' | 'import';
 function ProjectDialog({ title, onCancel, children, className = '' }: { title: string; onCancel: () => void; children: ReactNode; className?: string }) {
   const compact = useCompactWorkspace();
   useMobileBack(onCancel, compact);
@@ -33,7 +33,7 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'The action could not be completed. Your current room has been kept.';
 }
 
-export function ProjectControls({ canExport, onExport, onExportPdf }: { canExport: boolean; onExport?: () => void; onExportPdf?: () => void }) {
+export function ProjectControls({ canExport, onExport, onExportPdf }: { canExport: boolean; onExport?: () => Promise<void>; onExportPdf?: () => void }) {
   const compact = useCompactWorkspace();
   const project = useRoomProjects();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -46,10 +46,22 @@ export function ProjectControls({ canExport, onExport, onExportPdf }: { canExpor
   const [deleteTarget, setDeleteTarget] = useState<SavedRoom | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const [importFromSaved, setImportFromSaved] = useState(false);
   const [details, setDetails] = useState(() => normalizeProjectDetails(null));
   const menuRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const contactListRef = useRef<HTMLDivElement>(null);
+  const pendingContactFocus = useRef<number | null>(null);
   const pending = useRef<(() => void | Promise<void>) | null>(null);
+
+  useLayoutEffect(() => {
+    const index = pendingContactFocus.current;
+    if (index === null) return;
+    pendingContactFocus.current = null;
+    if (index < 0) contactListRef.current?.querySelector<HTMLButtonElement>('.project-contact-add')?.focus();
+    else contactListRef.current?.querySelectorAll('input')[index * 3]?.focus();
+  }, [details.clientContacts?.length]);
 
   useEffect(() => {
     if (!notice) return;
@@ -90,13 +102,14 @@ export function ProjectControls({ canExport, onExport, onExportPdf }: { canExpor
     try { await action(); } catch (failure) { setError(errorMessage(failure)); }
   };
   useEffect(() => {
-    if (!project.busy) return;
+    if (!project.busy && !exporting) return;
     const root = document.querySelector<HTMLElement>('.app-shell');
     if (root) return lockLoadingInteraction(root);
-  }, [project.busy]);
+  }, [project.busy, exporting]);
 
   const cancel = () => {
     if (dialog === 'delete') { setDeleteTarget(null); setDialog('open'); }
+    else if (dialog === 'storage' || dialog === 'import' && importFromSaved) { setDialog('open'); }
     else { pending.current = null; setDialog(null); }
     setError('');
   };
@@ -121,7 +134,7 @@ export function ProjectControls({ canExport, onExport, onExportPdf }: { canExpor
   const save = (copy = false) => {
     setMenuOpen(false); setError('');
     setName(copy ? `${roomProjects.getState().name} copy`.slice(0, 80) : roomProjects.getState().name);
-    setAsCopy(copy); setDialog('save'); void run(() => roomProjects.inspect());
+    setAsCopy(copy); setDialog('save');
   };
   const downloadLayout = () => {
     const url = URL.createObjectURL(new Blob([roomProjects.exportFile()], { type: 'application/json' }));
@@ -131,13 +144,17 @@ export function ProjectControls({ canExport, onExport, onExportPdf }: { canExpor
     setMenuOpen(false);
   };
   const download = async () => {
-    await run(async () => {
-      const blob = await roomProjects.exportArchive();
-      const url = URL.createObjectURL(blob), link = document.createElement('a');
-      link.href = url; link.download = `${project.name.replace(/[^\p{L}\p{N} _-]/gu, '').trim() || 'room'}.domus`;
-      link.click(); setTimeout(() => URL.revokeObjectURL(url), 30_000); setMenuOpen(false);
-    });
+    if (exporting) return;
+    setExporting(true);
+    try { await run(async () => {
+      if (onExport) await onExport();
+      else {
+        const { exportRoomDocument } = await import('./renderer/exportRoom');
+        await exportRoomDocument(JSON.parse(roomProjects.exportFile()));
+      }
+    }); } finally { setExporting(false); }
   };
+  const openImport = (fromSaved = false) => { setImportFromSaved(fromSaved); setError(''); setDialog('import'); };
   const bytes = (value: number) => value < 1024 * 1024 ? `${(value / 1024).toFixed(1)} KB` : `${(value / (1024 * 1024)).toFixed(1)} MB`;
   const menuItem = (icon: IconName, title: string, description: string, action: () => void, disabled = false) => <button type="button" role="menuitem" disabled={disabled} onClick={() => { setMenuOpen(false); setError(''); action(); }}>
     <Icon name={icon} /><span><strong>{title}</strong><small>{description}</small></span>
@@ -147,14 +164,12 @@ export function ProjectControls({ canExport, onExport, onExportPdf }: { canExpor
     {menuItem('folder', 'Project details', 'Company, client and PDF information', () => {
       setDetails(normalizeProjectDetails(usePlannerStore.getState().room.projectDetails)); setDialog('details');
     })}
-    {menuItem('save', 'Save as', 'Save or name a copy · Ctrl/Cmd+S', () => save())}
-    {menuItem('folder', 'Open room', 'Choose a saved room', () => { void run(async () => { await roomProjects.refreshRooms(); setDialog('open'); }); })}
+    {menuItem('save', 'Save', 'Save in this browser · Ctrl/Cmd+S', () => save())}
+    {menuItem('folder', 'Open saved room', 'Rooms saved in this browser', () => { void run(async () => { await roomProjects.refreshRooms(); setDialog('open'); }); })}
     <span className="project-menu-divider" role="separator" />
-    {menuItem('download', 'Download room', 'Editable room references · internet required to reopen', () => { void download(); })}
+    {menuItem('download', 'Export room', 'GLB · reopen in Domus or other 3D software', () => { void download(); })}
 
-    {menuItem('folder', 'Room storage', 'Local usage, recovery drafts and legacy asset cleanup', () => { setDialog('storage'); void run(() => roomProjects.storageInfo()); })}
-    {menuItem('folder', 'Import room', 'Open a Domus room or legacy layout', () => fileRef.current?.click())}
-    {onExport && <><span className="project-menu-divider" role="separator" />{menuItem('cube', 'Export Room', 'Room architecture and finishes only · no furniture', onExport, !canExport)}</>}
+    {menuItem('folder', 'Import room', 'Domus .glb or older .domus / .json files', () => openImport())}
     {onExportPdf && menuItem('download', 'Export to PDF', 'Project summary, furniture and five room views', onExportPdf, !canExport)}
   </>;
 
@@ -174,44 +189,82 @@ export function ProjectControls({ canExport, onExport, onExportPdf }: { canExpor
         <div className="mobile-project-body" role="menu" aria-label="Project actions" hidden={menuSize === 'peek'}>{menuContent}</div>
       </section> : <div className="project-menu" role="menu" aria-label="Project actions">{menuContent}</div>)}
     </div>
-    <input ref={fileRef} type="file" accept=".domus,.json,application/json,application/zip" hidden aria-label="Import Domus draft" onChange={async (event) => {
+    <input ref={fileRef} type="file" accept=".glb,.domus,.json,model/gltf-binary,application/json,application/zip" hidden aria-label="Import Domus draft" onChange={async (event) => {
       const file = event.target.files?.[0]; event.target.value = '';
       if (!file) return;
       try {
         const imported = await roomProjects.readFile(file);
         replace(() => roomProjects.importRoom(imported));
-      } catch (failure) { setError(errorMessage(failure)); }
+      } catch (failure) { setError(errorMessage(failure)); setDialog('import'); }
     }} />
-    {dialog && <ProjectDialog className={dialog === 'details' ? 'project-details-dialog' : ''} title={dialog === 'storage' ? 'Room storage and backup' : dialog === 'details' ? 'Project details' : dialog === 'new' ? 'New room' : dialog === 'save' ? 'Save as' : dialog === 'open' ? 'Open room' : dialog === 'delete' ? 'Delete saved room?' : 'Save your changes?'} onCancel={cancel}>
+    {dialog && <ProjectDialog className={dialog === 'details' ? 'project-details-dialog' : ''} title={dialog === 'import' ? 'Import room' : dialog === 'storage' ? 'Storage & recovery' : dialog === 'details' ? 'Project details' : dialog === 'new' ? 'New room' : dialog === 'save' ? 'Save' : dialog === 'open' ? 'Open saved room' : dialog === 'delete' ? 'Delete saved room?' : 'Save your changes?'} onCancel={cancel}>
       {project.busy && <p role="status">{project.busy}</p>}
-      {dialog === 'storage' ? <>
-        <p>Room files contain references, not models. Reopening requires access to the Domus server.</p>
-        <dl className="project-storage"><dt>Legacy model assets</dt><dd>{bytes(project.assetBytes)}</dd><dt>Browser storage used</dt><dd>{bytes(project.storageBytes)}</dd>
+      {dialog === 'import' ? <>
+        <p className="project-import-intro">Choose a room file exported from Domus.</p>
+        <dl className="project-import-formats">
+          <div><dt>Domus room <span>.glb</span></dt><dd>Editable room with architecture and furniture references.</dd></div>
+          <div><dt>Older room files <span>.domus · .json</span></dt><dd>Room files saved by previous versions of Domus.</dd></div>
+        </dl>
+        <p className="project-import-note">A regular GLB model cannot be imported as a room. It must contain Domus room data. Your current room stays open if a file is rejected.</p>
+        <p className="project-import-connection">An internet connection is needed to retrieve furniture.</p>
+        {error && <p className="project-error" role="alert">{error}</p>}
+        <footer><Button variant="outline" onClick={cancel}>Cancel</Button><Button data-project-focus onClick={() => fileRef.current?.click()}><Icon name="folder" />Choose room file</Button></footer>
+      </> : dialog === 'storage' ? <>
+        <p>Manage data kept in this browser and recover work from other tabs. Use Export room in Project to keep a portable backup.</p>
+        <dl className="project-storage"><dt>Browser storage used</dt><dd>{bytes(project.storageBytes)}</dd>
           {project.storageQuota > 0 && <><dt>Browser storage allowance</dt><dd>{bytes(project.storageQuota)}</dd></>}
-          <dt>Additional model storage (reference-only)</dt><dd>{bytes(project.additionalBytes)}</dd><dt>Room file estimate</dt><dd>{bytes(project.packageBytes)}</dd></dl>
+          <dt>Older model data</dt><dd>{bytes(project.assetBytes)}</dd></dl>
         <p>Clearing browser data removes local saves. Keep a portable room file as a backup.</p>
         {project.recoveries.length > 0 && <><h3>Recovery drafts from other tabs</h3>{project.recoveries.map(draft => <div key={draft.id} className="project-recovery-row"><Button variant="outline" onClick={() => replace(() => roomProjects.restoreDraft(draft.id))}>Recover {draft.document.name}</Button>
           <Button variant="ghost" aria-label={`Discard recovery for ${draft.document.name}`} onClick={() => {
             if (window.confirm(`Discard the recovery draft for ${draft.document.name}? This cannot be undone.`)) void run(() => roomProjects.discardRecovery(draft.id, draft.updatedAt));
           }}>Discard</Button></div>)}</>}
         {error && <p className="project-error" role="alert">{error}</p>}
-        <footer><Button variant="outline" onClick={() => { void run(() => roomProjects.cleanUnusedAssets()); }}>Clean unused models</Button><Button variant="outline" onClick={cancel}>Close</Button><Button onClick={() => { void download(); }}>Download room</Button></footer>
+        <footer><Button variant="outline" onClick={() => { void run(() => roomProjects.cleanUnusedAssets()); }}>Remove unused model data</Button><Button onClick={cancel}>Back to saved rooms</Button></footer>
       </> : dialog === 'details' ? <form onSubmit={(event) => {
         event.preventDefault(); setError('');
         try { usePlannerStore.getState().updateProjectDetails(details);
-          setDialog(null); setNotice('Project details updated. Use Save as to save the room.');
+          setDialog(null); setNotice('Project details updated. Use Save to keep your changes.');
         } catch (failure) { setError(errorMessage(failure)); }
       }}>
-        <p>Optional details included in the shared PDF and saved with this room.</p>
-        <div className="project-details-grid">
-          {PROJECT_DETAIL_FIELDS.map((field) => <label key={field.key} className={`project-field ${field.key === 'notes' ? 'project-notes' : ''}`}>{field.label}
+        <p className="project-details-intro">Optional information for saved rooms and PDF reports.</p>
+        <div className="project-details-sections">
+        {[
+          { title: 'Project', keys: ['reference', 'revision', 'status', 'preparedBy'] },
+          { title: 'Room', keys: ['roomPurpose', 'location'] },
+          { title: 'Company & client', keys: ['company', 'companyContact', 'client'] },
+          { title: 'Notes', keys: ['notes'] },
+        ].map(section => <fieldset className="project-details-section" key={section.title}>
+          <legend className={section.title === 'Notes' ? 'project-notes-legend' : undefined}>{section.title}</legend>
+          <div className="project-details-grid">
+          {PROJECT_DETAIL_FIELDS.filter(field => section.keys.includes(field.key)).sort((a, b) => section.keys.indexOf(a.key) - section.keys.indexOf(b.key)).map((field) => <label key={field.key} className={`project-field ${field.key === 'notes' ? 'project-notes' : field.key === 'client' ? 'project-client-field' : ''}`}>{field.label}
             {field.key === 'status' ? <select value={details.status ?? ''} onChange={(event) => setDetails({ ...details, status: event.target.value })}>
               {PROJECT_STATUSES.map((status) => <option key={status} value={status}>{status || 'Not set'}</option>)}
             </select> : field.key === 'notes' ? <textarea rows={3} maxLength={field.maxLength} value={details[field.key]}
               onChange={(event) => setDetails({ ...details, [field.key]: event.target.value })} /> :
-              <input data-project-focus={field.key === 'company' ? true : undefined} maxLength={field.maxLength}
+              <input data-project-focus={field.key === 'reference' ? true : undefined} maxLength={field.maxLength} placeholder={field.key === 'client' ? 'Company or individual' : undefined}
                 value={details[field.key]} onChange={(event) => setDetails({ ...details, [field.key]: event.target.value })} />}
           </label>)}
+          </div>
+          {section.title === 'Company & client' && <div className="project-client-contacts" ref={contactListRef}>
+            <div className="project-contact-heading"><span>Client contacts</span><Button className="project-contact-add" variant="ghost" size="sm" disabled={(details.clientContacts?.length ?? 0) >= MAX_CLIENT_CONTACTS} onClick={() => {
+              const count = details.clientContacts?.length ?? 0;
+              pendingContactFocus.current = count;
+              setDetails({ ...details, clientContacts: [...(details.clientContacts ?? []), { name: '', phone: '', email: '' }] });
+            }}><Icon name="plus" />Add contact</Button></div>
+            {(details.clientContacts ?? []).map((contact, index) => <div className="project-contact-row" role="group" aria-label={`Client contact ${index + 1}`} key={index}>
+              {(['name', 'phone', 'email'] as const).map(key => <label className="project-field" key={key}>{key === 'name' ? 'Contact name' : key === 'phone' ? 'Phone' : 'Email'}
+                <input type={key === 'email' ? 'email' : key === 'phone' ? 'tel' : 'text'} maxLength={key === 'email' ? 254 : key === 'phone' ? 80 : 180} autoComplete="off"
+                  value={contact[key]} onChange={event => setDetails({ ...details, clientContacts: details.clientContacts?.map((value, i) => i === index ? { ...value, [key]: event.target.value } : value) })} />
+              </label>)}
+              <Button className="project-contact-remove" variant="ghost" size="icon" aria-label={`Remove client contact ${index + 1}`} title="Remove contact" onClick={() => {
+                pendingContactFocus.current = -1;
+                setDetails({ ...details, clientContacts: details.clientContacts?.filter((_, i) => i !== index) });
+              }}><span aria-hidden="true">−</span></Button>
+            </div>)}
+            {(details.clientContacts?.length ?? 0) >= MAX_CLIENT_CONTACTS && <p>Maximum {MAX_CLIENT_CONTACTS} contacts.</p>}
+          </div>}
+        </fieldset>)}
         </div>
         {error && <p className="project-error" role="alert">{error}</p>}
         <footer><Button variant="outline" onClick={cancel}>Cancel</Button><Button type="submit">Apply details</Button></footer>
@@ -222,23 +275,23 @@ export function ProjectControls({ canExport, onExport, onExportPdf }: { canExpor
       }}>
         <p>{dialog === 'new' ? 'Choose a name and starting shape. Adjust dimensions in the 2D builder.' : 'Keep the current name to update this room, or choose a new name to save a separate copy.'}</p>
         <label className="project-field">Room name<input data-project-focus autoFocus required maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Living room" /></label>
-        {dialog === 'save' && <p>Room file: approximately {bytes(project.packageBytes)}. Models are retrieved from the server when reopening.</p>}
+        {dialog === 'save' && <p>Saved in this browser on this device. To transfer it, use Export room.</p>}
         {dialog === 'new' && <label className="project-field">Starting shape<select value={shape} onChange={(event) => setShape(event.target.value as typeof shape)}>
           <option value="rectangle">Rectangle</option><option value="rounded-rectangle">Rounded rectangle</option><option value="circle">Circle</option><option value="angled-corner">Angled corner</option><option value="l-shape">L shape</option><option value="recess">Recess</option>
         </select></label>}
         {error && <p className="project-error" role="alert">{error}</p>}
-        <footer><Button variant="outline" onClick={cancel}>Cancel</Button><Button type="submit"><Icon name={dialog === 'new' ? 'plus' : 'save'} />{dialog === 'new' ? 'Create room' : 'Save as'}</Button></footer>
+        <footer><Button variant="outline" onClick={cancel}>Cancel</Button><Button type="submit"><Icon name={dialog === 'new' ? 'plus' : 'save'} />{dialog === 'new' ? 'Create room' : 'Save'}</Button></footer>
       </form> : dialog === 'open' ? <>
-        <p>Rooms saved in this browser. Import a draft to open a backup.</p>
+        <p>Choose a room saved on this device, or import a room file from another device.</p>
         <div className="saved-room-list">{project.rooms.length ? [...project.rooms].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map((room) => <div key={room.id} className="saved-room-row">
           <button type="button" className="saved-room-select" onClick={() => replace(() => roomProjects.open(room.id))}>
             <Icon name="folder" /><span><strong>{room.name}</strong><small>{new Date(room.updatedAt).toLocaleString()}{room.id === project.activeId ? ' · Current room' : ''}</small></span><span className="saved-room-open">Open<Icon name="chevronRight" /></span>
           </button>
           <Button variant="ghost" size="icon" className="saved-room-delete" aria-label={`Delete ${room.name}`} title={`Delete ${room.name}`}
             onClick={() => { setDeleteTarget(room); setError(''); setDialog('delete'); }}><Icon name="trash" /></Button>
-        </div>) : <div className="saved-room-empty"><Icon name="folder" /><strong>No saved rooms yet</strong><span>Use Save as to keep your first room.</span></div>}</div>
+        </div>) : <div className="saved-room-empty"><Icon name="folder" /><strong>No saved rooms yet</strong><span>Use Save to keep your first room.</span></div>}</div>
         {error && <p className="project-error" role="alert">{error}</p>}
-        <footer><Button variant="outline" onClick={() => fileRef.current?.click()}>Import room</Button><Button onClick={cancel}>Close</Button></footer>
+        <footer className="saved-room-footer"><Button variant="ghost" onClick={() => { setDialog('storage'); void run(() => roomProjects.storageInfo()); }}><Icon name="settings" />Storage & recovery</Button><Button variant="outline" onClick={() => openImport(true)}>Import room</Button><Button onClick={cancel}>Close</Button></footer>
       </> : dialog === 'delete' && deleteTarget ? <>
         <p>Delete <strong>{deleteTarget.name}</strong> from this browser's saved rooms? This cannot be undone.</p>
         {deleteTarget.id === project.activeId && <p>The room you're editing will stay open as an unsaved room.</p>}
@@ -255,8 +308,8 @@ export function ProjectControls({ canExport, onExport, onExportPdf }: { canExpor
         <footer><Button variant="outline" onClick={cancel}>Cancel</Button><Button variant="secondary" onClick={() => { void run(finishPending); }}>Discard changes</Button><Button onClick={() => save()}>Save changes</Button></footer>
       </>}
     </ProjectDialog>}
-    {!dialog && (error || project.warning) && <div className="project-warning" role="alert"><span>{error || project.warning}</span><Button variant="outline" size="sm" onClick={downloadLayout}>Download layout</Button>{error && <Button variant="ghost" size="icon" aria-label="Dismiss error" onClick={() => setError('')}><Icon name="x" /></Button>}</div>}
-    {project.busy && <div className="project-progress loading-status" role="status" aria-live="polite">{project.busy}</div>}
+    {!dialog && !menuOpen && (error || project.warning) && <div className="project-warning" role="alert"><span>{error || project.warning}</span><Button variant="outline" size="sm" onClick={downloadLayout}>Download layout</Button>{error && <Button variant="ghost" size="icon" aria-label="Dismiss error" onClick={() => setError('')}><Icon name="x" /></Button>}</div>}
+    {(project.busy || exporting) && <div className="project-progress loading-status" role="status" aria-live="polite">{project.busy || 'Preparing room file…'}</div>}
     {notice && <div className="toast" role="status"><Icon name="check" />{notice}</div>}
   </>;
 }

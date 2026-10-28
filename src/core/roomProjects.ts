@@ -106,7 +106,7 @@ export class RoomProjects {
     const rooms = this.readRooms();
     const id = asCopy ? null : this.state.activeId;
     const existing = rooms.find((room) => room.id === id);
-    if (id && (!existing || existing.revision !== this.revision)) throw new Error('This room changed in another tab. Use Save as to keep both versions.');
+    if (id && (!existing || existing.revision !== this.revision)) throw new Error('This room changed in another tab. Choose Save and enter a different name to keep both versions.');
     if (rooms.some((room) => room.id !== id && room.name.toLocaleLowerCase() === name.toLocaleLowerCase())) throw new Error('A room with this name already exists. Choose another name.');
     const snapshot = this.adapter.decode(this.adapter.snapshot());
     if (!snapshot) throw new Error('The room contains invalid geometry and could not be saved.');

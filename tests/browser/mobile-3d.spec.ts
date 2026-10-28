@@ -1,12 +1,15 @@
+import { readExportedRoom } from './roomFile';
 import { test, expect, type Page } from '@playwright/test';
-import { readFile } from 'node:fs/promises';
 import { PerspectiveCamera, Vector3 } from 'three';
 
 async function layout(page: Page) {
   const downloaded = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Project', exact: true }).tap();
-  await page.getByRole('menuitem', { name: /^Download room/ }).tap();
-  return JSON.parse(await readFile((await (await downloaded).path())!, 'utf8')).snapshot;
+  await page.getByRole('menuitem', { name: /^Export room/ }).tap();
+  const document = await readExportedRoom((await (await downloaded).path())!);
+  await expect(page.locator('.loading-status')).toHaveCount(0);
+  await expect(page.locator('.app-shell')).not.toHaveAttribute('data-loading-locked', 'true');
+  return document.snapshot;
 }
 
 test('phone 3D editing commits one touch drag and rolls it back when a second finger takes over', async ({ browser, browserName }) => {

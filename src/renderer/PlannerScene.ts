@@ -1,3 +1,5 @@
+import { embedRoomDocumentGLB } from '../core/roomGlb';
+import type { RoomDocumentV2 } from '../core/projectDocument';
 import { activeArchitecture } from '../core/activeArchitecture';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -804,9 +806,10 @@ export class PlannerScene {
     return hasContent ? itemRoot : null;
   }
 
-  async exportGLB(filename = 'domus-room.glb') {
+  async exportGLB(filename = 'domus-room.glb', roomDocument?: RoomDocumentV2) {
     // Give the active finish maps a chance to arrive before GLTFExporter serialises
     // the floor material. Failed requests resolve too, so export never hangs offline.
+    await this.openingModels.whenReady();
     await Promise.all([this.floorTextureReady, ...this.spaceFloorReady]);
     if (this.disposed) throw new Error('The 3D view closed while preparing the export.');
     // Export semantic data, not the current Cutaway view. Camera cutaways,
@@ -851,7 +854,9 @@ export class PlannerScene {
     });
     if (!(result instanceof ArrayBuffer)) throw new Error('GLB export did not return binary data.');
 
-    const blob = new Blob([result], { type: 'model/gltf-binary' });
+    const binary = roomDocument ? embedRoomDocumentGLB(result, roomDocument) : result;
+    if (roomDocument) filename = `${roomDocument.name.replace(/[^\p{L}\p{N} _-]/gu, '').trim() || 'room'}.glb`;
+    const blob = new Blob([binary], { type: 'model/gltf-binary' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;

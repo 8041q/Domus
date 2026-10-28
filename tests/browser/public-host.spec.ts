@@ -1,3 +1,4 @@
+import { readExportedRoom } from './roomFile';
 import { test, expect, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 
@@ -23,12 +24,14 @@ test('master-free public release supports transfer, approved-model extraction, a
     await expect(page.locator('.loading-status')).toHaveCount(0);
     await page.getByRole('button', { name: /^fixture-bed/ }).click();
     await expect(page.locator('.loading-status')).toHaveCount(0);
-    await menu(page, /^Save as/); await page.getByRole('textbox', { name: 'Room name', exact: true }).fill('Public transfer');
-    await page.getByRole('button', { name: 'Save as', exact: true }).click();
+    await menu(page, /^Save/); await page.getByRole('textbox', { name: 'Room name', exact: true }).fill('Public transfer');
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
-    const downloaded = page.waitForEvent('download'); await menu(page, /^Download room/);
-    const file = await (await downloaded).path();
-    const document = JSON.parse(await readFile(file!, 'utf8'));
+    const downloaded = page.waitForEvent('download'); await menu(page, /^Export room/);
+    const transfer = await downloaded;
+    expect(transfer.suggestedFilename()).toMatch(/\.glb$/);
+    const file = await transfer.path();
+    const document = await readExportedRoom(file!);
     expect(document.version).toBe(3); expect(document.products[0].hash).toBeNull();
     expect(document.snapshot.objects).toHaveLength(1);
     const other = await fresh.newPage(); await other.goto(origin);
@@ -37,7 +40,7 @@ test('master-free public release supports transfer, approved-model extraction, a
     await expect(other.locator('.project-status')).toContainText('Public transfer');
     await other.getByRole('navigation', { name: 'Phone workspace' }).getByRole('button', { name: 'Furniture', exact: true }).click();
     await expect(other.locator('.loading-status')).toHaveCount(0);
-    for (const [action, signature] of [[/^Export Room/, 'glTF'], [/^Export to PDF/, '%PDF']] as const) {
+    for (const [action, signature] of [[/^Export room/, 'glTF'], [/^Export to PDF/, '%PDF']] as const) {
       const event = other.waitForEvent('download'); await menu(other, action);
       const name = info.outputPath(signature === 'glTF' ? 'public-architecture.glb' : 'public-report.pdf'); await (await event).saveAs(name);
       const bytes = await readFile(name); expect(bytes.subarray(0, 4).toString()).toBe(signature);

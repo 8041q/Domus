@@ -61,7 +61,7 @@ export function Viewport3D({
     if (!sceneRef.current || exportingRef.current) return;
     exportingRef.current = true; setExportingGlb(true);
     try {
-      await sceneRef.current.exportGLB();
+      await sceneRef.current.exportGLB(undefined, JSON.parse(roomProjects.exportFile()));
     } catch (error) {
       console.error('Failed to export GLB', error);
       window.alert('Could not export the room. See the browser console for details.');

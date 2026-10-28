@@ -30,6 +30,7 @@ export function fitOpeningModel(model: THREE.Group, variant: OpeningVariant, wid
 export class OpeningModelLibrary {
   private templates = new Map<string, THREE.Group>();
   private pending = new Set<string>();
+  private requests = new Set<Promise<void>>();
   private failed = new Set<string>();
   private disposed = false;
 
@@ -49,7 +50,7 @@ export class OpeningModelLibrary {
     if (template) return fitOpeningModel(this.models.instantiate(template), opening.variant, opening.width, height);
     if (!this.pending.has(url)) {
       this.pending.add(url);
-      void this.models.loadModel(url).then(template => {
+      const request = this.models.loadModel(url).then(template => {
         if (this.disposed) return;
         this.templates.set(url, template);
         this.ready(url);
@@ -57,10 +58,13 @@ export class OpeningModelLibrary {
         if (this.disposed) return;
         this.failed.add(url);
         console.warn(`Could not load architectural insert ${url}; keeping the generated fallback.`, error);
-      }).finally(() => this.pending.delete(url));
+      }).finally(() => { this.pending.delete(url); this.requests.delete(request); });
+      this.requests.add(request);
     }
     return null;
   }
+
+  async whenReady() { while (this.requests.size) await Promise.all(this.requests); }
 
   dispose() {
     this.disposed = true;

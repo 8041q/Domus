@@ -350,14 +350,14 @@ They are distinct from the live file catalogue, and stay pinned until the room i
 closed. Catalogue deletion and the disposable server optimization cache cannot
 remove the blobs held by saved records or recovery drafts.
 
-Portable `.domus` ZIP files hold `room.json` and `assets/<sha256>.glb`. Imports
+Legacy `.domus` ZIP files hold `room.json` and `assets/<sha256>.glb`. Imports
 validate document/geometry, filenames, sizes, embedded resources and content
 hashes before replacing work. Portable files have a 1 GiB limit; JSON documents
 have a 16 MiB limit. Layouts support up to 2,000 placed and 2,000 unplaced items,
 512 perimeter vertices/dividers/spaces, and 1,000 openings. Layout-only JSON
 continues to use the version 1 envelope and requires separately available models.
 
-The production runtime uses the same catalogue and experimental AI handlers as
+The local built runtime uses the same catalogue and experimental AI handlers as
 Vite. It serves built assets only, pins its port, validates local Host and browser
 Origin headers, and allows WebAssembly without enabling general script eval.
 The optimizer and catalogue use separate process locks. Builds scan the catalogue
@@ -372,7 +372,7 @@ lifetime Web Lock prevents deleting another active tab's recovery.
 
 ## Reference documents and public model delivery
 
-New `.domus` downloads and local records use document version 3 with a `domus`
+Unified `.glb` exports and local records use document version 3 with a `domus`
 catalogue namespace. Product identities combine a stable catalogue UUID and immutable
 revision hash covering the viewing binary and product metadata. Opening references
 pin published asset hashes. No model binaries or arbitrary fetch URLs are activated
@@ -383,7 +383,7 @@ Publishing is a local build operation. Furniture publication accepts only the
 approved `public/optimized-models` pipeline output with the expected profile,
 byte count and SHA-256 digest. Paths and symlinks cannot escape the output directory;
 missing or damaged derivatives fail publication without falling back to masters.
-New GLBs lose arbitrary authoring extras and furniture object/material names.
+Published display GLBs lose arbitrary authoring extras and furniture object/material names.
 Architectural names remain for material handling and segmented door/window resizing.
 Public product metadata uses an explicit allowlist for dimensions, collision,
 interaction and presentation fields.
@@ -408,3 +408,22 @@ remain accessible to older rooms and clients. Public meshes can be recovered by
 modified clients; the protection boundary is that masters never enter the public
 deployment. Architecture GLB export always excludes the Furniture category; PDF
 rendering and in-app furniture remain unchanged. There is no privileged export mode.
+
+
+## Unified room GLB
+
+The Project menu has one Export room action. Standard GLB geometry contains only
+architecture, openings and finishes. `asset.extras.domusRoom` contains the validated
+version 3 room document, including placed/unplaced furniture references and project
+details. No furniture meshes or model binaries are embedded. A normal GLB reader
+can load the architectural geometry; Domus restores editing from the metadata and
+resolves published furniture online. Old JSON/`.domus`/ZIP imports remain supported.
+A GLB without Domus metadata is rejected as a room import. Geometry and arbitrary
+GLB URLs are never loaded when importing: only bounded, validated room metadata is
+activated. Other software can discard extras when resaving, so the original GLB
+is the portable editable document.
+
+The 2D builder exports through an on-demand offscreen architecture renderer, which
+is disposed afterward without replacing the visible canvas, selection or camera.
+The mounted planner uses its existing renderer. Export waits for architectural
+inserts and finish textures, and snapshot metadata uses pinned published revisions.
