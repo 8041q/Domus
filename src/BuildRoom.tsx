@@ -693,8 +693,9 @@ export function BuildRoom() {
                 <button type="button" className={buildView === '3d' ? 'active' : ''} onClick={() => { setDividerTool(null); setBuildView('3d'); }} aria-pressed={buildView === '3d'}>3D</button>
               </div>
             </div>
+            {compact && buildView === '3d' && <button className="floating-reset-view" type="button" aria-label="Reset view" title="Reset view" onClick={() => setResetViewRequest((value) => value + 1)}><Icon name="rotateLeft" /></button>}
           </div>
-          {buildView === '3d' && <button className="floating-reset-view" type="button" onClick={() => setResetViewRequest((value) => value + 1)}><Icon name="rotateLeft" />Reset view</button>}
+          {!compact && buildView === '3d' && <button className="floating-reset-view" type="button" onClick={() => setResetViewRequest((value) => value + 1)}><Icon name="rotateLeft" />Reset view</button>}
 
           {buildView === 'plan' ? <Plan2D purpose="build" dividerTool={FEATURES.interiorWalls ? dividerTool : null} onDividerAdded={() => setDividerTool(null)} /> : (
             <div className="builder-3d-selection-surface">

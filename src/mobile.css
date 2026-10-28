@@ -28,11 +28,11 @@ body:has(.app-shell.is-compact) { overflow: hidden; overscroll-behavior: none; }
 .is-compact .designer-stage { height: 100%; min-height: 0; }
 .is-compact .viewport, .is-compact .plan-stage canvas { min-height: 0; height: 100%; }
 .is-compact .interaction-status, .is-compact .plan-help { display: none; }
-.is-compact .workspace-toolbar { top: 8px; left: 8px; transform: none; width: auto; max-width: calc(100% - 16px); min-height: 44px; padding: 3px; }
+.is-compact .workspace-toolbar { top: 8px; left: 8px; transform: none; width: calc(100% - 16px); max-width: calc(100% - 16px); min-height: 44px; padding: 3px; }
 .is-compact .workspace-toolbar-copy, .is-compact .workspace-area-badge { display: none; }
 .is-compact .workspace-toolbar-actions { gap: 5px; }
 .is-compact .segmented-control button { min-width: 44px; min-height: 44px; padding: 8px; font-size: 13px; }
-.is-compact .floating-reset-view { top: 8px; right: 8px; min-height: 44px; padding-inline: 10px; font-size: 12px; }
+.is-compact .floating-reset-view { position: static; flex: 0 0 44px; width: 44px; height: 44px; min-height: 44px; padding: 0; }
 .is-compact .plan-view-controls { top: 64px; right: 8px; gap: 3px; }
 .is-compact .plan-view-controls button { min-width: 44px; min-height: 44px; font-size: 21px; }
 .is-compact .plan-view-controls .plan-fit-button { font-size: 12px; }
@@ -42,7 +42,7 @@ body:has(.app-shell.is-compact) { overflow: hidden; overscroll-behavior: none; }
 .mobile-canvas-toolbar > * { pointer-events: auto; }
 .mobile-canvas-toolbar button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 44px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 9px; background: rgba(255,255,255,.96); color: var(--foreground); box-shadow: 0 2px 8px #0000000b; font: inherit; font-size: 12px; font-weight: 550; }
 .mobile-canvas-toolbar button[aria-pressed="true"] { background: var(--muted); }
-.mobile-view-menu { position: absolute; top: 50px; right: 0; max-height: min(420px, calc(var(--workspace-height, 100dvh) - 185px)); width: min(270px, calc(100vw - 32px)); display: grid; padding: 5px; border: 1px solid var(--border); border-radius: 12px; overflow-y: auto; background: var(--card); box-shadow: 0 10px 35px #0002; }
+.mobile-view-menu { position: absolute; top: 50px; left: 0; max-height: min(420px, calc(var(--workspace-height, 100dvh) - 185px)); width: min(270px, calc(100vw - 32px)); display: grid; padding: 5px; border: 1px solid var(--border); border-radius: 12px; overflow-y: auto; background: var(--card); box-shadow: 0 10px 35px #0002; }
 .mobile-view-menu button { box-shadow: none; border-color: transparent; justify-content: flex-start; width: 100%; }
 .mobile-sheet { position: absolute; z-index: 40; inset-inline: 6px; bottom: 0; display: flex; flex-direction: column; min-width: 0; max-height: calc(100% - 8px); min-height: 64px; border: 1px solid var(--border); border-bottom: 0; border-radius: 17px 17px 0 0; background: var(--card); box-shadow: 0 -8px 30px #00000015; overflow: hidden; }
 .mobile-sheet-peek { height: 64px; }
@@ -104,6 +104,7 @@ body:has(.app-shell.is-compact) { overflow: hidden; overscroll-behavior: none; }
 .is-compact .project-menu strong { font-size: 14px; }
 .is-compact .project-menu small { font-size: 12px; }
 .is-compact:has(.mobile-project-sheet, dialog[open]) .mobile-sheet { visibility: hidden; }
+.is-compact:has(.mobile-view-menu) .mobile-sheet { visibility: hidden; }
 .is-compact .mobile-project-sheet { display: flex; flex-direction: column; padding: 0; height: 48%; min-height: 180px; max-height: calc(var(--workspace-height, 100dvh) - 70px); overflow: hidden; }
 .is-compact .mobile-project-sheet[data-size="peek"] { height: 64px; min-height: 64px; }
 .is-compact .mobile-project-sheet[data-size="expanded"] { height: calc(var(--workspace-height, 100dvh) - var(--mobile-nav-height) - 64px); }

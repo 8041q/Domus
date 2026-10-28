@@ -524,6 +524,8 @@ export function PlanRoom({ onExportReady, onPdfExportReady }: {
   useMobileBack(() => setMobileViewOpen(false), compact && mobileViewOpen);
   const lastSelection = useRef(selectedId);
 
+  useEffect(() => { setMobileViewOpen(false); }, [compact, mobileTask]);
+
   useEffect(() => {
     if (!mobileViewOpen) return;
     const closeOutside = (event: PointerEvent) => { if (!(event.target as Element | null)?.closest?.('.mobile-canvas-toolbar')) setMobileViewOpen(false); };

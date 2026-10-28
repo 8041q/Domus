@@ -24,12 +24,18 @@ export function MobileSheet({ id, title, children }: { id: MobileSheetId; title:
   useEffect(() => { if (active && body.current) body.current.scrollTop = 0; }, [active]);
   if (!compact || !active) return null;
   const sizes: MobileSheetSize[] = ['peek', 'half', 'expanded'];
-  const changeSize = () => setSize(size === 'peek' ? 'half' : size === 'half' ? 'expanded' : 'peek');
+  const resize = (next: MobileSheetSize) => {
+    // A swipe does not move focus like a button tap. Commit drafts and dismiss
+    // the software keyboard before hiding or moving the focused field.
+    if (document.activeElement instanceof HTMLElement && body.current?.contains(document.activeElement)) document.activeElement.blur();
+    setSize(next);
+  };
+  const changeSize = () => resize(size === 'peek' ? 'half' : size === 'half' ? 'expanded' : 'peek');
   const sheet = <aside className={`mobile-sheet mobile-sheet-${size}`} role="region" aria-label={`${title} tools`} data-sheet={id}>
     <header className="mobile-sheet-heading">
       <button type="button" className="mobile-sheet-handle" aria-label={`${size === 'expanded' ? 'Collapse' : 'Expand'} ${title} tools`}
-        aria-expanded={size !== 'peek'} onClick={() => { if (dragged.current) { dragged.current = false; return; } changeSize(); }}
-        onPointerDown={event => { if (event.button !== 0) return; drag.current = { id: event.pointerId, y: event.clientY }; event.currentTarget.setPointerCapture(event.pointerId); }}
+        aria-expanded={size !== 'peek'} onClick={event => { if (dragged.current && event.detail !== 0) { dragged.current = false; return; } changeSize(); }}
+        onPointerDown={event => { if (event.button !== 0) return; dragged.current = false; drag.current = { id: event.pointerId, y: event.clientY }; event.currentTarget.setPointerCapture(event.pointerId); }}
         onPointerUp={event => {
           const start = drag.current; drag.current = null;
           if (start?.id !== event.pointerId) return;
@@ -37,10 +43,10 @@ export function MobileSheet({ id, title, children }: { id: MobileSheetId; title:
           if (Math.abs(distance) > 24) {
             event.preventDefault();
             dragged.current = true;
-            setSize(sizes[Math.max(0, Math.min(2, sizes.indexOf(size) + (distance < 0 ? 1 : -1)))]);
+            resize(sizes[Math.max(0, Math.min(2, sizes.indexOf(size) + (distance < 0 ? 1 : -1)))]);
           }
           if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-        }} onPointerCancel={() => { drag.current = null; }}>
+        }} onPointerCancel={() => { drag.current = null; dragged.current = false; }}>
         <span className="mobile-sheet-grip" /><strong>{title}</strong><small>{size === 'peek' ? 'Tap for tools' : 'Drag or tap to resize'}</small>
       </button>
       <button type="button" className="mobile-sheet-close" aria-label={`Close ${title} tools`} onClick={close}><Icon name="x" /></button>
