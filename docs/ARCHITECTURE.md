@@ -11,24 +11,25 @@ middleware plugin adds experimental AI routes to Vite's development and preview
 servers. The shared UI and semantic CSS tokens have no component-framework
 dependency.
 
-The local production server is compiled from `server/index.ts`. IndexedDB stores
+The public server is compiled from `server/index.ts`; the trusted loopback-only
+developer runtime is compiled separately from `server/local.ts`. IndexedDB stores
 room documents, compact asset binaries, per-tab drafts and migration metadata. There
 is no authentication layer,
 physics engine, runtime-validation library, or provider SDK. The AI gateway uses
 native `fetch` and fixed provider endpoints.
 
-The model catalogue plugin scans `public/models/` and its subfolders. It reads
+The local model catalogue plugin scans `private/models/` and its subfolders
+(legacy `public/models/` sources are relocated before publishing). It reads
 GLB metadata and transformed geometry, assigns persistent UUIDs in
 `model-catalogue.json`, and exposes the result as `virtual:domus-models` for builds
 and `/api/model-catalogue` for dev/preview. Development file-watcher events update
 the shared catalogue store without replacing room state; preview refreshes via
 the API. `npm run models:rescan -- [server-url]` calls
 `POST /api/model-catalogue/rescan`, bypasses file timestamp caching, and publishes
-the result through the same serialized importer. Missing files lose their
-definitions and aliases; only retired UUIDs remain to prevent reuse. Client
-cleanup runs before view subscribers: deleted-model instances are removed from
-live rooms and history, and renderer asset caches are released. Saved-room
-imports filter missing references. A re-added or renamed file receives a new ID.
+the result through the same serialized importer. Missing files leave the active
+catalogue, while published revisions remain available to saved rooms. Unresolved
+references retain their placement and dimensions with a warning. A re-added or
+renamed file receives a new ID.
 Physical dimensions
 come from geometry; optional display dimensions are confined to catalogue and
 selection UI. The Blender add-on and server share `blender_addon/catalogue_schema.json`.
@@ -378,9 +379,32 @@ pin published asset hashes. No model binaries or arbitrary fetch URLs are activa
 from project files. Legacy archives are validated and matched by approved binary hash,
 otherwise retained as unresolved metadata. Migration never deletes legacy browser blobs.
 
-Publishing moves masters outside public assets and copies only derivatives to
-`.domus-published`. Published revisions outlive processing cache expiry and catalogue
-retirement. Public runtime reads the durable catalogue without scanning source files;
-maintenance routes and source routes are unavailable. Deployments must back up and
-retain this directory. Architecture GLB export always excludes the Furniture category;
-PDF rendering and in-app furniture remain unchanged. There is no privileged export mode.
+Publishing is a local build operation. Furniture publication accepts only the
+approved `public/optimized-models` pipeline output with the expected profile,
+byte count and SHA-256 digest. Paths and symlinks cannot escape the output directory;
+missing or damaged derivatives fail publication without falling back to masters.
+New GLBs lose arbitrary authoring extras and furniture object/material names.
+Architectural names remain for material handling and segmented door/window resizing.
+Public product metadata uses an explicit allowlist for dimensions, collision,
+interaction and presentation fields.
+
+Published revisions in `.domus-published` outlive processing cache expiry and
+catalogue retirement. `npm run package:public -- /new/destination` builds the app
+and creates a deployment containing only `dist`, the durable published library,
+one bundled `server.mjs` and `release.json`. Packaging strips legacy source
+provenance from metadata and retains every published revision. No masters,
+processing caches, publishing tools or runtime dependencies are copied.
+
+The public entry point imports no scanner, optimizer or publisher. Before listening
+it validates the exact release inventory, every asset checksum, self-contained GLBs,
+metadata and catalogue references. Extra files and symlinks fail startup. Local mode
+and local provider endpoint configuration are refused. Runtime serves only validated
+files; a file descriptor/stat check rejects assets changed after startup. Source,
+maintenance and arbitrary filesystem routes are unavailable. The local developer
+entry point and Vite refuse public mode and non-loopback hosting.
+
+Back up and retain the full published library between builds. Versioned endpoints
+remain accessible to older rooms and clients. Public meshes can be recovered by
+modified clients; the protection boundary is that masters never enter the public
+deployment. Architecture GLB export always excludes the Furniture category; PDF
+rendering and in-app furniture remain unchanged. There is no privileged export mode.

@@ -92,7 +92,7 @@ can propose operations; other models remain useful for advice-only chat.
 
 ## Known experimental limits
 
-- `npm start` supplies the local gateway. Static `dist` hosting alone does not
+- `npm run start:local` supplies the local gateway. Static `dist` hosting alone does not
   expose `/api/ai/*`. Cross-origin browser requests and non-JSON POSTs are rejected.
 - There is no authentication, rate limiting, streaming, audit log, or multi-user
   credential isolation.

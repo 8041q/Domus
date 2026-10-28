@@ -121,10 +121,10 @@ Build and run the supported local release with:
 
 ```bash
 npm run build
-npm start
+npm run start:local
 ```
 
-`npm start` serves the built app and its catalogue/experimental AI routes at
+`npm run start:local` serves the built app and its catalogue/experimental AI routes at
 `http://localhost:5173`. It binds only to a loopback address and refuses an occupied
 port. Keep the same hostname and port to retain access to the same browser saves.
 `npm run preview` remains a build-preview tool. Use `npm run dev` for source editing.
@@ -138,7 +138,8 @@ npx playwright install chromium firefox webkit
 npm run test:e2e
 ```
 
-Browser checks build the app and run an isolated production server on port 5199.
+Browser checks build the app and run an isolated local server on port 5199 and a
+master-free public deployment on port 5200.
 Generated fixtures replace private model files; tests do not scan your model
 folder, rewrite your registry, or open your normal saved rooms. CI runs the same
 checks on Node 24. Optional checks against private architectural GLBs remain
@@ -245,14 +246,40 @@ opening revisions and the active catalogue live in `.domus-published/`; back up
 this entire directory and retain it across deployments. Retirement removes an item
 from new placement, while previous room references remain usable indefinitely.
 
-Deploy `dist/`, `server-dist/`, dependencies and `.domus-published/`. Do **not** deploy
-`private/` or processing caches. Run behind an HTTPS reverse proxy preserving the
-configured Host, for example `DOMUS_PUBLIC=1 DOMUS_ORIGIN=https://planner.example.com
-npm start -- --host 0.0.0.0`. Public mode reads only the published catalogue, disables
-model maintenance endpoints and local Ollama access, and requires no user accounts.
-Vite development is local-only; it is not a public hosting server. Published viewing
-geometry remains extractable from a browser; these measures protect masters and
-remove convenient model-containing downloads, rather than provide DRM.
+Build a clean public deployment on the workstation that holds the masters:
+
+```bash
+npm run package:public -- /path/to/new-release
+```
+
+The destination must not exist. The command builds and publishes automatically,
+then copies only the app, all retained display revisions, public metadata, a
+self-contained `server.mjs` and a checksummed `release.json` inventory. Private
+sources, processing caches, local maintenance tools and Node dependencies are
+excluded. Transfer only this package to the public server; do not deploy the
+workspace or `server-dist/local.mjs`.
+
+Run from the packaged directory using Node 24, behind an HTTPS reverse proxy that
+preserves the configured Host:
+
+```bash
+cd /path/to/new-release
+DOMUS_ORIGIN=https://planner.example.com node server.mjs --host 0.0.0.0 --port 5173
+```
+
+Startup validates the complete inventory and published library before listening.
+Unexpected files, symlinks, missing assets, damaged assets or local-only settings
+cause startup to fail. Keep the deployment read-only and place logs, environment
+files and uploads outside it. Repair failed releases by rebuilding the package.
+Retain the workstation's full `.domus-published/` library when preparing future
+releases so older rooms keep their exact revisions.
+
+The public entry point has no source scanner, optimizer or maintenance handlers;
+it cannot switch to local mode. `npm start` now selects the public entry point and
+refuses an unpackaged workspace; use `start:local` for local work. Vite and `start:local` are
+trusted loopback-only developer tools. Published display geometry remains
+extractable by old or modified browsers. Masters are protected by their absence
+from the deployment; public display URLs and room references remain compatible.
 
 **Project → Project details** edits optional company/client names and contacts,
 project reference, preparer, revision, status, room purpose, site/department and notes. These details are kept with saves,

@@ -1,3 +1,4 @@
+import { sha256, publicDisplayGLB } from './asset-safety.mjs';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises';
@@ -10,7 +11,7 @@ import { MeshoptDecoder, MeshoptEncoder, MeshoptSimplifier } from 'meshoptimizer
 import { withFileLock } from './file-lock.mjs';
 import { modelCacheExpired } from './model-cache.mjs';
 
-export const OPTIMIZER_VERSION = 5;
+export const OPTIMIZER_VERSION = 8;
 
 function stabilizePositions(document) {
   const seen = new Set();
@@ -104,11 +105,11 @@ export async function optimizeModel(input, output) {
     }
   }
   const after = modelStats(document);
-  const binary = await io.writeBinary(document);
+  const binary = publicDisplayGLB(await io.writeBinary(document));
   await mkdir(path.dirname(output), { recursive: true });
   await writeFile(output + '.tmp', binary);
   await rename(output + '.tmp', output);
-  return { before: { ...before, bytes: (await stat(input)).size }, after: { ...after, bytes: binary.byteLength } };
+  return { profile: 'public-display-v1', before: { ...before, bytes: (await stat(input)).size }, after: { ...after, bytes: binary.byteLength, sha256: sha256(binary) } };
 }
 
 export async function optimizeModels(root = process.cwd(), options = {}) {
@@ -167,7 +168,7 @@ async function optimizeModelsUnlocked(root, { onError } = {}) {
       if (manifest.models[file]?.sourceFingerprint === sourceFingerprint) {
         try {
           const info = await stat(output);
-          if (info.isFile() && info.size === manifest.models[file].after?.bytes && manifest.models[file].url === `/optimized-models/${filename}`) {
+          if (info.isFile() && info.size === manifest.models[file].after?.bytes && manifest.models[file].after?.sha256 && manifest.models[file].profile === 'public-display-v1' && manifest.models[file].url === `/optimized-models/${filename}`) {
             console.log(`${file}: optimized asset is current`); continue;
           }
         }
@@ -209,7 +210,7 @@ async function optimizeModelsUnlocked(root, { onError } = {}) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const optional = process.argv.includes('--optional');
-  const onError = optional ? (error, file) => console.warn(`${file}: using source model; optimization failed: ${error.message}`) : undefined;
+  const onError = optional ? (error, file) => console.warn(`${file}: not published; optimization failed: ${error.message}`) : undefined;
   try { await optimizeModels(process.cwd(), { onError }); }
   catch (error) { console.error(`Model optimization failed: ${error.message}`); process.exitCode = optional ? 0 : 1; }
 }

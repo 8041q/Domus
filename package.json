@@ -16,6 +16,9 @@
     "test": "node --test tests/*.test.mjs",
     "typecheck": "tsc -p tsconfig.app.json --incremental false && tsc -p tsconfig.node.json --incremental false --composite false",
     "start": "node server-dist/index.mjs",
+    "start:local": "node server-dist/local.mjs",
+    "prepackage:public": "npm run build",
+    "package:public": "node scripts/package-public.mjs",
     "test:e2e": "playwright test",
     "check": "npm run typecheck && npm test && npm run build",
     "pretest:e2e": "npm run build"

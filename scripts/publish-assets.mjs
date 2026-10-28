@@ -1,3 +1,4 @@
+import { publicDisplayGLB, validateGLB } from './asset-safety.mjs';
 import { createHash } from 'node:crypto';
 import { mkdir, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -27,7 +28,8 @@ for (const file of files.filter(file => /^[a-z_]+\.glb$/.test(file))) {
   // Material names also drive glass/frame repairs; do not deduplicate materials
   // whose exported shader values match but whose architectural roles differ.
   await document.transform(meshopt({ encoder: MeshoptEncoder, level: 'medium' }));
-  const bytes = await io.writeBinary(document), hash = createHash('sha256').update(bytes).digest('hex');
+  const bytes = publicDisplayGLB(await io.writeBinary(document), { preserveNames: true }); validateGLB(Buffer.from(bytes));
+  const hash = createHash('sha256').update(bytes).digest('hex');
   revisions[file] = hash;
   const output = path.join(root, '.domus-published/openings', `${hash}-${file}`);
   await writeFile(output + '.tmp', bytes); await rename(output + '.tmp', output);

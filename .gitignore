@@ -26,3 +26,5 @@ model-catalogue.json.*.tmp
 
 /private/
 /.domus-published/
+
+/release/

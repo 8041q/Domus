@@ -1,3 +1,4 @@
+import { sha256 } from '../scripts/asset-safety.mjs';
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 import { mkdtemp, mkdir, writeFile, readFile, rename, unlink, rm, utimes, stat } from 'node:fs/promises';
@@ -80,7 +81,7 @@ test('runtime derivatives retain source identity and dimensions, and stale or in
   const derivative = glb(metadata, [-.1, 0, -.1, .1, .1, .1]);
   await writeFile(path.join(directory, filename), derivative);
   const manifest = { version: 4, models: { 'bed.glb': { sourceFingerprint: fingerprint,
-    url: `/optimized-models/${filename}`, after: { bytes: derivative.length } } } };
+    url: `/optimized-models/${filename}`, profile: 'public-display-v1', after: { bytes: derivative.length, sha256: sha256(derivative) } } } };
   await writeFile(path.join(directory, 'manifest.json'), JSON.stringify(manifest));
   const optimized = (await catalogue.scan()).products[0];
   assert.equal(optimized.id, original.id);
@@ -340,18 +341,11 @@ test('catalogue deletion cleans live furniture, aliases, unplaced items, history
   assert.ok(store.getState().objects.every(object=>object.productId!==responseData.products[0].id));
 });
 
-test('public runtime uses only the durable catalogue and refuses source and maintenance routes', async t => {
-  const { root } = await sandbox(t);
+test('developer host refuses public mode instead of exposing publishing tools', async t => {
+  const { root } = await sandbox(t); const previous = process.env.DOMUS_PUBLIC; process.env.DOMUS_PUBLIC = '1';
   await mkdir(path.join(root, '.domus-published'), { recursive: true });
   await writeFile(path.join(root, '.domus-published/catalogue.json'), JSON.stringify({ products: [], aliases: {}, issues: [] }));
-  const previous = process.env.DOMUS_PUBLIC; process.env.DOMUS_PUBLIC = '1';
-  const server = await createServer({ configFile: false, root, plugins: [automaticModelCatalogue()], logLevel: 'silent', server: { host: '127.0.0.1', port: 0 }, optimizeDeps: { noDiscovery: true } });
   try {
-    await server.listen(); const origin = server.resolvedUrls.local[0];
-    assert.deepEqual((await (await fetch(origin + 'api/model-catalogue')).json()).products, []);
-    for (const route of ['models/secret.glb', 'optimized-models/secret.glb', 'api/model-catalogue/rescan', 'api/model-catalogue/compact']) {
-      assert.equal((await fetch(origin + route, { method: route.startsWith('api/') ? 'POST' : 'GET' })).status, 404);
-    }
-    assert.equal((await fetch(origin + 'api/published-models/..%2Fprivate.glb')).status, 404);
-  } finally { await server.close(); if (previous === undefined) delete process.env.DOMUS_PUBLIC; else process.env.DOMUS_PUBLIC = previous; }
+    await assert.rejects(createServer({ configFile: false, root, plugins: [automaticModelCatalogue()], logLevel: 'silent', server: { host: '127.0.0.1', port: 0 } }), /loopback/);
+  } finally { if (previous === undefined) delete process.env.DOMUS_PUBLIC; else process.env.DOMUS_PUBLIC = previous; }
 });

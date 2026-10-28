@@ -290,6 +290,7 @@ export function automaticModelCatalogue(): Plugin & {
   dispose(): Promise<void>;
 } {
   let catalogue: ModelCatalogue;
+  let building = false;
   let ready: Promise<ModelCatalogueData>;
   let publish: ((data: ModelCatalogueData) => void) | undefined;
   let optimization: ModelOptimizationQueue | undefined;
@@ -396,7 +397,10 @@ export function automaticModelCatalogue(): Plugin & {
     async initialize(root) { projectRoot = root; catalogue = new ModelCatalogue(root); ready = catalogue.scan(); await ready; startOptimization(message => console.warn(message)); },
     middleware,
     async dispose() { clearTimeout(expiryTimer); await optimization?.dispose(); },
-    configResolved(config) { projectRoot = config.root; catalogue = new ModelCatalogue(config.root, config.command !== 'build'); ready = catalogue.scan(); },
+    configResolved(config) {
+      if (process.env.DOMUS_PUBLIC === '1' || config.command === 'serve' && (![undefined, 'localhost', '127.0.0.1', '::1'].includes(config.server.host as string | undefined) || ![undefined, 'localhost', '127.0.0.1', '::1'].includes(config.preview.host as string | undefined))) throw new Error('Developer tools must run on loopback, never in public mode.');
+      building = config.command === 'build';
+      projectRoot = config.root; catalogue = new ModelCatalogue(config.root, config.command !== 'build'); ready = catalogue.scan(); },
     async buildStart() { await ready; },
     async closeBundle() { clearTimeout(expiryTimer); await optimization?.dispose(); },
     resolveId(id) { if (id === PUBLIC_ID) return MODULE_ID; },
@@ -404,8 +408,9 @@ export function automaticModelCatalogue(): Plugin & {
       const relative = path.relative(catalogue.modelsDirectory, context.file);
       if (!relative.startsWith('..') && !path.isAbsolute(relative)) return [];
     },
-    async load(id) { if (id === MODULE_ID) { await ready; return `export default ${JSON.stringify(catalogue.publishedData)};`; } },
+    async load(id) { if (id === MODULE_ID) { await ready; return `export default ${JSON.stringify(building ? { ...catalogue.publishedData, issues: [] } : catalogue.publishedData)};`; } },
     async configureServer(server: ViteDevServer) {
+      if (!['localhost', '127.0.0.1', '::1', undefined].includes(server.config.server.host as string | undefined) || process.env.DOMUS_PUBLIC === '1') throw new Error('Developer tools must run on loopback; use a packaged public release for hosting.');
       await ready;
       publish = (data) => {
         const module = server.moduleGraph.getModuleById(MODULE_ID);
@@ -434,6 +439,7 @@ export function automaticModelCatalogue(): Plugin & {
       });
     },
     async configurePreviewServer(server) {
+      if (!['localhost', '127.0.0.1', '::1', undefined].includes(server.config.preview.host as string | undefined) || process.env.DOMUS_PUBLIC === '1') throw new Error('Preview tools must run on loopback.');
       await ready;
       server.middlewares.use(middleware);
       startOptimization(message => server.config.logger.warn(`Model optimization: ${message}`));

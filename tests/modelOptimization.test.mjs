@@ -59,7 +59,7 @@ test('model optimization creates a cached compressed derivative while preserving
   assert.ok(modelStats(optimized).triangles < entry.before.triangles);
   const newBounds = getBounds(optimized.getRoot().listScenes()[0]);
   for (const edge of ['min', 'max']) for (let i = 0; i < 3; i++) assert.ok(Math.abs(newBounds[edge][i] - bounds[edge][i]) < .003);
-  assert.equal(optimized.getRoot().listMaterials().find(material => material.getName() === 'paint').getRoughnessFactor(), .4);
+  assert.equal(optimized.getRoot().listMaterials().find(material => material.getAlphaMode() !== 'BLEND').getRoughnessFactor(), .4);
   let glassParts = 0;
   for (const node of optimized.getRoot().listNodes()) {
     if (node.getMesh()?.listPrimitives().some(primitive => primitive.getMaterial()?.getAlphaMode() === 'BLEND')) glassParts++;
