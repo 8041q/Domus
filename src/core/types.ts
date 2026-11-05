@@ -207,6 +207,8 @@ export interface ProductDefinition {
   /** Missing/deleted assets stay known so saved rooms retain their objects. */
   available?: boolean;
   wallAffinity?: boolean;
+  /** Surface supporting the model; ceiling models align their top to room height. */
+  mount?: 'floor' | 'ceiling';
   collision?: boolean;
   /**
    * Floor collision can intentionally differ from the nominal dimension box. This

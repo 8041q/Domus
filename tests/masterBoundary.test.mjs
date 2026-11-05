@@ -87,7 +87,7 @@ test('Vite serves approved assets and AI locally while denying private files and
   const dev = await createViteServer({
     ...config, root, configFile: false, logLevel: 'silent',
     cacheDir: path.join(root, '.vite'), optimizeDeps: { noDiscovery: true },
-    server: { ...config.server, host: '127.0.0.1', port: 0, ws: false }
+    server: { ...config.server, host: '127.0.0.1', port: 0, strictPort: false, ws: false }
   });
   try {
     await dev.listen();

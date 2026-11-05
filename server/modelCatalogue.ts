@@ -145,6 +145,7 @@ export async function inspectProductGLB(filename: string, url: string, id: strin
       width: size.x, depth: size.z, height: Math.max(size.y, 0.001), available: true,
       ...(displayDimensions ? { displayDimensions } : {}),
       collision: extras.domus_collision !== false, wallAffinity: extras.domus_wall_affinity === true,
+      mount: extras.domus_mount === 'ceiling' ? 'ceiling' : undefined,
       collisionFootprint: { width: size.x, depth: size.z },
       clearance: { front: nonnegative('domus_clearance_front_m'), back: nonnegative('domus_clearance_back_m'), sides: nonnegative('domus_clearance_sides_m') },
       priceLabel: text('domus_price_label'), swatch: '#999999', model: { url }

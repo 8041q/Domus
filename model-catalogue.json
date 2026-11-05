@@ -4,8 +4,8 @@
     {
       "id": "model-b4839f8e-bee7-416f-a501-07b88ad820d0",
       "file": "AInno20-proxy.glb",
-      "fingerprint": "131b91d56eea612f58f1b746e9ee57d98ed5f27897ef6555fb49416bccc25e8a",
-      "stamp": "503520:1793719150845.1118",
+      "fingerprint": "fcd9274bc9bef4d160c151023b3b3da2ff64b88ec328031a7d23161804949120",
+      "stamp": "503544:1793893612346.6877",
       "product": {
         "id": "model-b4839f8e-bee7-416f-a501-07b88ad820d0",
         "name": "AInno20 — planning model",
@@ -22,6 +22,7 @@
         },
         "collision": true,
         "wallAffinity": false,
+        "mount": "ceiling",
         "collisionFootprint": {
           "width": 2.845639944076538,
           "depth": 1.4555105566978455
@@ -34,7 +35,7 @@
         "priceLabel": "",
         "swatch": "#ebebeb",
         "model": {
-          "url": "/models/AInno20-proxy.glb?v=131b91d56eea612f"
+          "url": "/models/AInno20-proxy.glb?v=fcd9274bc9bef4d1"
         }
       }
     },

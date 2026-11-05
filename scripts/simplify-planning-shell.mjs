@@ -5,7 +5,7 @@ import { MeshoptDecoder, MeshoptSimplifier } from 'meshoptimizer';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-const METADATA = ['domus_schema_version', 'domus_name', 'domus_category', 'domus_display_width_m',
+const METADATA = ['domus_mount', 'domus_schema_version', 'domus_name', 'domus_category', 'domus_display_width_m',
   'domus_display_depth_m', 'domus_display_height_m', 'domus_collision', 'domus_clearance_front_m',
   'domus_clearance_back_m', 'domus_clearance_sides_m', 'domus_display_profile'];
 

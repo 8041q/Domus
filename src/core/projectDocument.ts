@@ -51,6 +51,7 @@ export function readDocument(value: unknown): RoomDocumentV2 {
     if ([entry.sourceUrl, entry.sourceRuntimeUrl].some(url => url != null && (typeof url !== 'string' || url.length > 4096))) throw new Error('The room contains invalid model provenance.');
     if (product.displayDimensions && (![product.displayDimensions.width, product.displayDimensions.depth, product.displayDimensions.height].every(n => Number.isFinite(n) && n > 0 && n <= 100_000)
       || (product.displayDimensions.source != null && product.displayDimensions.source !== 'source-model'))) throw new Error('The room contains invalid display dimensions.');
+    if (product.mount != null && !['floor', 'ceiling'].includes(product.mount)) throw new Error('Invalid model mounting surface.');
     if ([product.collision, product.wallAffinity, product.available].some(value => value != null && typeof value !== 'boolean')) throw new Error('The room contains invalid model flags.');
     if (product.collisionFootprint && (![product.collisionFootprint.width, product.collisionFootprint.depth].every(n => Number.isFinite(n) && n > 0 && n <= 1000)
       || ![product.collisionFootprint.offsetX ?? 0, product.collisionFootprint.offsetZ ?? 0].every(n => Number.isFinite(n) && Math.abs(n) <= 1000))) throw new Error('The room contains invalid collision metadata.');

@@ -34,8 +34,19 @@ const VIEW_PRESETS: Array<{ id: PlanCameraView; label: string }> = [
   { id: 'back', label: 'Back' },
   { id: 'left', label: 'Left' }
 ];
+function ModelGlyph({ url }: { url: string }) {
+  const [image, setImage] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true; setImage(null);
+    import('./renderer/modelThumbnails').then(module => module.modelThumbnail(url)).then(value => { if (active) setImage(value); }).catch(() => undefined);
+    return () => { active = false; };
+  }, [url]);
+  return image ? <img className="product-model-thumbnail" src={image} alt="" /> : <Icon name="cube" className="product-model-glyph" />;
+}
+
 function ProductGlyph({ productId }: { productId: string }) {
-  if (PRODUCTS[productId as keyof typeof PRODUCTS]?.model) return <Icon name="cube" className="product-model-glyph" />;
+  const model = PRODUCTS[productId as keyof typeof PRODUCTS]?.model;
+  if (model) return <ModelGlyph url={model.runtimeUrl ?? model.url} />;
   return <div className={`product-glyph glyph-${productId}`} aria-hidden="true"><span /><i /></div>;
 }
 

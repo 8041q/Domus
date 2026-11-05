@@ -1,3 +1,4 @@
+import { productElevation, productMount } from '../core/productMount';
 import { normalizeLightingControls } from '../core/lighting';
 import { embedRoomDocumentGLB } from '../core/roomGlb';
 import type { RoomDocumentV2 } from '../core/projectDocument';
@@ -3413,7 +3414,8 @@ export class PlannerScene {
     const model = this.objectModels.get(id);
     if (model) {
       if (model.position.x !== x || model.position.z !== z || model.rotation.y !== rotationY) this.invalidateShadows();
-      model.position.set(x, 0, z);
+      const product = PRODUCTS[model.userData.productId];
+      model.position.set(x, productMount(product) === 'ceiling' ? productElevation(product, this.sceneSnapshot().room.height) : 0, z);
       model.rotation.y = rotationY;
     }
     const contact = this.contactShadows.get(id);
@@ -3508,6 +3510,7 @@ export class PlannerScene {
   /** Soft floor occlusion follows the actual support points, independently of
    * the directional and window shadows. It never alters the model material. */
   private createContactShadow(id: keyof typeof PRODUCTS, model?: THREE.Group) {
+    if (productMount(PRODUCTS[id]) === 'ceiling') return new THREE.Group();
     if (model) {
       if (!this.modelContactShadows && this.renderer) this.modelContactShadows = new ModelContactShadows(this.renderer);
       return this.modelContactShadows?.create(model) ?? new THREE.Group();
@@ -5303,7 +5306,7 @@ export class PlannerScene {
     }
 
     const product = PRODUCTS[selected.productId];
-    const anchor = new THREE.Vector3(selected.x, Math.max(0.04, product.height * 0.45), selected.z);
+    const anchor = new THREE.Vector3(selected.x, productElevation(product, this.sceneSnapshot().room.height) + Math.max(0.04, product.height * 0.45), selected.z);
     const cameraSpace = anchor.clone().applyMatrix4(this.camera.matrixWorldInverse);
     const depth = Math.max(0.35, -cameraSpace.z);
     const viewportHeight = Math.max(1, this.container.clientHeight);

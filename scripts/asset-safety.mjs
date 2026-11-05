@@ -41,7 +41,7 @@ export function validateGLB(bytes) {
 /** Only application-facing fields may cross the publishing boundary. */
 export function publicProduct(product) {
   if (!modelId.test(product?.id)) throw new Error('Invalid published product ID');
-  const keys = ['id', 'catalogueId', 'name', 'category', 'width', 'depth', 'height', 'displayDimensions', 'available', 'collision', 'wallAffinity', 'collisionFootprint', 'interaction', 'clearance', 'priceLabel', 'swatch'];
+  const keys = ['id', 'catalogueId', 'name', 'category', 'width', 'depth', 'height', 'displayDimensions', 'available', 'collision', 'wallAffinity', 'mount', 'collisionFootprint', 'interaction', 'clearance', 'priceLabel', 'swatch'];
   const result = Object.fromEntries(keys.filter(key => product[key] !== undefined).map(key => [key, structuredClone(product[key])]));
   for (const [key, fields] of [['displayDimensions', ['width', 'depth', 'height']], ['collisionFootprint', ['width', 'depth', 'offsetX', 'offsetZ']], ['clearance', ['front', 'back', 'sides']], ['interaction', ['tags', 'allowOverlapWith']]]) {
     if (product[key]) result[key] = Object.fromEntries(fields.filter(field => product[key][field] !== undefined).map(field => [field, structuredClone(product[key][field])]));

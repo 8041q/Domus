@@ -447,3 +447,9 @@ open planners. For preview or a different port, pass the server URL:
   lifecycle.
 - [Experimental AI](docs/AI.md) — setup, providers, safety boundaries, and
   current limitations.
+
+Imported model cards generate a PNG thumbnail from the public GLB in the browser.
+Captures share one temporary renderer and are cached by model revision, so revisiting
+the catalogue reuses the image. Model metadata supports `domus_mount: "ceiling"`;
+ceiling fixtures align their top with the room height and can be placed over floor
+furniture. AInno20 planning copies include this mounting metadata.

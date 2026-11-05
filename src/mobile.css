@@ -72,7 +72,7 @@ body:has(.app-shell.is-compact) { overflow: hidden; overscroll-behavior: none; }
 .mobile-room-tools { display: flex; flex-direction: column; }
 .mobile-room-tools .builder-inspector-dock { order: -1; height: auto; max-height: none; overflow: visible; border: 0; }
 .mobile-room-tools .builder-inspector-empty, .mobile-room-tools .panel-intro { display: none; }
-.mobile-room-tools .builder-scroll-content { overflow: visible; }
+.mobile-room-tools .builder-scroll-content { --builder-content-inset: 0px; overflow: visible; }
 .mobile-room-tools .tool-section, .mobile-room-tools .opening-editor, .mobile-room-tools .builder-inspector-dock > * { padding-inline: 0; }
 .mobile-room-tools .builder-continue { padding-inline: 0; }
 .mobile-room-tools .shape-options button { font-size: 12px; }

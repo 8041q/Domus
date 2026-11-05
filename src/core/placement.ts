@@ -1,3 +1,4 @@
+import { productMount } from './productMount';
 import { FEATURES } from '../config/features';
 import { PRODUCTS } from './products';
 import { getPhysicalWalls, resolveDividers } from './spaces';
@@ -154,6 +155,7 @@ function productTags(object: PlacedObject) {
 export function objectsBlockEachOther(a: PlacedObject, b: PlacedObject): boolean {
   const aProduct = PRODUCTS[a.productId];
   const bProduct = PRODUCTS[b.productId];
+  if (productMount(aProduct) !== productMount(bProduct)) return false;
   if (aProduct.collision === false || bProduct.collision === false) return false;
 
   const aAllows = aProduct.interaction?.allowOverlapWith ?? [];

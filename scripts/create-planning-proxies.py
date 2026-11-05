@@ -250,6 +250,7 @@ def add_metadata(recipe,dimensions):
               'domus_category':recipe['category'],'domus_display_profile':'topology-exterior-v2',
               'domus_collision':True,'domus_clearance_front_m':0,'domus_clearance_back_m':0,'domus_clearance_sides_m':0}
     for axis,key in enumerate(['width','depth','height']):metadata['domus_display_'+key+'_m']=dimensions[axis]
+    if recipe.get('lamp'):metadata['domus_mount']='ceiling'
     for key,value in metadata.items():carrier[key]=value
 
 
