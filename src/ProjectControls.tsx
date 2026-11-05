@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import type { SavedRoom } from './core/roomProjects';
 import type { RoomShapeKind } from './core/types';
 import { roomProjects, useRoomProjects } from './roomProjects';
@@ -308,7 +309,14 @@ export function ProjectControls({ canExport, onExport, onExportPdf }: { canExpor
         <footer><Button variant="outline" onClick={cancel}>Cancel</Button><Button variant="secondary" onClick={() => { void run(finishPending); }}>Discard changes</Button><Button onClick={() => save()}>Save changes</Button></footer>
       </>}
     </ProjectDialog>}
-    {!dialog && !menuOpen && (error || project.warning) && <div className="project-warning" role="alert"><span>{error || project.warning}</span><Button variant="outline" size="sm" onClick={downloadLayout}>Download layout</Button>{error && <Button variant="ghost" size="icon" aria-label="Dismiss error" onClick={() => setError('')}><Icon name="x" /></Button>}</div>}
+    {!dialog && !menuOpen && (error || project.warning) && createPortal(
+      <div className={`project-warning${compact ? ' is-compact' : ''}`} role="alert">
+        <span>{error || project.warning}</span>
+        <Button variant="outline" size="sm" onClick={downloadLayout}>Download layout</Button>
+        {error && <Button variant="ghost" size="icon" aria-label="Dismiss error" onClick={() => setError('')}><Icon name="x" /></Button>}
+      </div>,
+      document.body,
+    )}
     {(project.busy || exporting) && <div className="project-progress loading-status" role="status" aria-live="polite">{project.busy || 'Preparing room file…'}</div>}
     {notice && <div className="toast" role="status"><Icon name="check" />{notice}</div>}
   </>;

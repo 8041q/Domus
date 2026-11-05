@@ -87,6 +87,7 @@ interface SceneOptions {
   showFurniture: boolean;
   interactiveFurniture: boolean;
   interactiveArchitecture: boolean;
+  /** Whether this workspace can render direct sun. The room stores its own toggle. */
   sunRays: boolean;
   onError?: (error: unknown) => void;
   onModelStatus?: (status: ModelLoadStatus) => void;
@@ -211,6 +212,7 @@ export class PlannerScene {
   private sunsetLights: [THREE.DirectionalLight, THREE.DirectionalLight] | null = null;
   private pairedSunsEnvironmentTarget: THREE.WebGLRenderTarget | null = null;
   private productEnvironmentTarget: THREE.WebGLRenderTarget | null = null;
+  private lastSunRaysEnabled = false;
   private lastSunAnglesKey = '';
   private contactShadowGroup = new THREE.Group();
   private objectGroup = new THREE.Group();
@@ -1168,9 +1170,8 @@ export class PlannerScene {
     if (this.disposed) return;
     this.stateSyncPending = false;
     const snapshot = this.sceneSnapshot();
-    const { floorFinish, ...roomWithoutFloorFinish } = snapshot.room;
-    const { sunAzimuth, sunElevation, ceilingBrightness, ceilingWarmth, sunlightStrength, ambientBrightness, ...lightingWithoutSunAngles } = roomWithoutFloorFinish.lighting;
-    const roomKey = JSON.stringify({ ...roomWithoutFloorFinish, lighting: lightingWithoutSunAngles, dividers: snapshot.dividers, spaces: snapshot.spaces });
+    const { floorFinish, lighting, ...roomGeometry } = snapshot.room;
+    const roomKey = JSON.stringify({ ...roomGeometry, ceilingLightsEnabled: lighting.enabled, dividers: snapshot.dividers, spaces: snapshot.spaces });
     const openingsKey = JSON.stringify(snapshot.openings);
     let architectureChanged = false;
     if (roomKey !== this.lastRoomKey) {
@@ -1226,7 +1227,7 @@ export class PlannerScene {
     }
     this.lastRenderedOpenings = snapshot.openings;
     if (architectureChanged && this.currentCameraView === 'walk') this.refreshWalkNavigation(snapshot);
-    this.syncSunsetAngles(snapshot);
+    this.syncSunset(snapshot);
     this.syncObjects(snapshot);
     this.syncOpeningHighlight(snapshot);
     this.syncHelperTransforms(snapshot);
@@ -2172,9 +2173,14 @@ export class PlannerScene {
     });
   }
 
-  private syncSunsetAngles(snapshot: PlannerSnapshot) {
-    if (!this.options.sunRays) return;
-    const key = `${snapshot.room.lighting.sunAzimuth}:${snapshot.room.lighting.sunElevation}:${snapshot.room.lighting.sunStylePreset}`;
+  private syncSunset(snapshot: PlannerSnapshot) {
+    const enabled = this.options.sunRays && snapshot.room.lighting.sunRaysEnabled;
+    if (enabled !== this.lastSunRaysEnabled) {
+      this.rebuildSunset(snapshot);
+      return;
+    }
+    if (!enabled) return;
+    const key = `${snapshot.room.lighting.sunAzimuth}:${snapshot.room.lighting.sunElevation}`;
     if (key === this.lastSunAnglesKey) return;
     const direction = this.sunDirection(snapshot);
     if (direction) this.positionSunsetLights(snapshot, direction);
@@ -2184,8 +2190,9 @@ export class PlannerScene {
   /** A soft and a crisp sun share one orbit while the established room
    * rig and furniture contact shadows remain independent. */
   private rebuildSunset(snapshot: PlannerSnapshot) {
-    this.lastSunAnglesKey = `${snapshot.room.lighting.sunAzimuth}:${snapshot.room.lighting.sunElevation}:${snapshot.room.lighting.sunStylePreset}`;
-    if (!this.options.sunRays) { this.disposeSunsetRig(); return; }
+    this.lastSunRaysEnabled = this.options.sunRays && snapshot.room.lighting.sunRaysEnabled;
+    this.lastSunAnglesKey = `${snapshot.room.lighting.sunAzimuth}:${snapshot.room.lighting.sunElevation}`;
+    if (!this.lastSunRaysEnabled) { this.disposeSunsetRig(); return; }
 
     const walls = getRoomWalls(snapshot.room);
     const direction = this.sunDirection(snapshot);

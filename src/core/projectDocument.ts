@@ -8,6 +8,8 @@ export interface RoomDocumentV2 {
 export interface ModelAsset { hash: string; blob: Blob }
 export const MAX_PACKAGE_BYTES = 1024 * 1024 * 1024;
 export const MAX_DOCUMENT_BYTES = 16 * 1024 * 1024;
+export const SNAPSHOT_LIMITS = { objects: 2000, unplacedObjects: 2000, vertices: 512, openings: 1000, dividers: 512, spaces: 512 } as const;
+const BUILTIN_PRODUCT_IDS = new Set(['sofa', 'armchair', 'chair', 'dining-table', 'coffee-table', 'cabinet', 'bookcase', 'rug', 'plant', 'table']);
 export const validHash = (hash: unknown): hash is string => typeof hash === 'string' && /^[a-f0-9]{64}$/.test(hash);
 /** Semantic equality must not depend on key order introduced by migrations. */
 export function snapshotSignature(value: unknown): string {
@@ -15,9 +17,9 @@ export function snapshotSignature(value: unknown): string {
     ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
 }
 export function validateSnapshotSize(snapshot: PlannerSnapshot) {
-  if (!snapshot || !Array.isArray(snapshot.objects) || snapshot.objects.length > 2000
-    || (snapshot.unplacedObjects?.length ?? 0) > 2000 || (snapshot.room?.vertices?.length ?? 0) > 512
-    || (snapshot.openings?.length ?? 0) > 1000 || (snapshot.dividers?.length ?? 0) > 512 || (snapshot.spaces?.length ?? 0) > 512) throw new Error('The room layout is invalid or exceeds the supported editing limits.');
+  if (!snapshot || !Array.isArray(snapshot.objects) || snapshot.objects.length > SNAPSHOT_LIMITS.objects
+    || (snapshot.unplacedObjects?.length ?? 0) > SNAPSHOT_LIMITS.unplacedObjects || (snapshot.room?.vertices?.length ?? 0) > SNAPSHOT_LIMITS.vertices
+    || (snapshot.openings?.length ?? 0) > SNAPSHOT_LIMITS.openings || (snapshot.dividers?.length ?? 0) > SNAPSHOT_LIMITS.dividers || (snapshot.spaces?.length ?? 0) > SNAPSHOT_LIMITS.spaces) throw new Error('The room layout is invalid or exceeds the supported editing limits.');
   if (snapshot.unplacedObjects != null && (!Array.isArray(snapshot.unplacedObjects) || snapshot.unplacedObjects.some(object => !object || typeof object.id !== 'string' || !object.id || typeof object.productId !== 'string'))) throw new Error('The room contains invalid unplaced furniture.');
   const objects = [...snapshot.objects, ...(snapshot.unplacedObjects ?? [])];
   if (objects.some(object => !object || typeof object.id !== 'string' || !object.id || object.id.length > 160 || typeof object.productId !== 'string' || object.productId.length > 160)
@@ -47,7 +49,8 @@ export function readDocument(value: unknown): RoomDocumentV2 {
       || !(entry.hash === null || validHash(entry.hash)) || !Number.isSafeInteger(entry.bytes) || entry.bytes < 0 || entry.bytes > MAX_PACKAGE_BYTES
       || (entry.hash !== null && entry.bytes === 0)) throw new Error('The room contains invalid model metadata.');
     if ([entry.sourceUrl, entry.sourceRuntimeUrl].some(url => url != null && (typeof url !== 'string' || url.length > 4096))) throw new Error('The room contains invalid model provenance.');
-    if (product.displayDimensions && ![product.displayDimensions.width, product.displayDimensions.depth, product.displayDimensions.height].every(n => Number.isFinite(n) && n > 0 && n <= 100_000)) throw new Error('The room contains invalid display dimensions.');
+    if (product.displayDimensions && (![product.displayDimensions.width, product.displayDimensions.depth, product.displayDimensions.height].every(n => Number.isFinite(n) && n > 0 && n <= 100_000)
+      || (product.displayDimensions.source != null && product.displayDimensions.source !== 'source-model'))) throw new Error('The room contains invalid display dimensions.');
     if ([product.collision, product.wallAffinity, product.available].some(value => value != null && typeof value !== 'boolean')) throw new Error('The room contains invalid model flags.');
     if (product.collisionFootprint && (![product.collisionFootprint.width, product.collisionFootprint.depth].every(n => Number.isFinite(n) && n > 0 && n <= 1000)
       || ![product.collisionFootprint.offsetX ?? 0, product.collisionFootprint.offsetZ ?? 0].every(n => Number.isFinite(n) && Math.abs(n) <= 1000))) throw new Error('The room contains invalid collision metadata.');
@@ -59,6 +62,8 @@ export function readDocument(value: unknown): RoomDocumentV2 {
       sizes.set(entry.hash, entry.bytes);
     }
   }
+  if ([...doc.snapshot.objects, ...(doc.snapshot.unplacedObjects ?? [])].some(object =>
+    !BUILTIN_PRODUCT_IDS.has(object.productId) && !ids.has(object.productId))) throw new Error('The room is missing model metadata for referenced furniture.');
   return structuredClone(doc);
 }
 

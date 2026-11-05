@@ -6,6 +6,7 @@ import { BASEBOARD_STYLES } from './architecturalStyles';
 import { ReportDocument, reportFooter } from './reportLayout';
 import { jpegBytes, ROOM_PDF_VIEWS, type PdfSnapshot } from './roomPdf';
 import { roomWallMeasurements, type ReportViewSummary } from './roomReportGeometry';
+import { productDimensionSourceLabel } from './productSchema';
 import type { PlannerSnapshot, ProductDefinition } from './types';
 
 export const reportMetres = (value: number) => value.toFixed(2);
@@ -23,7 +24,7 @@ export function roomReportData(snapshot: PlannerSnapshot, products: Record<strin
       furniture.set(key, { productId: object.productId, name: product?.name ?? object.productId, category: product?.category ?? 'Unknown', quantity: 1,
         dimensions: product ? sizeText(product.displayDimensions ?? product) : 'Unavailable',
         geometryDimensions: product ? sizeText(product) : 'Unavailable',
-        dimensionSource: product?.displayDimensions ? 'Real-life dimensions' : product?.model ? 'Real-life size not supplied' : 'Catalogue dimensions', status });
+        dimensionSource: productDimensionSourceLabel(product), status });
     }
   }
   const counters = { door: 0, window: 0, opening: 0 };
@@ -67,9 +68,9 @@ export function renderRoomReport(data: RoomReportData, roomName: string, date: s
   doc.field('Furniture', `${data.furniture.filter((item) => item.status === 'In room').reduce((sum, item) => sum + item.quantity, 0)} in room · ${data.furniture.filter((item) => item.status === 'Not placed').reduce((sum, item) => sum + item.quantity, 0)} not placed`);
   doc.field('Openings', data.openingSummary);
   if (!data.furniture.length) { doc.section('Furniture list'); doc.paragraph('No furniture in this draft.'); }
-  else doc.table('Furniture list', ['Model / category', 'Qty', 'Real-life L × W × H (m)', 'Size source', 'Placement'], [490, 90, 430, 360, 290],
+  else doc.table('Furniture list', ['Model / category', 'Qty', 'L × W × H (m)', 'Size source', 'Placement'], [490, 90, 430, 360, 290],
     data.furniture.map((item) => [`${item.name} - ${item.category}`, String(item.quantity), item.dimensions, item.dimensionSource, item.status]));
-  doc.paragraph('Real-life sizes use entered product metadata; catalogue sizes are used for built-in furniture. Where no real-life size was supplied, the model geometry is shown. Not placed items are excluded from the room views.');
+  doc.paragraph('The size source identifies entered product data, measured source models, display model geometry, or built-in samples. Confirm the exact product configuration before using these sizes for procurement. Unplaced items are excluded from the room views.');
   if (data.details.notes) { doc.section('Client requirements and notes', 64); doc.paragraph(data.details.notes); }
   if (data.openings.length) doc.table('Doors, windows and openings', ['Type', 'Width × height', 'Bottom edge above floor', 'Location / centre'], [290, 350, 390, 630],
     data.openings.map((opening) => [opening.name, opening.dimensions, opening.sill, `${opening.location} · ${opening.position}`]));

@@ -51,7 +51,7 @@ function createGeometryScene(store) {
   };
   scene.updateDynamicSpacingLabel = (label, text) => { label.userData.dynamicSpacingText = text; };
   for (const method of ['addFloorPerimeterShade', 'rebuildCeilingLighting', 'rebuildWindowDaylighting',
-    'rebuildSunset', 'syncSunsetAngles', 'applyRoomLighting', 'updateShadowBounds', 'syncObjects',
+    'rebuildSunset', 'syncSunset', 'applyRoomLighting', 'updateShadowBounds', 'syncObjects',
     'syncOpeningHighlight', 'syncHelperTransforms', 'updateLightFixtureVisibility']) scene[method] = () => {};
   scene.camera.position.set(12, 12, 12);
   return scene;
@@ -73,6 +73,41 @@ function disposeScene(scene) {
   scene.disposed = true;
   for (const group of [scene.floorGroup, scene.wallsGroup, scene.ceilingGroup, scene.interiorViewGroup, scene.architecturalShadeGroup]) scene.disposeGroup(group);
 }
+
+test('direct sun changes update its rig without replacing architecture or recentering the camera', () => {
+  const store = module.usePlannerStore;
+  store.getState().resetProject();
+  const scene = createGeometryScene(store);
+  const builder = createGeometryScene(store);
+  scene.options.sunRays = true;
+  for (const viewport of [scene, builder]) {
+    delete viewport.rebuildSunset;
+    delete viewport.syncSunset;
+    viewport.sunsetGroup = new THREE.Group();
+    viewport.sunsetLights = null;
+    viewport.renderFromState();
+  }
+  assert.equal(scene.sunsetLights.length, 2);
+  assert.equal(builder.sunsetGroup.children.length, 0);
+
+  const floor = scene.floorGroup.children[0];
+  scene.controls.target.set(3, 2, 2);
+  const position = scene.camera.position.clone();
+  const target = scene.controls.target.clone();
+  store.getState().setRoomLighting({ sunRaysEnabled: false });
+  scene.renderFromState();
+  assert.equal(scene.sunsetGroup.children.length, 0);
+  store.getState().undo();
+  scene.renderFromState();
+  assert.equal(scene.sunsetLights.length, 2);
+  assert.equal(scene.floorGroup.children[0], floor);
+  assert.deepEqual(scene.camera.position, position);
+  assert.deepEqual(scene.controls.target, target);
+
+  scene.disposeSunsetRig();
+  disposeScene(scene);
+  disposeScene(builder);
+});
 
 test('Vite recognizes the project store as a hot update boundary instead of forcing a page reload', async () => {
   await vite.transformRequest('/src/store.ts');

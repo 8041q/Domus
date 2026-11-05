@@ -21,7 +21,8 @@
     "package:public": "node scripts/package-public.mjs",
     "test:e2e": "playwright test",
     "check": "npm run typecheck && npm test && npm run build",
-    "pretest:e2e": "npm run build"
+    "pretest:e2e": "npm run build",
+    "models:proxies": "node scripts/create-planning-proxies.mjs"
   },
   "dependencies": {
     "@gltf-transform/core": "^4.5.1",

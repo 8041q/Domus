@@ -11,7 +11,7 @@ import { MeshoptDecoder, MeshoptEncoder, MeshoptSimplifier } from 'meshoptimizer
 import { withFileLock } from './file-lock.mjs';
 import { modelCacheExpired } from './model-cache.mjs';
 
-export const OPTIMIZER_VERSION = 8;
+export const OPTIMIZER_VERSION = 10;
 
 function stabilizePositions(document) {
   const seen = new Set();
@@ -82,6 +82,7 @@ export async function optimizeModel(input, output) {
   });
   const document = await io.read(input);
   const before = modelStats(document);
+  const preparedShell = document.getRoot().listNodes().some(node => ['static-exterior-v1', 'topology-exterior-v2'].includes(node.getExtras().domus_display_profile));
   const scene = document.getRoot().listScenes()[0];
   if (!scene) throw new Error('Model has no scene.');
   const bounds = getBounds(scene);
@@ -90,7 +91,9 @@ export async function optimizeModel(input, output) {
   if (staticModel) stabilizePositions(document);
   await document.transform(dedup(), weld());
   if (staticModel) {
-    simplifyStaticGeometry(document);
+    // Static exterior copies already have their final error-limited geometry.
+    // A second reduction can remove slender extremities and alter their footprint.
+    if (!preparedShell) simplifyStaticGeometry(document);
     await document.transform(flatten(), join({ keepNamed: false, filter: node => node.getMesh()?.listPrimitives().every(primitive => {
       const material = primitive.getMaterial();
       // Transparent parts must retain independent depth sorting.

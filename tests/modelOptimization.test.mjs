@@ -8,7 +8,7 @@ import { Document, NodeIO } from '@gltf-transform/core';
 import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
 import { getBounds } from '@gltf-transform/functions';
 import { MeshoptDecoder } from 'meshoptimizer';
-import { modelFingerprint, modelStats, optimizeModels } from '../scripts/optimize-models.mjs';
+import { modelFingerprint, modelStats, optimizeModels, OPTIMIZER_VERSION } from '../scripts/optimize-models.mjs';
 import { MODEL_CACHE_TTL_MS, modelCacheExpired } from '../scripts/model-cache.mjs';
 
 test('model cache expires at exactly three days rather than extending on use', () => {
@@ -67,6 +67,10 @@ test('model optimization creates a cached compressed derivative while preserving
   assert.equal(glassParts, 2, 'Separate transparent parts retain their own sort positions');
   await optimizeModels(root);
   assert.deepEqual(await readFile(output), outputBytes, 'An unchanged source reuses the generated asset');
+  await writeFile(path.join(root, 'public/optimized-models/manifest.json'), JSON.stringify({ ...manifest, version: OPTIMIZER_VERSION - 1 }));
+  const upgraded = await optimizeModels(root);
+  assert.equal(upgraded.version, OPTIMIZER_VERSION, 'Older display caches must be regenerated with the current sanitization policy');
+  assert.deepEqual(await readFile(source), sourceBytes);
   const expiredAt = new Date(Date.now() - MODEL_CACHE_TTL_MS - 1000);
   await utimes(output, expiredAt, expiredAt);
   await optimizeModels(root);
@@ -98,4 +102,24 @@ test('model optimization creates a cached compressed derivative while preserving
   await unlink(path.join(directory, 'copy.glb'));
   assert.deepEqual((await optimizeModels(root)).models, {});
   await assert.rejects(readFile(output), { code: 'ENOENT' });
+});
+
+for (const profile of ['static-exterior-v1', 'topology-exterior-v2']) test(`${profile} exterior shells are compressed without a second geometry reduction`, async t => {
+  const root=await mkdtemp(path.join(os.tmpdir(),'domus-prepared-shell-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  await mkdir(path.join(root,'private/models'),{recursive:true});
+  const doc=new Document(),buffer=doc.createBuffer(),scene=doc.createScene();
+  const geometry=new THREE.SphereGeometry(.5,32,24),primitive=doc.createPrimitive();
+  primitive.setAttribute('POSITION',doc.createAccessor().setBuffer(buffer).setType('VEC3').setArray(geometry.getAttribute('position').array.slice()));
+  primitive.setIndices(doc.createAccessor().setBuffer(buffer).setType('SCALAR').setArray(geometry.index.array.slice()));geometry.dispose();
+  scene.addChild(doc.createNode().setMesh(doc.createMesh().addPrimitive(primitive)));
+  scene.addChild(doc.createNode('Planning model').setExtras({domus_display_profile:profile}));
+  const source=path.join(root,'private/models/shell.glb');await new NodeIO().write(source,doc);
+  const original=await readFile(source),manifest=await optimizeModels(root),entry=manifest.models['shell.glb'];
+  assert.equal(entry.before.triangles,entry.after.triangles);
+  assert.deepEqual(await readFile(source),original);
+  const {validateGLB}=await import('../scripts/asset-safety.mjs');
+  const published=validateGLB(await readFile(path.join(root,'public',entry.url)));
+  assert.ok(published.extensionsRequired.includes('EXT_meshopt_compression'));
+  assert.equal(JSON.stringify(published).includes('domus_display_profile'),false);
 });

@@ -30,10 +30,17 @@ export class BrowserRoomProjects {
   private draftHealthy = true;
   private generation = 0;
   private saving = false;
+  private warning = '';
+  private unreadableRooms = false;
   constructor(private adapter: Adapter, private database = new ProjectDatabase(), private tabId = createId(), private legacyStorage: () => Storage = () => localStorage) {}
   getState = () => this.state;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
-  private update(patch: Partial<BrowserProjectStatus>) { this.state = { ...this.state, ...patch }; this.listeners.forEach(listener => listener()); }
+  private update(patch: Partial<BrowserProjectStatus>) {
+    if (patch.warning !== undefined) this.warning = patch.warning;
+    const libraryWarning = this.unreadableRooms ? 'Some saved rooms could not be read. Their data has been retained.' : '';
+    this.state = { ...this.state, ...patch, warning: [this.warning, libraryWarning].filter(Boolean).join(' ') };
+    this.listeners.forEach(listener => listener());
+  }
   private pinOpenings(snapshot: PlannerSnapshot) {
     const openings = snapshot.openings.map(opening => {
       const key = `${opening.id}:${opening.variant}`;
@@ -128,7 +135,7 @@ export class BrowserRoomProjects {
       // An abandoned tab's draft is offered explicitly; active tabs never overwrite one another.
       if (own) {
         const document = this.decode(readDocument(own.document));
-        await this.activate(document);
+        await this.activate(document, true);
         const room = this.state.rooms.find(room => room.id === own.activeId);
         this.baseline = own.activeId && !room ? null : own.baseline === null ? null : snapshotSignature(JSON.parse(own.baseline));
         this.revision = own.activeId && !room ? null : own.revision;
@@ -140,51 +147,67 @@ export class BrowserRoomProjects {
     await this.storageInfo().catch(() => {});
   }
   async refreshRooms() {
-    const rooms = await this.database.all<StoredRoom>('rooms');
-    for (const room of rooms) {
-      if (!room || typeof room.id !== 'string' || !room.id || typeof room.revision !== 'string' || !room.revision
-        || this.name(room.name) !== room.name || !Number.isFinite(Date.parse(room.createdAt)) || !Number.isFinite(Date.parse(room.updatedAt))) throw new Error('The saved-room library is invalid. Its data has been retained.');
-      readDocument(room.document);
-    }
+    const records = await this.database.all<StoredRoom>('rooms');
+    const rooms = records.filter(room => {
+      try {
+        if (!room || typeof room.id !== 'string' || !room.id || typeof room.revision !== 'string' || !room.revision
+          || this.name(room.name) !== room.name || !Number.isFinite(Date.parse(room.createdAt)) || !Number.isFinite(Date.parse(room.updatedAt))) return false;
+        readDocument(room.document);
+        return true;
+      } catch { return false; }
+    });
+    this.unreadableRooms = rooms.length < records.length;
     this.update({ rooms }); return rooms;
   }
-  private async activate(document: RoomDocumentV2) {
+  private async activate(document: RoomDocumentV2, recovering = false) {
     // Files describe references, never executable fetch URLs or trusted model definitions.
-    const response = await fetch('/api/model-catalogue', { cache: 'no-store', signal: AbortSignal.timeout(15000) });
-    if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) throw new Error('Connect to the Domus server to open this room. Your current room has been kept.');
-    await response.json();
+    const recoveryDeadline = recovering && document.products.length ? AbortSignal.timeout(15000) : undefined;
+    const modelSignal = () => recoveryDeadline ?? AbortSignal.timeout(15000);
+    let catalogueAvailable = true;
+    if (document.products.length) {
+      try {
+        const response = await fetch('/api/model-catalogue', { cache: 'no-store', signal: modelSignal() });
+        if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) throw new Error('Connect to the Domus server to open this room. Your current room has been kept.');
+        await response.json();
+      } catch (error) {
+        if (!recovering) throw error;
+        catalogueAvailable = false;
+      }
+    }
     const definitions: ProductDefinition[] = [];
     const resolvedIds = new Map<string, string>();
-    try {
-      for (const entry of document.products) {
-        let product: ProductDefinition | undefined;
-        if (/^model-[a-f0-9-]{36}--[a-f0-9]{64}$/.test(entry.definition.id)) {
-          const result = await fetch(`/api/published-models/${entry.definition.id}.json`, { signal: AbortSignal.timeout(15000) });
-          if (result.ok) product = await result.json();
-          else if (result.status !== 404) throw new Error('Could not retrieve a model revision. Retry opening this room.');
-        } else if (entry.hash || entry.legacyHash) {
-          const result = await fetch(`/api/model-legacy?hash=${entry.legacyHash ?? entry.hash}&id=${encodeURIComponent(entry.definition.id)}`, { signal: AbortSignal.timeout(15000) });
-          if (result.ok) product = await result.json();
-          else if (result.status !== 404) throw new Error('Could not resolve an older model. Retry opening this room.');
-        }
-        if (product) {
-          resolvedIds.set(entry.definition.id, product.id);
-          definitions.push(product);
-        } else definitions.push({ ...entry.definition, available: false, model: { url: `missing:${entry.definition.id}` } });
+    for (const entry of document.products) {
+      let product: ProductDefinition | undefined;
+      if (catalogueAvailable && !recoveryDeadline?.aborted) {
+        try {
+          if (/^model-[a-f0-9-]{36}--[a-f0-9]{64}$/.test(entry.definition.id)) {
+            const result = await fetch(`/api/published-models/${entry.definition.id}.json`, { signal: modelSignal() });
+            if (result.ok) product = await result.json();
+            else if (result.status !== 404) throw new Error('Could not retrieve a model revision. Retry opening this room.');
+          } else if (entry.hash || entry.legacyHash) {
+            const result = await fetch(`/api/model-legacy?hash=${entry.legacyHash ?? entry.hash}&id=${encodeURIComponent(entry.definition.id)}`, { signal: modelSignal() });
+            if (result.ok) product = await result.json();
+            else if (result.status !== 404) throw new Error('Could not resolve an older model. Retry opening this room.');
+          }
+        } catch (error) { if (!recovering) throw error; }
       }
-      document = { ...document, snapshot: { ...document.snapshot,
-        objects: document.snapshot.objects.map(item => ({ ...item, productId: resolvedIds.get(item.productId) ?? item.productId })),
-        unplacedObjects: document.snapshot.unplacedObjects.map(item => ({ ...item, productId: resolvedIds.get(item.productId) ?? item.productId })) },
-        version: 3, namespace: 'domus', products: definitions.map((definition, index) => ({ definition, hash: null, bytes: 0, ...(definition.available === false && (document.products[index]?.legacyHash ?? document.products[index]?.hash) ? { legacyHash: document.products[index].legacyHash ?? document.products[index].hash! } : {}) })) };
-      // Validation completed before replacing the effective catalogue or live layout.
-      const previous = this.products.map(entry => PRODUCTS[entry.definition.id]).filter(Boolean);
-      setRoomProducts([...previous, ...definitions]);
-      if (!this.adapter.open(document.snapshot)) { setRoomProducts(previous); throw new Error('This room could not be opened.'); }
-      setRoomProducts(definitions);
-      this.openingPins.clear();
-      this.products = document.products; this.generation++;
-      this.update({ warning: definitions.some(product => product.available === false) ? 'This room references missing models. Their positions have been retained. Reconnect and reopen to retry, or replace those items. The saved references have been retained.' : '' });
-    } catch (error) { throw error; }
+      if (product) {
+        resolvedIds.set(entry.definition.id, product.id);
+        definitions.push(product);
+      } else definitions.push({ ...entry.definition, available: false, model: { url: `missing:${entry.definition.id}` } });
+    }
+    document = { ...document, snapshot: { ...document.snapshot,
+      objects: document.snapshot.objects.map(item => ({ ...item, productId: resolvedIds.get(item.productId) ?? item.productId })),
+      unplacedObjects: document.snapshot.unplacedObjects.map(item => ({ ...item, productId: resolvedIds.get(item.productId) ?? item.productId })) },
+      version: 3, namespace: 'domus', products: definitions.map((definition, index) => ({ definition, hash: null, bytes: 0, ...(definition.available === false && (document.products[index]?.legacyHash ?? document.products[index]?.hash) ? { legacyHash: document.products[index].legacyHash ?? document.products[index].hash! } : {}) })) };
+    // Validation completed before replacing the effective catalogue or live layout.
+    const previous = this.products.map(entry => PRODUCTS[entry.definition.id]).filter(Boolean);
+    setRoomProducts([...previous, ...definitions]);
+    if (!this.adapter.open(document.snapshot)) { setRoomProducts(previous); throw new Error('This room could not be opened.'); }
+    setRoomProducts(definitions);
+    this.openingPins.clear();
+    this.products = document.products; this.generation++;
+    this.update({ warning: definitions.some(product => product.available === false) ? 'This room references missing models or models that could not be reached. Their positions and references have been retained. Reconnect and reopen to retry.' : '' });
   }
   private async prepare(complete = true): Promise<PreparedRoom> {
     const raw = this.pinOpenings(structuredClone(this.adapter.snapshot()));
@@ -215,6 +238,14 @@ export class BrowserRoomProjects {
     try { return await action(); }
     finally { this.update({ busy: '' }); }
   }
+  private async writeDraft(store: IDBObjectStore, draft: RecoveryDraft, generation = this.generation) {
+    // Keep an unrestored draft until a replacement has actually committed.
+    const previous = this.draftWritable ? undefined : await requestValue(store.get(this.tabId)) as RecoveryDraft | undefined;
+    if (generation !== this.generation) return false;
+    if (previous) store.put({ ...previous, id: `parked:${createId()}` });
+    store.put(draft);
+    return true;
+  }
   async save(value = this.state.name, asCopy = false) {
     return this.operation('Saving room…', async () => {
       await this.persistDraft();
@@ -230,13 +261,13 @@ export class BrowserRoomProjects {
         const rooms = await requestValue(stores.rooms.getAll()) as StoredRoom[];
         const existing = rooms.find(room => room.id === id);
         if (id && (!existing || existing.revision !== expected)) throw new Error('This room changed in another tab. Choose Save and enter a different name to keep both versions.');
-        if (rooms.some(room => room.id !== id && room.name.toLocaleLowerCase() === name.toLocaleLowerCase())) throw new Error('A room with this name already exists. Choose another name.');
+        if (rooms.some(room => room.id !== id && typeof room.name === 'string' && room.name.toLocaleLowerCase() === name.toLocaleLowerCase())) throw new Error('A room with this name already exists. Choose another name.');
         record = { id: id ?? createId(), name, createdAt: existing?.createdAt ?? now, updatedAt: now, revision: createId(), snapshot: prepared.document.snapshot, document: prepared.document };
         for (const asset of storedAssets) stores.assets.put(asset);
         stores.rooms.put(record);
         stores.meta.delete(`import:${this.tabId}`);
         stores.drafts.delete(`import:${this.tabId}`);
-        stores.drafts.put({ id: this.tabId, updatedAt: Date.now(), document: prepared.document, activeId: record.id, revision: record.revision, baseline: snapshotSignature(record.snapshot) });
+        await this.writeDraft(stores.drafts, { id: this.tabId, updatedAt: Date.now(), document: prepared.document, activeId: record.id, revision: record.revision, baseline: snapshotSignature(record.snapshot) });
       });
       this.products = prepared.document.products; this.baseline = snapshotSignature(prepared.document.snapshot); this.revision = record.revision; this.generation++;
       this.draftWritable = true;
@@ -250,16 +281,16 @@ export class BrowserRoomProjects {
   async newRoom(value: string, shape: Exclude<RoomShapeKind, 'custom'>) {
     return this.operation('Creating room…', async () => {
       const document: RoomDocumentV2 = { format: 'domus-room', version: 2, name: this.name(value), snapshot: this.adapter.empty(shape), products: [] };
-      await this.activate(this.decode(document)); this.baseline = null; this.revision = null; this.draftWritable = true;
-      this.update({ name: document.name, activeId: null, dirty: true, savedAt: null }); await this.persistDraft();
+      await this.activate(this.decode(document)); this.baseline = null; this.revision = null;
+      this.update({ name: document.name, activeId: null, dirty: true, savedAt: null }); await this.persistDraft(true);
     });
   }
   async open(id: string) {
     return this.operation('Opening room…', async () => {
       const rooms = await this.refreshRooms() as StoredRoom[]; const record = rooms.find(room => room.id === id);
       if (!record) throw new Error('This saved room is no longer available.');
-      await this.activate(this.decode(readDocument(record.document))); this.baseline = this.serialize(); this.revision = record.revision; this.draftWritable = true;
-      this.update({ name: record.name, activeId: id, dirty: false, savedAt: record.updatedAt }); await this.persistDraft();
+      await this.activate(this.decode(readDocument(record.document))); this.baseline = this.serialize(); this.revision = record.revision;
+      this.update({ name: record.name, activeId: id, dirty: false, savedAt: record.updatedAt }); await this.persistDraft(true);
     });
   }
   async remove(id: string, expectedRevision: string) {
@@ -295,7 +326,7 @@ export class BrowserRoomProjects {
     if (value?.format === 'domus-room' && value.version !== 1) throw new Error('This room file version is not supported.');
     return { document: this.legacyDocument(value?.format === 'domus-room' ? value.name : file.name.replace(/(?:\.domus)?\.json$/i, '').slice(0, 80), value?.format === 'domus-room' ? value.snapshot : value), assets: [] };
   }
-  async importRoom(prepared: PreparedRoom) {
+  async importRoom(prepared: PreparedRoom, recovering = false) {
     return this.operation('Importing room…', async () => {
       const document = this.decode(readDocument(prepared.document));
       const storedAssets: Awaited<ReturnType<typeof encodeAssets>> = [];
@@ -305,20 +336,20 @@ export class BrowserRoomProjects {
         stores.drafts.put({ id: `import:${this.tabId}`, updatedAt: Date.now(), document, activeId: null, revision: null, baseline: null });
       });
       try {
-        await this.activate(document); this.baseline = null; this.revision = null; this.draftWritable = true;
-        this.update({ name: document.name, activeId: null, dirty: true, savedAt: null }); await this.persistDraft();
+        await this.activate(document, recovering); this.baseline = null; this.revision = null;
+        this.update({ name: document.name, activeId: null, dirty: true, savedAt: null }); await this.persistDraft(true);
       } finally { if (this.draftHealthy) await this.database.commit(async stores => { stores.drafts.delete(`import:${this.tabId}`); }).catch(() => {}); }
     });
   }
   async restoreDraft(id: string) {
     const draft = this.checkedDrafts(await this.database.all<RecoveryDraft>('drafts')).find(draft => draft.id === id);
     if (!draft) throw new Error('This recovery draft is no longer available.');
-    return this.importRoom({ document: draft.document, assets: [] });
+    return this.importRoom({ document: draft.document, assets: [] }, true);
   }
   async discardRecovery(id: string, updatedAt: number) {
     return this.operation('Discarding recovery draft…', async () => {
       if (id === this.tabId) throw new Error('The current tab still uses this recovery draft.');
-      const owner = id.replace(/^import:/, '');
+      const owner = id.startsWith('parked:') ? this.tabId : id.replace(/^import:/, '');
       const discard = async () => this.database.commit(async stores => {
         const draft = await requestValue(stores.drafts.get(id)) as RecoveryDraft | undefined;
         if (!draft || draft.updatedAt !== updatedAt) throw new Error('This draft changed. Reopen Storage & recovery before discarding it.');
@@ -336,8 +367,8 @@ export class BrowserRoomProjects {
       await this.storageInfo();
     });
   }
-  persistDraft(): Promise<void> {
-    if (!this.state.initialized || !this.draftWritable || this.saving) return Promise.resolve();
+  persistDraft(replacing = false): Promise<void> {
+    if (!this.state.initialized || (!this.draftWritable && !replacing) || this.saving) return Promise.resolve();
     const generation = this.generation;
     const raw = this.pinOpenings(structuredClone(this.adapter.snapshot()));
     const state = { name: this.state.name, activeId: this.state.activeId, revision: this.revision, baseline: this.baseline };
@@ -353,14 +384,16 @@ export class BrowserRoomProjects {
         const assets: ModelAsset[] = [];
         const durableProducts = products.map(entry => ({ definition: { ...entry.definition, model: { url: `published:${entry.definition.id}` } }, hash: null, bytes: 0, legacyHash: entry.legacyHash ?? entry.hash ?? undefined }));
         if (generation !== this.generation) return;
+        const document = readDocument({ format: 'domus-room', version: 3, namespace: 'domus', name: state.name, snapshot: raw, products: durableProducts });
         const storedAssets = await encodeAssets(assets);
+        let stored = false;
         await this.database.commit(async stores => {
           if (generation !== this.generation) return;
           for (const asset of storedAssets) stores.assets.put(asset);
-          stores.drafts.put({ id: this.tabId, updatedAt: Date.now(), document: { format: 'domus-room', version: 3, namespace: 'domus', name: state.name, snapshot: raw, products: durableProducts },
-            activeId: state.activeId, revision: state.revision, baseline: state.baseline });
+          stored = await this.writeDraft(stores.drafts, { id: this.tabId, updatedAt: Date.now(), document,
+            activeId: state.activeId, revision: state.revision, baseline: state.baseline }, generation);
         });
-        this.draftHealthy = true;
+        if (stored) { this.draftWritable = true; this.draftHealthy = true; }
       } catch { this.draftHealthy = false; this.update({ warning: 'Recovery could not be stored. Download a room file to keep your work.' }); }
     };
     return this.draftQueue = this.draftQueue.then(action, action);

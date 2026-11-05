@@ -14,7 +14,8 @@ test('master-free public release supports transfer, approved-model extraction, a
   // A modified/old client is allowed to save the display asset. It still cannot obtain a master.
   const display = await request.get(origin + product.model.url, { headers: { 'User-Agent': 'DomusClient/0.1-modified' } });
   expect(display.status()).toBe(200); expect((await display.body()).subarray(0, 4).toString()).toBe('glTF');
-  for (const path of ['/models/fixture-bed.glb', '/private/models/fixture-bed.glb', '/@fs/private/models/fixture-bed.glb', '/api/model-catalogue/rescan', '/api/model-catalogue/compact']) expect((await request.get(origin + path)).status()).toBe(404);
+  for (const path of ['/models/fixture-bed.glb', '/private/models/fixture-bed.glb', '/@fs/private/models/fixture-bed.glb', '/api/model-catalogue/rescan', '/api/model-catalogue/compact', '/api/ai/config']) expect((await request.get(origin + path)).status()).toBe(404);
+  for (const path of ['/api/ai/models', '/api/ai/turn']) expect((await request.post(origin + path, { data: {} })).status()).toBe(404);
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true });
   const fresh = await browser.newContext({ viewport: { width: 390, height: 844 }, acceptDownloads: true });
   try {
@@ -22,6 +23,7 @@ test('master-free public release supports transfer, approved-model extraction, a
     await expect(page.getByRole('button', { name: 'Project', exact: true })).toBeEnabled();
     await page.getByRole('button', { name: 'Plan room', exact: true }).click();
     await expect(page.locator('.loading-status')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Experimental AI room assistant' })).toHaveCount(0);
     await page.getByRole('button', { name: /^fixture-bed/ }).click();
     await expect(page.locator('.loading-status')).toHaveCount(0);
     await menu(page, /^Save/); await page.getByRole('textbox', { name: 'Room name', exact: true }).fill('Public transfer');
@@ -40,6 +42,10 @@ test('master-free public release supports transfer, approved-model extraction, a
     await expect(other.locator('.project-status')).toContainText('Public transfer');
     await other.getByRole('navigation', { name: 'Phone workspace' }).getByRole('button', { name: 'Furniture', exact: true }).click();
     await expect(other.locator('.loading-status')).toHaveCount(0);
+    await other.getByRole('button', { name: 'View', exact: true }).click();
+    await expect(other.getByRole('button', { name: 'Design & lighting' })).toBeVisible();
+    await expect(other.getByRole('button', { name: 'Room assistant' })).toHaveCount(0);
+    await other.getByRole('button', { name: 'View', exact: true }).click();
     for (const [action, signature] of [[/^Export room/, 'glTF'], [/^Export to PDF/, '%PDF']] as const) {
       const event = other.waitForEvent('download'); await menu(other, action);
       const name = info.outputPath(signature === 'glTF' ? 'public-architecture.glb' : 'public-report.pdf'); await (await event).saveAs(name);

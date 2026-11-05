@@ -15,7 +15,7 @@ const { loadReportFonts, loadInterfaceFonts } = await vite.ssrLoadModule('/src/c
 const { drawReportPlanKey, renderRoomViewPages } = await vite.ssrLoadModule('/src/core/roomReportViews.ts');
 const { PlannerScene } = await vite.ssrLoadModule('/src/renderer/PlannerScene.ts');
 
-test('reports distinguish entered real-life sizes, geometry fallbacks and catalogue sizes without changing placement', () => {
+test('reports distinguish entered, source model, geometry and sample dimensions without changing placement', () => {
   const snapshot = emptyRoomSnapshot();
   const product = { id: 'bed', name: 'Bed', category: 'Hospital Bed', width: 1, depth: 1.5, height: 0.5, displayDimensions: { width: 1.2, depth: 2.1, height: 0.9 }, model: { url: '/bed.glb' } };
   snapshot.objects = [{ id: 'a', productId: 'bed', x: 1.5, z: 2, rotationY: -Math.PI / 2 }];
@@ -23,12 +23,13 @@ test('reports distinguish entered real-life sizes, geometry fallbacks and catalo
   const before = structuredClone(snapshot), report = roomReportData(snapshot, { bed: product });
   assert.equal(report.furniture[0].dimensions, '2.10 × 1.20 × 0.90');
   assert.equal(report.furniture[0].geometryDimensions, '1.50 × 1.00 × 0.50');
-  assert.equal(report.furniture[0].dimensionSource, 'Real-life dimensions');
+  assert.equal(report.furniture[0].dimensionSource, 'Entered dimensions');
   assert.deepEqual(report.furniture.map((item) => [item.quantity, item.status]), [[1, 'In room'], [2, 'Not placed']]);
   assert.equal(report.instances[0].rotation, 270); assert.deepEqual(snapshot, before);
   const noEntered = { ...product, displayDimensions: undefined };
-  assert.equal(roomReportData(snapshot, { bed: noEntered }).furniture[0].dimensionSource, 'Real-life size not supplied');
-  assert.equal(roomReportData(snapshot, { bed: { ...noEntered, model: undefined } }).furniture[0].dimensionSource, 'Catalogue dimensions');
+  assert.equal(roomReportData(snapshot, { bed: { ...product, displayDimensions: { ...product.displayDimensions, source: 'source-model' } } }).furniture[0].dimensionSource, 'Source model');
+  assert.equal(roomReportData(snapshot, { bed: noEntered }).furniture[0].dimensionSource, 'Model geometry');
+  assert.equal(roomReportData(snapshot, { bed: { ...noEntered, model: undefined } }).furniture[0].dimensionSource, 'Sample catalogue');
   assert.equal(roomReportData(snapshot, {}).furniture[0].dimensions, 'Unavailable');
 });
 

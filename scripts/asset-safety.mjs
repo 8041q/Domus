@@ -46,6 +46,7 @@ export function publicProduct(product) {
   for (const [key, fields] of [['displayDimensions', ['width', 'depth', 'height']], ['collisionFootprint', ['width', 'depth', 'offsetX', 'offsetZ']], ['clearance', ['front', 'back', 'sides']], ['interaction', ['tags', 'allowOverlapWith']]]) {
     if (product[key]) result[key] = Object.fromEntries(fields.filter(field => product[key][field] !== undefined).map(field => [field, structuredClone(product[key][field])]));
   }
+  if (product.displayDimensions?.source === 'source-model') result.displayDimensions.source = 'source-model';
   if (result.catalogueId && !product.id.startsWith(result.catalogueId + '--') || typeof result.name !== 'string' || result.name.length > 500
     || !['width', 'depth', 'height'].every(key => Number.isFinite(result[key]) && result[key] > 0 && result[key] <= 1000)) throw new Error('Invalid public model metadata');
   result.model = { url: `/api/published-models/${product.id}.glb` };
@@ -67,7 +68,19 @@ export function publicDisplayGLB(value, { preserveNames = false } = {}) {
   };
   strip(document);
   for (const key of ['extensionsUsed', 'extensionsRequired']) if (document[key]) document[key] = document[key].filter(name => name !== 'KHR_xmp_json_ld');
-  if (!preserveNames) for (const key of ['nodes', 'meshes', 'materials', 'textures', 'images', 'scenes', 'animations', 'cameras', 'skins']) for (const item of document[key] ?? []) delete item.name;
+  // Part and material roles are required only by architectural resizing. Other
+  // standard glTF names can reveal CAD filenames, image names and authoring labels.
+  const namedCollections = ['nodes', 'meshes', 'materials', 'textures', 'images', 'scenes', 'animations', 'cameras', 'skins', 'accessors', 'buffers', 'bufferViews', 'samplers'];
+  for (const key of namedCollections) {
+    if (preserveNames && ['nodes', 'meshes', 'materials'].includes(key)) continue;
+    for (const item of document[key] ?? []) delete item.name;
+  }
+  // glTF ignores application-specific root/asset properties; they are not needed
+  // for display. Keep copyright notices and rendering extensions intact.
+  const rootFields = new Set(['asset', 'extensions', 'extensionsUsed', 'extensionsRequired', 'scene', ...namedCollections]);
+  for (const key of Object.keys(document)) if (!rootFields.has(key)) delete document[key];
+  document.asset = Object.fromEntries(['version', 'minVersion', 'copyright', 'extensions']
+    .filter(key => document.asset[key] !== undefined).map(key => [key, document.asset[key]]));
   document.asset.generator = 'Domus public display publisher';
   const raw = Buffer.from(JSON.stringify(document));
   const metadata = Buffer.concat([raw, Buffer.alloc((4 - raw.length % 4) % 4, 32)]);

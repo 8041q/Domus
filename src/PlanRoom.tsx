@@ -2,7 +2,7 @@ import { LIGHTING_CONTROLS, LIGHTING_MOODS, normalizeLightingControls } from './
 import { FEATURES } from './config/features';
 import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ChangeEvent } from 'react';
 import { PRODUCT_LIST, PRODUCTS, displayProductDimensions, getProductCatalogueIssues, getProductCatalogueVersion, subscribeProductCatalogue } from './core/products';
-import { PRODUCT_CATEGORIES } from './core/productSchema';
+import { PRODUCT_CATEGORIES, productDimensionSourceLabel } from './core/productSchema';
 import { clearanceIssues, resolvePlacement } from './core/placement';
 import { polygonArea } from './core/roomGeometry';
 import { architectureRoom } from './core/spaces';
@@ -69,6 +69,7 @@ function SelectionPanel() {
   const duplicate = usePlannerStore((s) => s.duplicateSelected);
   const remove = usePlannerStore((s) => s.removeSelected);
   const rotationBefore = useRef<ReturnType<typeof getSnapshot> | null>(null);
+  const rotationPointerActive = useRef(false);
   const selected = objects.find((o) => o.id === selectedId);
   const [rotationDraft, setRotationDraft] = useState('0.0');
   const [rotationError, setRotationError] = useState('');
@@ -80,6 +81,7 @@ function SelectionPanel() {
   const degrees = angleDegrees(selected.rotationY);
 
   const finishRotation = () => {
+    rotationPointerActive.current = false;
     if (rotationBefore.current) commitSnapshot(rotationBefore.current);
     rotationBefore.current = null;
   };
@@ -94,6 +96,7 @@ function SelectionPanel() {
         <span>{formatLength(displaySize.depth, measurementSystem)} D</span>
         <span>{formatLength(displaySize.height, measurementSystem)} H</span>
       </div>
+      {product.model && <small className="selection-dimension-source">{product.available === false ? 'Model unavailable' : productDimensionSourceLabel(product)}</small>}
 
       <div className="rotation-control">
         <div className="range-value-row">
@@ -138,13 +141,16 @@ function SelectionPanel() {
           step="0.1"
           value={Math.min(359.9, degrees)}
           list="rotation-stops"
-          onPointerDown={() => { if (!rotationBefore.current) rotationBefore.current = getSnapshot(); }}
-          onFocus={() => { if (!rotationBefore.current) rotationBefore.current = getSnapshot(); }}
+          onPointerDown={() => { rotationPointerActive.current = true; }}
           onChange={(e: ChangeEvent<HTMLInputElement>) => {
-            const next = magnetizeRightAngles(Number(e.target.value));
+            rotationBefore.current ??= getSnapshot();
+            const value = Number(e.target.value);
+            const next = rotationPointerActive.current ? magnetizeRightAngles(value) : value;
             setSelectedRotation(next * Math.PI / 180, false);
           }}
           onPointerUp={finishRotation}
+          onPointerCancel={finishRotation}
+          onKeyUp={finishRotation}
           onBlur={finishRotation}
           aria-label="Furniture rotation in degrees"
         />
@@ -304,20 +310,24 @@ function DesignPanel({ onClose }: { onClose: () => void }) {
   const windowCount = usePlannerStore((s) => s.openings.filter((opening) => !opening.wallId.startsWith('divider-') && isSunGlazedOpening(opening)).length);
   const setRoomLighting = usePlannerStore((s) => s.setRoomLighting);
   const commitSnapshot = usePlannerStore((s) => s.commitSnapshot);
-  const sunAngleBefore = useRef<ReturnType<typeof getSnapshot> | null>(null);
+  const lightingBefore = useRef<ReturnType<typeof getSnapshot> | null>(null);
   const hasWindow = windowCount > 0;
   const horizontalAngle = effectiveSunAzimuth(lighting.sunAzimuth, windowCount);
 
-  const finishSunAngle = () => {
-    if (sunAngleBefore.current) commitSnapshot(sunAngleBefore.current);
-    sunAngleBefore.current = null;
+  const previewLighting = (patch: Parameters<typeof setRoomLighting>[0]) => {
+    lightingBefore.current ??= getSnapshot();
+    setRoomLighting(patch, false);
+  };
+  const finishLighting = () => {
+    if (lightingBefore.current) commitSnapshot(lightingBefore.current);
+    lightingBefore.current = null;
   };
 
-  const sunAngleEvents = {
-    onFocus: () => { if (!sunAngleBefore.current) sunAngleBefore.current = getSnapshot(); },
-    onPointerDown: () => { if (!sunAngleBefore.current) sunAngleBefore.current = getSnapshot(); },
-    onPointerUp: finishSunAngle,
-    onBlur: finishSunAngle
+  const lightingRangeEvents = {
+    onPointerUp: finishLighting,
+    onPointerCancel: finishLighting,
+    onKeyUp: finishLighting,
+    onBlur: finishLighting
   };
 
   return (
@@ -344,8 +354,8 @@ function DesignPanel({ onClose }: { onClose: () => void }) {
           return <div className="sun-angle-control" key={control.key}>
             <div><span>{control.label}</span><output>{Math.round(value * 100)}%</output></div>
             <input type="range" aria-label={control.label} min={control.min} max={control.max} step={control.step}
-              value={value} disabled={disabled} {...sunAngleEvents}
-              onChange={(event) => setRoomLighting({ [control.key]: Number(event.target.value) }, false)} />
+              value={value} disabled={disabled} {...lightingRangeEvents}
+              onChange={(event) => previewLighting({ [control.key]: Number(event.target.value) })} />
           </div>;
         })}
         <small>Warmth runs from cool to warm. Ambient fill controls the room’s background illumination.</small>
@@ -366,13 +376,13 @@ function DesignPanel({ onClose }: { onClose: () => void }) {
         </label>
         <div className="sun-angle-control">
           <div><span>Horizontal</span><output>{horizontalAngle}°</output></div>
-          <input type="range" min={windowCount === 1 ? -SUN_SINGLE_WINDOW_LIMIT : SUN_AZIMUTH_MIN} max={windowCount === 1 ? SUN_SINGLE_WINDOW_LIMIT : SUN_AZIMUTH_MAX} step="1" value={horizontalAngle} aria-label="Sun horizontal angle" disabled={!lighting.sunRaysEnabled} {...sunAngleEvents}
-            onChange={(e) => setRoomLighting({ sunAzimuth: normalizeSunAzimuth(e.target.value) }, false)} />
+          <input type="range" min={windowCount === 1 ? -SUN_SINGLE_WINDOW_LIMIT : SUN_AZIMUTH_MIN} max={windowCount === 1 ? SUN_SINGLE_WINDOW_LIMIT : SUN_AZIMUTH_MAX} step="1" value={horizontalAngle} aria-label="Sun horizontal angle" disabled={!lighting.sunRaysEnabled} {...lightingRangeEvents}
+            onChange={(e) => previewLighting({ sunAzimuth: normalizeSunAzimuth(e.target.value) })} />
         </div>
         <div className="sun-angle-control">
           <div><span>Height</span><output>{lighting.sunElevation}°</output></div>
-          <input type="range" min={SUN_ELEVATION_MIN} max={SUN_ELEVATION_MAX} step="1" value={lighting.sunElevation} aria-label="Sun height angle" disabled={!lighting.sunRaysEnabled} {...sunAngleEvents}
-            onChange={(e) => setRoomLighting({ sunElevation: Number(e.target.value) }, false)} />
+          <input type="range" min={SUN_ELEVATION_MIN} max={SUN_ELEVATION_MAX} step="1" value={lighting.sunElevation} aria-label="Sun height angle" disabled={!lighting.sunRaysEnabled} {...lightingRangeEvents}
+            onChange={(e) => previewLighting({ sunElevation: Number(e.target.value) })} />
         </div>
         <small>{windowCount === 1 ? '0° faces the glazed opening; the slider stops at its horizon.' : '0° faces the first glazed opening. Rotate through 360° to reach the others.'}</small>
       </div>}
@@ -507,6 +517,7 @@ const ProductCatalog = memo(function ProductCatalog() {
             <div className="product-visual"><ProductGlyph productId={product.id} /></div>
             <strong>{product.name}</strong>
             <small>{Math.round(displayProductDimensions(product).width * 100)} × {Math.round(displayProductDimensions(product).depth * 100)} cm</small>
+            {product.model && <small>{productDimensionSourceLabel(product)}</small>}
             <span>{product.priceLabel}</span>
           </button>
         ))}
@@ -538,7 +549,6 @@ export function PlanRoom({ onExportReady, onPdfExportReady }: {
   const spaces = usePlannerStore((s) => s.spaces);
   const selectSpace = usePlannerStore((s) => s.selectSpace);
   const measurementSystem = usePlannerStore((s) => s.measurementSystem);
-  const sunRaysEnabled = usePlannerStore((s) => s.room.lighting.sunRaysEnabled);
   const planView = usePlannerStore((s) => s.planView);
   const setPlanView = usePlannerStore((s) => s.setPlanView);
   const interiorWallView = usePlannerStore((s) => s.interiorWallView);
@@ -644,7 +654,7 @@ export function PlanRoom({ onExportReady, onPdfExportReady }: {
           </div>}
 
           <LoadingBoundary label="Preparing your room…" detail="Opening the 3D view">
-            <Viewport3D furniture interactive sunRays={sunRaysEnabled} view={planView} resetViewRequest={resetViewRequest} onExportReady={onExportReady} onPdfExportReady={onPdfExportReady} />
+            <Viewport3D furniture interactive view={planView} resetViewRequest={resetViewRequest} onExportReady={onExportReady} onPdfExportReady={onPdfExportReady} />
           </LoadingBoundary>
           {FEATURES.aiExperiment && (compact ? mobileSheet === 'assistant' : showAi) && <Suspense fallback={compact ? <MobileSheet id="assistant" title="Room assistant"><p role="status">Opening assistant…</p></MobileSheet> : <AssistantOpening onClose={() => setShowAi(false)} />}><AIExperimentPanel onClose={compact ? closeSheet : () => setShowAi(false)} /></Suspense>}
           {(compact ? mobileSheet === 'finishes' : showFinishes) && <FinishesPanel onClose={compact ? closeSheet : () => setShowFinishes(false)} />}

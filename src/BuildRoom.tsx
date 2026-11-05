@@ -210,6 +210,7 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
   const sliderBefore = useRef<ReturnType<typeof getSnapshot> | null>(null);
   const sizeBefore = useRef<ReturnType<typeof getSnapshot> | null>(null);
   const sliderRaf = useRef<number | null>(null);
+  const positionPointerActive = useRef(false);
   const pendingOffset = useRef(opening.offset);
   const walls = useMemo(() => getPhysicalWalls(room, FEATURES.interiorWalls ? dividers : []).filter((segment) => opening.type !== 'window' || !!getWall(room, segment.id)), [room, dividers, opening.type]);
   const wall = walls.find((candidate) => candidate.id === opening.wallId);
@@ -234,6 +235,11 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
   useEffect(() => () => { if (sliderRaf.current != null) cancelAnimationFrame(sliderRaf.current); }, []);
 
   const previewOffset = (offset: number) => {
+    sliderBefore.current ??= getSnapshot();
+    if (!positionPointerActive.current) {
+      updateOpening(opening.id, positionPatch(offset), false);
+      return;
+    }
     pendingOffset.current = offset;
     if (sliderRaf.current != null) return;
     sliderRaf.current = requestAnimationFrame(() => {
@@ -243,6 +249,7 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
   };
 
   const finishSlider = () => {
+    positionPointerActive.current = false;
     if (sliderRaf.current != null) {
       cancelAnimationFrame(sliderRaf.current);
       sliderRaf.current = null;
@@ -252,11 +259,15 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
     sliderBefore.current = null;
   };
 
-  const beginSize = () => { if (!sizeBefore.current) sizeBefore.current = getSnapshot(); };
+  const previewSize = (patch: Partial<RoomOpening>) => {
+    sizeBefore.current ??= getSnapshot();
+    updateOpening(opening.id, patch, false);
+  };
   const finishSize = () => {
     if (sizeBefore.current) commitSnapshot(sizeBefore.current);
     sizeBefore.current = null;
   };
+  const sizeRangeEvents = { onPointerUp: finishSize, onPointerCancel: finishSize, onKeyUp: finishSize, onBlur: finishSize };
 
   return (
     <div className="opening-editor">
@@ -323,10 +334,11 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
           max={endOffset}
           step={system === 'metric' ? 0.01 : 0.0254}
           value={position}
-          onFocus={() => { if (!sliderBefore.current) sliderBefore.current = getSnapshot(); }}
-          onPointerDown={() => { if (!sliderBefore.current) sliderBefore.current = getSnapshot(); }}
+          onPointerDown={() => { positionPointerActive.current = true; }}
           onChange={(e: ChangeEvent<HTMLInputElement>) => previewOffset(Number(e.target.value))}
           onPointerUp={finishSlider}
+          onPointerCancel={finishSlider}
+          onKeyUp={finishSlider}
           onBlur={finishSlider}
         />
       </label>
@@ -334,16 +346,12 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
         <label className="field-label range-field">
           <EditableRangeValue label="Width" value={opening.width} min={minOpeningWidth} max={Math.max(minOpeningWidth, maxWidth)} system={system} onCommit={(width) => updateOpening(opening.id, { width })} />
           <input className="range" type="range" min={minOpeningWidth} max={Math.max(minOpeningWidth, maxWidth)} step={system === 'metric' ? 0.01 : 0.0127} value={opening.width}
-            onPointerDown={beginSize} onFocus={beginSize}
-            onChange={(e) => updateOpening(opening.id, { width: Number(e.target.value) }, false)}
-            onPointerUp={finishSize} onBlur={finishSize} />
+            onChange={(e) => previewSize({ width: Number(e.target.value) })} {...sizeRangeEvents} />
         </label>
         <label className="field-label range-field">
           <EditableRangeValue label="Height" value={opening.height} min={minOpeningHeight} max={Math.max(minOpeningHeight, room.height - opening.sillHeight)} system={system} onCommit={(height) => updateOpening(opening.id, { height })} />
           <input className="range" type="range" min={minOpeningHeight} max={Math.max(minOpeningHeight, room.height - opening.sillHeight)} step={system === 'metric' ? 0.01 : 0.0127} value={opening.height}
-            onPointerDown={beginSize} onFocus={beginSize}
-            onChange={(e) => updateOpening(opening.id, { height: Number(e.target.value) }, false)}
-            onPointerUp={finishSize} onBlur={finishSize} />
+            onChange={(e) => previewSize({ height: Number(e.target.value) })} {...sizeRangeEvents} />
         </label>
       </div>
       {opening.type !== 'door' && !(opening.type === 'opening' && opening.wallId.startsWith('divider-'))
@@ -357,11 +365,8 @@ function OpeningEditor({ opening }: { opening: RoomOpening }) {
             max={Math.max(0, room.height - opening.height)}
             step={system === 'metric' ? 0.01 : 0.0127}
             value={opening.sillHeight}
-            onPointerDown={beginSize}
-            onFocus={beginSize}
-            onChange={(e) => updateOpening(opening.id, { sillHeight: Number(e.target.value) }, false)}
-            onPointerUp={finishSize}
-            onBlur={finishSize}
+            onChange={(e) => previewSize({ sillHeight: Number(e.target.value) })}
+            {...sizeRangeEvents}
           />
         </label>
       )}
@@ -402,10 +407,13 @@ function WallEditor({ wallId }: { wallId: string }) {
           max={20}
           step={system === 'metric' ? 0.05 : 0.0254}
           value={wall.length}
-          onPointerDown={() => { if (!sliderBefore.current) sliderBefore.current = getSnapshot(); }}
-          onFocus={() => { if (!sliderBefore.current) sliderBefore.current = getSnapshot(); }}
-          onChange={(e) => resizeWallById(wall.id, Number(e.target.value), false)}
+          onChange={(e) => {
+            sliderBefore.current ??= getSnapshot();
+            resizeWallById(wall.id, Number(e.target.value), false);
+          }}
           onPointerUp={finishSlider}
+          onPointerCancel={finishSlider}
+          onKeyUp={finishSlider}
           onBlur={finishSlider}
         />
       </label>

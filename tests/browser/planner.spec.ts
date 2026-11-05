@@ -81,6 +81,48 @@ test('reference room reopens its retained model after the source is removed', as
   } finally { await fresh.close(); await writeFile(source, bytes); await request.post('/api/model-catalogue/rescan'); }
 });
 
+test('a catalogue outage recovers unsaved work and keeps editor navigation usable', async ({ page }) => {
+  page.on('dialog', dialog => dialog.accept());
+  await ready(page);
+  const height = page.getByRole('textbox', { name: 'Room height in metres' });
+  await height.fill('3.25');
+  await height.press('Enter');
+  await plan(page);
+  await page.getByRole('button', { name: /^fixture-bed/ }).click();
+  const item = page.getByRole('button', { name: 'Select fixture-bed', exact: true });
+  await expect(item).toBeVisible();
+  await expect.poll(() => page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('domus-projects-v2');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    try {
+      return await new Promise<number>((resolve, reject) => {
+        const request = db.transaction('drafts').objectStore('drafts').get(sessionStorage.getItem('domus-tab-id')!);
+        request.onsuccess = () => resolve(request.result?.document.snapshot.objects.length ?? 0);
+        request.onerror = () => reject(request.error);
+      });
+    } finally { db.close(); }
+  })).toBe(1);
+
+  await page.route('**/api/model-catalogue', route => route.abort());
+  await page.reload();
+  await expect(height).toHaveValue('3.25');
+  await expect(page.getByRole('alert').filter({ hasText: /references missing models/ })).toBeVisible();
+  await page.getByRole('button', { name: 'Plan room', exact: true }).click();
+  await expect(item.getByText('Model unavailable')).toBeVisible();
+  await expect(page.locator('.loading-status-blocking')).toHaveCount(0);
+  await save(page, 'Recovered ward');
+
+  await page.unroute('**/api/model-catalogue');
+  await page.reload();
+  await expect(height).toHaveValue('3.25');
+  await plan(page);
+  await expect(item).toBeVisible();
+  await expect(item.getByText('Model unavailable')).toHaveCount(0);
+});
+
 test('malformed imports preserve the active room and unsaved-change dialogs protect replacement', async ({ page }) => {
   await ready(page); await save(page, 'Protected');
   await page.getByRole('textbox', { name: 'Room height in metres' }).fill('2.90');

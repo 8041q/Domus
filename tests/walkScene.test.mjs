@@ -74,7 +74,7 @@ const middleWall = { id: 'divider-middle', kind: 'wall', start: { kind: 'perimet
 function stubStateRendering(scene) {
   Object.assign(scene, { lastRoomKey: '', lastOpeningsKey: '', lastRenderedOpenings: [], lastHelperKey: '', lastSpacingHelperKey: '', lastSnapHelperKey: '',
     helperStateKey: () => '', spacingHelperStateKey: () => '', snapHelperStateKey: () => '' });
-  for (const method of ['rebuildRoom', 'updateShadowBounds', 'syncSunsetAngles', 'syncObjects', 'syncHelperTransforms', 'applyRoomLighting', 'syncArchitectureSpacing']) scene[method] = () => {};
+  for (const method of ['rebuildRoom', 'updateShadowBounds', 'syncSunset', 'syncObjects', 'syncHelperTransforms', 'applyRoomLighting', 'syncArchitectureSpacing']) scene[method] = () => {};
 }
 
 test('walk enters at human height with a broad FOV, complete architecture and hidden editing overlays', () => {

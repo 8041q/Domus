@@ -1,6 +1,192 @@
 {
   "version": 1,
-  "entries": [],
+  "entries": [
+    {
+      "id": "model-b4839f8e-bee7-416f-a501-07b88ad820d0",
+      "file": "AInno20-proxy.glb",
+      "fingerprint": "131b91d56eea612f58f1b746e9ee57d98ed5f27897ef6555fb49416bccc25e8a",
+      "stamp": "503520:1793719150845.1118",
+      "product": {
+        "id": "model-b4839f8e-bee7-416f-a501-07b88ad820d0",
+        "name": "AInno20 — planning model",
+        "category": "Others",
+        "width": 2.845639944076538,
+        "depth": 1.4555105566978455,
+        "height": 1.3919683694839478,
+        "available": true,
+        "displayDimensions": {
+          "width": 2.845639226166533,
+          "depth": 1.4555452808724807,
+          "height": 1.3893003026274624,
+          "source": "source-model"
+        },
+        "collision": true,
+        "wallAffinity": false,
+        "collisionFootprint": {
+          "width": 2.845639944076538,
+          "depth": 1.4555105566978455
+        },
+        "clearance": {
+          "front": 0,
+          "back": 0,
+          "sides": 0
+        },
+        "priceLabel": "",
+        "swatch": "#ebebeb",
+        "model": {
+          "url": "/models/AInno20-proxy.glb?v=131b91d56eea612f"
+        }
+      }
+    },
+    {
+      "id": "model-fd6a2997-d7b2-46a5-98c3-527e2ad311ba",
+      "file": "C8c-proxy.glb",
+      "fingerprint": "dc0460be56f2629db23521dc63d012fdfea3c0888e1602b300fa12b386b3cf0c",
+      "stamp": "2077980:1793718848052.4148",
+      "product": {
+        "id": "model-fd6a2997-d7b2-46a5-98c3-527e2ad311ba",
+        "name": "C8c — planning model",
+        "category": "Hospital Bed",
+        "width": 1.0390880107879639,
+        "depth": 2.180785894393921,
+        "height": 0.8389719724655151,
+        "available": true,
+        "displayDimensions": {
+          "width": 1.0390874717716971,
+          "depth": 2.1807869510548077,
+          "height": 0.8389721839722621,
+          "source": "source-model"
+        },
+        "collision": true,
+        "wallAffinity": false,
+        "collisionFootprint": {
+          "width": 1.0390880107879639,
+          "depth": 2.180785894393921
+        },
+        "clearance": {
+          "front": 0,
+          "back": 0,
+          "sides": 0
+        },
+        "priceLabel": "",
+        "swatch": "#adadad",
+        "model": {
+          "url": "/models/C8c-proxy.glb?v=dc0460be56f2629d"
+        }
+      }
+    },
+    {
+      "id": "model-ebeffb5d-de2d-485b-aef0-15d73e4e07d1",
+      "file": "D8d-proxy.glb",
+      "fingerprint": "e2178bf163f926d7011036f4071733f44eb3dec12108259ac91656d0d25027ad",
+      "stamp": "2071456:1793718839303.9011",
+      "product": {
+        "id": "model-ebeffb5d-de2d-485b-aef0-15d73e4e07d1",
+        "name": "D8d — planning model",
+        "category": "Hospital Bed",
+        "width": 1.1270439624786377,
+        "depth": 2.286900043487549,
+        "height": 1.1774485775385983,
+        "available": true,
+        "displayDimensions": {
+          "width": 1.1270435745896088,
+          "depth": 2.286900376882797,
+          "height": 1.1768048115427723,
+          "source": "source-model"
+        },
+        "collision": true,
+        "wallAffinity": false,
+        "collisionFootprint": {
+          "width": 1.1270439624786377,
+          "depth": 2.286900043487549
+        },
+        "clearance": {
+          "front": 0,
+          "back": 0,
+          "sides": 0
+        },
+        "priceLabel": "",
+        "swatch": "#ebebeb",
+        "model": {
+          "url": "/models/D8d-proxy.glb?v=e2178bf163f926d7"
+        }
+      }
+    },
+    {
+      "id": "model-3817c7fe-6599-4f0a-97b5-343310a03947",
+      "file": "V8v-proxy.glb",
+      "fingerprint": "1860ca89659c941f95a4249bfdb062322e5dff975dd4cc485fded7e15715a226",
+      "stamp": "1831432:1793719092002.2627",
+      "product": {
+        "id": "model-3817c7fe-6599-4f0a-97b5-343310a03947",
+        "name": "V8v — planning model",
+        "category": "Hospital Bed",
+        "width": 1.0844279527664185,
+        "depth": 2.265328288078308,
+        "height": 1.329408049583435,
+        "available": true,
+        "displayDimensions": {
+          "width": 1.0844276830623207,
+          "depth": 2.2640977589448963,
+          "height": 1.329408338828626,
+          "source": "source-model"
+        },
+        "collision": true,
+        "wallAffinity": false,
+        "collisionFootprint": {
+          "width": 1.0844279527664185,
+          "depth": 2.265328288078308
+        },
+        "clearance": {
+          "front": 0,
+          "back": 0,
+          "sides": 0
+        },
+        "priceLabel": "",
+        "swatch": "#e6e6e6",
+        "model": {
+          "url": "/models/V8v-proxy.glb?v=1860ca89659c941f"
+        }
+      }
+    },
+    {
+      "id": "model-e4a2120c-d677-46b1-a743-e677def1c383",
+      "file": "Z7z-proxy.glb",
+      "fingerprint": "508d27dc7660c9371a416190855a54f14a91b1c7e8ecef957997a19e3f9e6bb9",
+      "stamp": "1458756:1793719013128.473",
+      "product": {
+        "id": "model-e4a2120c-d677-46b1-a743-e677def1c383",
+        "name": "Z7z — planning model",
+        "category": "Hospital Bed",
+        "width": 1.082152009010315,
+        "depth": 2.1580801010131836,
+        "height": 1.4954559803009033,
+        "available": true,
+        "displayDimensions": {
+          "width": 1.0821520307137893,
+          "depth": 2.1580807033642793,
+          "height": 1.495455830772424,
+          "source": "source-model"
+        },
+        "collision": true,
+        "wallAffinity": false,
+        "collisionFootprint": {
+          "width": 1.082152009010315,
+          "depth": 2.1580801010131836
+        },
+        "clearance": {
+          "front": 0,
+          "back": 0,
+          "sides": 0
+        },
+        "priceLabel": "",
+        "swatch": "#ebebeb",
+        "model": {
+          "url": "/models/Z7z-proxy.glb?v=508d27dc7660c937"
+        }
+      }
+    }
+  ],
   "retiredIds": [
     "model-d8343886-3ca4-4d54-ad80-dc633193feca",
     "model-05c82742-a922-427f-b484-42b882213ddb",

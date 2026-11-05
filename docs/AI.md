@@ -1,8 +1,8 @@
 # Experimental AI Assistant
 
 > **Status:** The assistant is implemented as an opt-in experiment for trusted
-> local installations. It is furniture-only and is not ready for a public or
-> untrusted deployment.
+> local installations. Packaged public releases hide the assistant and exclude
+> its API routes.
 
 Domus supports Gemini, OpenAI, and Ollama behind one proposal workflow. Models
 can answer questions or suggest furniture changes, but they never mutate the

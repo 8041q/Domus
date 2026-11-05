@@ -68,6 +68,21 @@ test('independent catalogue writers serialize their registry updates without ID 
   assert.equal(registry.entries[0].id, results[0].products[0].id);
 });
 
+test('planning catalogue dimensions identify verified source bounds and reject a mismatched proxy', async t => {
+  const { models, catalogue } = await sandbox(t);
+  const proxy = { ...metadata, domus_display_profile: 'topology-exterior-v2',
+    domus_display_width_m: 1.001, domus_display_depth_m: 2, domus_display_height_m: .8 };
+  const file = path.join(models, 'planning.glb');
+  await writeFile(file, glb(proxy));
+  const good = (await catalogue.scan()).products[0];
+  assert.deepEqual(good.displayDimensions, { width: 1.001, depth: 2, height: .8, source: 'source-model' });
+  assert.equal(good.collisionFootprint.width, 1);
+  await writeFile(file, glb({ ...proxy, domus_display_width_m: 1.01 }));
+  const bad = await catalogue.scan(true);
+  assert.equal(bad.products[0].available, false);
+  assert.match(bad.issues[0].message, /more than 3 mm/);
+});
+
 test('runtime derivatives retain source identity and dimensions, and stale or incomplete copies fall back to the source', async (t) => {
   const { root, models, catalogue } = await sandbox(t);
   const source = path.join(models, 'bed.glb');

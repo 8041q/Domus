@@ -14,10 +14,10 @@ const { readRoomArchive, writeRoomArchive } = await vite.ssrLoadModule('/src/cor
 const { emptyRoomSnapshot, parseProjectSnapshot } = await vite.ssrLoadModule('/src/store.ts');
 const { PRODUCTS, setRoomProducts } = await vite.ssrLoadModule('/src/core/products.ts');
 
-async function harness(database = new ProjectDatabase(new IDBFactory()), id = 'tab-a', legacy = new Map()) {
+async function harness(database = new ProjectDatabase(new IDBFactory()), id = 'tab-a', legacy = new Map(), canOpen = true) {
   let snapshot = emptyRoomSnapshot();
   const adapter = { initial: emptyRoomSnapshot, snapshot: () => structuredClone(snapshot), empty: emptyRoomSnapshot,
-    decode: parseProjectSnapshot, open: value => { snapshot = structuredClone(value); return true; } };
+    decode: parseProjectSnapshot, open: value => { if (!canOpen) return false; snapshot = structuredClone(value); return true; } };
   const storage = { getItem: key => legacy.get(key) ?? null, setItem: (key, value) => legacy.set(key, value) };
   const service = new BrowserRoomProjects(adapter, database, id, () => storage);
   await service.initialize();
@@ -53,11 +53,104 @@ test('room transfer contains references, never embedded binaries, and preserves 
   setRoomProducts([]);
 });
 
-test('opening requires the server and failed opening preserves current work', async () => {
+test('importing a room with model references preserves current work when the server is offline', async () => {
   const h = await harness(); h.edit(3.1); const before = h.get(), fetch = globalThis.fetch;
   globalThis.fetch = async () => { throw new Error('Offline'); };
   try { await assert.rejects(h.service.importRoom(await portable()), /Offline/); assert.deepEqual(h.get(), before); }
   finally { globalThis.fetch = fetch; setRoomProducts([]); }
+});
+
+test('built-in-only rooms can be recovered, opened and created while the catalogue is offline', async () => {
+  const h = await harness();
+  const snapshot = h.get();
+  snapshot.objects.push({ id: 'chair-a', productId: 'chair', x: 2, z: 1.5, rotationY: 0 });
+  const saved = await h.service.save('Offline room');
+  h.edit(3.1); await h.service.persistDraft();
+  const fetch = globalThis.fetch;
+  let requests = 0;
+  globalThis.fetch = async () => { requests++; throw new Error('Offline'); };
+  try {
+    const recovered = await harness(h.database);
+    assert.equal(recovered.service.getState().activeId, saved.id);
+    assert.equal(recovered.service.getState().dirty, true);
+    assert.equal(recovered.get().room.height, 3.1);
+    assert.deepEqual(recovered.get().objects, snapshot.objects);
+    await recovered.service.newRoom('New offline room', 'rectangle');
+    await recovered.service.open(saved.id);
+    assert.equal(recovered.get().room.height, 2.6);
+    assert.deepEqual(recovered.get().objects, snapshot.objects);
+    assert.equal(requests, 0);
+  } finally { globalThis.fetch = fetch; }
+});
+
+test('a server outage restores a draft with safe placeholders for exact model references', async () => {
+  const h = await harness(), { document } = await portable();
+  const id = 'model-00000000-0000-4000-8000-000000000001--' + 'a'.repeat(64);
+  const canonical = { ...document.products[0].definition, id, model: { url: `/api/published-models/${id}.glb` } };
+  for (const item of [...document.snapshot.objects, ...document.snapshot.unplacedObjects]) item.productId = id;
+  document.version = 3; document.namespace = 'domus';
+  document.products = [{ definition: canonical, hash: null, bytes: 0 }];
+  const fetch = globalThis.fetch;
+  globalThis.fetch = async url => new Response(JSON.stringify(url === '/api/model-catalogue' ? { products: [] } : canonical), { headers: { 'Content-Type': 'application/json' } });
+  try {
+    await h.service.importRoom({ document, assets: [] });
+    const saved = await h.service.save('Ward');
+    h.edit(3.1); await h.service.persistDraft();
+    const before = structuredClone(h.get());
+    for (const catalogueAvailable of [false, true]) {
+      const requests = [];
+      globalThis.fetch = async url => {
+        requests.push(url);
+        if (catalogueAvailable && url === '/api/model-catalogue') return new Response(JSON.stringify({ products: [] }), { headers: { 'Content-Type': 'application/json' } });
+        return new Response(null, { status: 503 });
+      };
+      const recovered = await harness(h.database);
+      assert.deepEqual(recovered.get(), before);
+      assert.equal(recovered.service.getState().activeId, saved.id);
+      assert.equal(recovered.service.getState().dirty, true);
+      assert.match(recovered.service.getState().warning, /could not be reached/);
+      assert.equal(PRODUCTS[id].available, false);
+      assert.deepEqual(PRODUCTS[id].model, { url: `missing:${id}` });
+      assert.deepEqual(requests, catalogueAvailable
+        ? ['/api/model-catalogue', `/api/published-models/${id}.json`]
+        : ['/api/model-catalogue']);
+      await recovered.service.persistDraft();
+      const draft = (await h.database.all('drafts')).find(draft => draft.id === 'tab-a');
+      assert.deepEqual(draft.document.snapshot, before);
+      assert.equal(draft.document.products[0].definition.model.url, `published:${id}`);
+    }
+  } finally { globalThis.fetch = fetch; setRoomProducts([]); }
+});
+
+test('saving after failed recovery keeps the unrestored draft available separately', async () => {
+  const h = await harness(); h.edit(3.1); await h.service.persistDraft();
+  const original = (await h.database.all('drafts'))[0];
+  const unavailable = await harness(h.database, 'tab-a', new Map(), false);
+  assert.match(unavailable.service.getState().warning, /could not be opened/);
+  unavailable.edit(2.9); await unavailable.service.persistDraft();
+  assert.deepEqual(await h.database.all('drafts'), [original]);
+  const saved = await unavailable.service.save('Separate room');
+  const [parked] = unavailable.service.getState().recoveries;
+  assert.deepEqual({ ...parked, id: original.id }, original);
+  const reopened = await harness(h.database);
+  assert.equal(reopened.get().room.height, 2.9);
+  assert.equal(reopened.service.getState().activeId, saved.id);
+  await reopened.service.restoreDraft(parked.id);
+  assert.equal(reopened.get().room.height, 3.1);
+});
+
+test('one unreadable saved room does not hide valid saves or block draft recovery', async () => {
+  const h = await harness(); const healthy = await h.service.save('Healthy');
+  h.edit(3.1); await h.service.persistDraft();
+  const broken = { ...healthy, id: 'unreadable', name: null, document: { format: 'broken' } };
+  await h.database.commit(async stores => { stores.rooms.put(broken); });
+  const recovered = await harness(h.database);
+  assert.deepEqual(recovered.service.getState().rooms.map(room => room.id), [healthy.id]);
+  assert.equal(recovered.service.getState().activeId, healthy.id);
+  assert.equal(recovered.get().room.height, 3.1);
+  assert.match(recovered.service.getState().warning, /saved rooms could not be read/);
+  await recovered.service.save();
+  assert.deepEqual((await h.database.all('rooms')).find(room => room.id === broken.id), broken);
 });
 
 test('concurrent saves enforce revision and unique names inside the write transaction', async () => {
@@ -179,4 +272,41 @@ test('opening a published reference uses trusted server metadata and ignores fil
     await h.service.save('Pinned');
     assert.equal(h.service.getState().dirty, false);
   } finally { globalThis.fetch = fetch; setRoomProducts([]); }
+});
+
+test('missing archived product metadata rejects placed and unplaced references without replacing work', async () => {
+  const h = await harness(); h.edit(3.1); const before = structuredClone(h.get());
+  for (const list of ['objects', 'unplacedObjects']) {
+    const prepared = await portable(); prepared.document.version = 3; prepared.document.namespace = 'domus'; prepared.document.products = [];
+    prepared.document.snapshot.objects = []; prepared.document.snapshot.unplacedObjects = [];
+    prepared.document.snapshot[list].push({ id: 'unknown', productId: 'model-missing', ...(list === 'objects' ? { x: 2, z: 2, rotationY: 0 } : {}) });
+    await assert.rejects(h.service.readFile(new File([JSON.stringify(prepared.document)], 'incomplete.json')), /missing model metadata/);
+    await assert.rejects(h.service.importRoom(prepared), /missing model metadata/);
+    assert.deepEqual(h.get(), before);
+  }
+});
+
+test('an oversized draft preserves the last valid recovery, which remains reloadable', async () => {
+  const h = await harness(); h.edit(3.1); await h.service.persistDraft();
+  const valid = (await h.database.all('drafts'))[0];
+  const snapshot = structuredClone(h.get());
+  snapshot.objects = Array.from({ length: 2001 }, (_, i) => ({ id: `rug-${i}`, productId: 'rug', x: 2.6, z: 1.9, rotationY: 0 }));
+  h.set(snapshot); await h.service.persistDraft();
+  assert.match(h.service.getState().warning, /Recovery could not be stored/);
+  assert.deepEqual((await h.database.all('drafts'))[0], valid);
+  const recovered = await harness(h.database);
+  assert.equal(recovered.get().room.height, 3.1); assert.equal(recovered.get().objects.length, 0);
+});
+
+test('a room at the placed-item limit can still save and recover every item', async () => {
+  const h = await harness();
+  const snapshot = structuredClone(h.get());
+  snapshot.objects = Array.from({ length: 2000 }, (_, i) => ({ id: `rug-${i}`, productId: 'rug', x: 2.6, z: 1.9, rotationY: 0 }));
+  h.set(snapshot);
+  const saved = await h.service.save('At capacity');
+  assert.equal(saved.document.snapshot.objects.length, 2000);
+  await h.service.persistDraft();
+  const recovered = await harness(h.database);
+  assert.deepEqual(recovered.get().objects, snapshot.objects);
+  assert.equal(recovered.service.getState().dirty, false);
 });

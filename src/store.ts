@@ -1,3 +1,4 @@
+import { SNAPSHOT_LIMITS } from './core/projectDocument';
 import { normalizeLightingControls } from './core/lighting';
 import { FEATURES } from './config/features';
 import { createId } from './core/id';
@@ -331,22 +332,22 @@ function validInteriorArchitecture(snapshot: PlannerSnapshot) {
     && snapshot.objects.every((object) => isPlacementValid(object, architectureRoom(snapshot), []));
 }
 
-function findSpawnPosition(productId: ProductKind, snapshot: PlannerSnapshot) {
+function findSpawnPosition(productId: ProductKind, snapshot: PlannerSnapshot, rotationY = 0, preferred?: Vec2) {
   const bounds = roomBounds(snapshot.room.vertices);
   const room = architectureRoom(snapshot);
   const moving: PlacedObject = {
     id: 'spawn',
     productId,
-    x: (bounds.minX + bounds.maxX) / 2,
-    z: (bounds.minZ + bounds.maxZ) / 2,
-    rotationY: 0
+    x: preferred?.x ?? (bounds.minX + bounds.maxX) / 2,
+    z: preferred?.z ?? (bounds.minZ + bounds.maxZ) / 2,
+    rotationY
   };
   const step = 0.1;
   const centreX = moving.x;
   const centreZ = moving.z;
   const fits = (x: number, z: number) => isPlacementValid({ ...moving, x, z }, room, snapshot.objects);
 
-  const maxRadius = Math.ceil(Math.max(bounds.width, bounds.depth) / (2 * step));
+  const maxRadius = Math.ceil(Math.max(Math.abs(centreX - bounds.minX), Math.abs(bounds.maxX - centreX), Math.abs(centreZ - bounds.minZ), Math.abs(bounds.maxZ - centreZ)) / step);
   // Prefer a clear initial position anywhere in the shell. If no such point
   // exists, dividers may be crossed just as they can during furniture dragging.
   for (const avoidWalls of [true, false]) {
@@ -505,8 +506,9 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
   addObject: (productId) => {
     const before = snapshotOf(get());
     const id = `${productId}-${createId()}`;
-    const pos = findSpawnPosition(productId, before);
+    const pos = before.objects.length < SNAPSHOT_LIMITS.objects ? findSpawnPosition(productId, before) : null;
     if (!pos) {
+      if (before.unplacedObjects.length >= SNAPSHOT_LIMITS.unplacedObjects) return;
       set((state) => ({ unplacedObjects: [...state.unplacedObjects, { id, productId }] }));
       history.push(before);
       return;
@@ -519,7 +521,7 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
 
   placeUnplacedObject: (id) => {
     const item = get().unplacedObjects.find((object) => object.id === id);
-    if (!item) return;
+    if (!item || get().objects.length >= SNAPSHOT_LIMITS.objects) return;
     const before = snapshotOf(get());
     const pos = findSpawnPosition(item.productId, before);
     if (!pos) return;
@@ -550,11 +552,14 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
     if (!source) return;
     const before = snapshotOf(get());
     const copy: PlacedObject = { ...source, id: `${source.productId}-${createId()}` };
-    const resolved = resolvePlacement(copy, source.x + 0.28, source.z + 0.28, architectureRoom(get()), get().objects, { enterSnapDistance: 0.06 });
-    copy.x = resolved.x;
-    copy.z = resolved.z;
-    if (resolved.rotationY != null) copy.rotationY = resolved.rotationY;
-    set((state) => ({ objects: [...state.objects, copy], selectedId: copy.id }));
+    const pos = before.objects.length < SNAPSHOT_LIMITS.objects ? findSpawnPosition(source.productId, before, source.rotationY, { x: source.x + 0.28, z: source.z + 0.28 }) : null;
+    if (pos) {
+      set({ objects: [...before.objects, { ...copy, ...pos }], selectedId: copy.id,
+        selectedSpaceId: (FEATURES.interiorWalls ? spaceAtPoint(before, pos) : null)?.id ?? get().selectedSpaceId });
+    } else {
+      if (before.unplacedObjects.length >= SNAPSHOT_LIMITS.unplacedObjects) return;
+      set({ unplacedObjects: [...before.unplacedObjects, { id: copy.id, productId: copy.productId }] });
+    }
     history.push(before);
   },
 
@@ -605,6 +610,7 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
 
   setRoom: (room) => set((state) => normalizeSnapshot({ room, openings: state.openings, objects: state.objects, unplacedObjects: state.unplacedObjects })),
   setRoomVertices: (vertices, shapeKind = 'custom') => {
+    if (vertices.length > SNAPSHOT_LIMITS.vertices) return;
     const state = get();
     if (state.room.shapeKind === shapeKind && vertices.length === state.room.vertices.length
       && vertices.every((vertex, index) => vertex.id === state.room.vertices[index].id
@@ -634,6 +640,7 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
         ...currentObjects.map(({ id, productId }): UnplacedObject => ({ id, productId }))
       ]
     });
+    if (normalized.unplacedObjects.length > SNAPSHOT_LIMITS.unplacedObjects) return;
     set({ ...normalized, selectedId: null, selectedOpeningId: null, selectedWallId: null, selectedDividerId: null, selectedSpaceId: null, activeSnap: { kind: 'none' }, collisionId: null, collisionPush: false });
     get().syncSpaces(before);
   },
@@ -645,6 +652,13 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
   },
   updateRoom: (patch, recordHistory = true) => {
     const before = snapshotOf(get());
+    // Finishes do not change placement; preserve intentional overlaps and exact poses.
+    const appearanceKeys = ['wallColor', 'ceilingColor', 'floorFinish', 'baseboardColor', 'baseboardStyle', 'baseboardMaterial'];
+    if (Object.keys(patch).every(key => appearanceKeys.includes(key))) {
+      set({ room: ensureRoom({ ...before.room, ...patch }) });
+      if (recordHistory) history.push(before);
+      return true;
+    }
     let room = get().room;
     const minimum = room.shapeKind === 'circle' ? MIN_CIRCLE_DIAMETER : 2.2;
     const nextWidth = patch.width == null ? room.width : Math.max(minimum, Math.min(patch.width, 20));
@@ -712,6 +726,7 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
     return true;
   },
   splitWallById: (id) => {
+    if (get().room.vertices.length >= SNAPSHOT_LIMITS.vertices) return false;
     const room = get().room;
     const wall = getWall(room, id);
     if (!wall) return false;
@@ -750,7 +765,7 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
   selectDivider: (selectedDividerId) => set({ selectedDividerId: FEATURES.interiorWalls ? selectedDividerId : null, selectedWallId: null, selectedSpaceId: null, selectedOpeningId: null, selectedId: null }),
   selectSpace: (selectedSpaceId) => set({ selectedSpaceId: FEATURES.interiorWalls ? selectedSpaceId : null, selectedDividerId: null, selectedWallId: null, selectedOpeningId: null, selectedId: null }),
   addDivider: (kind, start, end) => {
-    if (!FEATURES.interiorWalls) return false;
+    if (!FEATURES.interiorWalls || get().dividers.length >= SNAPSHOT_LIMITS.dividers || get().spaces.length >= SNAPSHOT_LIMITS.spaces) return false;
     const before = snapshotOf(get());
     const divider: InteriorDivider = { id: `divider-${createId()}`, kind, start, end };
     const dividers = [...get().dividers, divider];
@@ -865,6 +880,7 @@ export const usePlannerStore = createHotStore<PlannerStore>((set, get) => ({
   },
 
   addOpening: (type) => {
+    if (get().openings.length >= SNAPSHOT_LIMITS.openings) return false;
     if (type === 'window' && get().room.shapeKind === 'circle') return false;
     const before = snapshotOf(get());
     let wall: { id: string; length: number } | null = FEATURES.interiorWalls && type !== 'window' && get().selectedDividerId

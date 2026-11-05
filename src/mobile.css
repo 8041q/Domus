@@ -119,8 +119,8 @@ body:has(.app-shell.is-compact) { overflow: hidden; overscroll-behavior: none; }
 .is-compact .project-details-dialog footer { bottom: -16px; }
 .is-compact .project-dialog :is(button, input, select, textarea) { min-height: 44px; }
 .is-compact .project-dialog input, .is-compact .project-dialog select, .is-compact .project-dialog textarea { font-size: 16px; }
-.is-compact .project-warning { bottom: calc(var(--mobile-nav-height) + 8px); padding: 10px; gap: 8px; }
-.is-compact .project-warning button { min-width: 44px; min-height: 44px; }
+.project-warning.is-compact { bottom: calc(70px + env(safe-area-inset-bottom)); padding: 10px; gap: 8px; }
+.project-warning.is-compact button { min-width: 44px; min-height: 44px; }
 .is-compact .toast { bottom: calc(var(--mobile-nav-height) + 8px); max-width: calc(100vw - 16px); }
 .is-compact .walk-controls { bottom: 8px; }
 @media (max-height: 430px) { .is-compact .mobile-sheet-half { height: 55%; min-height: 140px; } .mobile-sheet-heading { flex-basis: 54px; } .mobile-sheet-handle { min-height: 44px; } }

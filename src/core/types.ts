@@ -202,8 +202,8 @@ export interface ProductDefinition {
   width: number;
   depth: number;
   height: number;
-  /** Optional manufacturer/catalogue size. Rendering and placement use measured dimensions above. */
-  displayDimensions?: { width: number; depth: number; height: number };
+  /** Optional entered or source-model size. Placement uses the display mesh dimensions above. */
+  displayDimensions?: { width: number; depth: number; height: number; source?: 'source-model' };
   /** Missing/deleted assets stay known so saved rooms retain their objects. */
   available?: boolean;
   wallAffinity?: boolean;

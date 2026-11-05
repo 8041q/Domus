@@ -334,8 +334,8 @@ not. The GLTF exporter is imported only when an export is requested.
 ## Current engineering constraints
 
 - Room data and AI credentials use the local browser as their persistence
-  boundary. The supported local runtime supplies the AI gateway; a public
-  production host still needs authentication, quotas and abuse protection.
+  boundary. The local runtime supplies the AI gateway. Public releases hide
+  the assistant and do not include the gateway.
 - Snapshot normalization is handwritten rather than schema-driven.
 - The procedural catalogue is intentionally small and has no external asset or
   pricing service.

@@ -46,12 +46,10 @@ immediately in Plan Room and vice versa.
 
 ## Developer feature switches
 
-Set `FEATURES.interiorWalls` in `src/config/features.ts` to `false` to disable
-interior walls and named spaces. `FEATURES.aiExperiment` controls the experimental
-AI assistant; set it to `false` to hide the panel and refuse client requests,
-proposal application and gateway routes (HTTP 503), without deleting existing
-AI preferences. Current settings are interior walls disabled and AI enabled. Reload/restart development
-or rebuild production after changing it.
+Interior walls and named spaces are off by default. Set
+`VITE_DOMUS_INTERIOR_WALLS=1` when starting development or building the app to
+enable them. The experimental AI assistant is available on the local runtime and
+is disabled in packaged public releases.
 
 When disabled, Build Room shows exterior layout/opening tools and Plan Room edits
 one global wall colour and floor finish. Interior divisions, space selection,
@@ -136,14 +134,16 @@ npm run typecheck
 npm test
 npx playwright install chromium firefox webkit
 npm run test:e2e
+VITE_DOMUS_INTERIOR_WALLS=1 npm run test:e2e -- tests/browser/interior-walls.spec.ts --project=chromium
 ```
 
 Browser checks build the app and run an isolated local server on port 5199 and a
 master-free public deployment on port 5200.
 Generated fixtures replace private model files; tests do not scan your model
 folder, rewrite your registry, or open your normal saved rooms. CI runs the same
-checks on Node 24. Optional checks against private architectural GLBs remain
-skipped when those files are absent.
+checks on Node 24, plus the planning proxy Python tests and a Blender smoke test
+with synthetic originals. Optional checks against private architectural GLBs
+remain skipped when those files are absent.
 
 ## Main controls
 
@@ -230,17 +230,102 @@ including unsaved changes. Drafts are isolated by tab. A duplicated tab receives
 its own identity; drafts from other tabs are offered under Open saved room → Storage & recovery. A changed layout also triggers the browser's leave-page warning.
 Named saves and recovery drafts use IndexedDB transactions with revision checks.
 New saves contain references only. Old embedded assets remain until explicit cleanup.
-A failed connection or import leaves the current room intact. Missing individual
-revisions retain item positions and dimensions with a warning; they are never silently
-replaced by the newest catalogue item. Clearing site data removes local saves and
-recovery drafts; keep downloaded room files as backups. Cloud backup is not provided.
+Recovery opens the layout even if the model server is unavailable. Placeholders
+retain the exact model references, positions and dimensions. Reconnect and
+reopen to retry those models. If a draft cannot be restored, a subsequent save
+preserves it separately. Readable drafts remain available under Storage & recovery.
+A failed explicit import leaves the current room intact. Clearing site data
+removes local saves and recovery drafts. Keep downloaded room files as backups.
 
 **Project → Export room** includes architectural GLB geometry: walls, floor,
 baseboards, doors/windows, ceiling, materials and textures. Placed furniture geometry is
 excluded, regardless of visibility or selection. Furniture references remain in the editable room metadata. PDF reports retain furniture.
 There is no private staff workflow or furniture-containing GLB export.
 
+### Simple planning models from private originals
+
+Keep original Blender files in `og_models/`. This entire folder, including nested
+files and Blender backups, is ignored by Git and excluded from public releases.
+The test suite checks that none of these files are tracked. Never force-add this
+folder or deploy the project workspace.
+
+`npm run models:proxies` creates simplified static display copies for C8c, D8d,
+V8v, Z7z and AInno20. Blender and Node.js are required; set `DOMUS_BLENDER` to its
+executable if Blender is not installed in the default location. Automatic scripts
+embedded in source files are disabled. No source `.blend` is saved, and the
+original file hashes are checked after generation.
+
+The generator freezes the current evaluated pose and rebuilds visible source
+geometry in a separate static scene. It removes small fasteners, loose wiring and
+internal detail while protecting distinctive board contours, handle openings,
+guards, rails and poles, including AInno20's four-lobed light heads. Source images
+are reduced to broad solid colours; output contains no images, UVs, original
+textures, rigging, animation, source names or private custom properties. These are
+real 3D meshes, with consistently aligned bed lengths and no global rescaling to
+conceal geometry lost during reduction.
+
+Each model gets six candidates: approximately 5,000, 10,000 and 20,000 triangles
+for each of two methods. Both simplify parts separately and pin representative
+extrema. Protected features retain their mesh topology, including openings;
+suitable surfaces allow vertex repositioning. Thin parts and flat components
+whose smallest extent is under 12 mm keep their original vertex positions
+during reduction. Large hollow chassis/frame assemblies also retain positions to
+avoid collapsing opposite tube walls into each other. The selective-remesh method additionally
+reconstructs recognised bulky components at a 2.5 mm voxel goal before reducing
+them. Thin parts and design-defining panels stay on protected simplification;
+the original model is not remeshed as one solid. Error limits and feature
+protection can leave a candidate above its requested triangle target. Copies have
+a final safety limit of 60,000 triangles.
+
+Candidates are checked against the full evaluated original geometry from 15
+matching cardinal, orbit and close perspective views. Every view must retain at
+least 0.97 silhouette intersection-over-union, at least 90% of meaningful sampled
+openings, and a 95th-percentile overlapping-surface depth difference of no more
+than 10 mm. Overall bounds may drift by no more than 3 mm. The smallest passing
+candidate is selected; if none passes, generation fails and retains the active
+model. Private comparison reports also expose the measurements for inspection.
+The resulting low-poly assets remain usable in Blender and do not prevent copying.
+
+Final GLBs keep their existing filenames in ignored `private/models/`, so the
+existing model catalogue and publisher continue to work. Detailed references,
+source shells, candidates and verification reports stay under ignored
+`private/proxy-previews/topology-comparison/<name>/`; previews and the selected-model
+report remain in `private/proxy-previews/`. Flags follow npm's `--` separator:
+
+```sh
+npm run models:proxies -- --only C8c --compare-only
+npm run models:proxies -- --skip-previews --qa-resolution 256
+```
+
+`--only C8c` limits generation to one model. `--compare-only` verifies candidates
+without replacing the active GLB. `--skip-previews` skips the final studio render
+but retains geometry verification; `--qa-resolution` controls the sampling grid
+and defaults to 256. Run `npm run build` after activating generated copies and
+prepare a fresh public release to include the new library. Unknown product names
+require a name/category entry in `scripts/create-planning-proxies.py`; their shapes
+come from source geometry rather than hand-built primitives. Publish only the
+package produced by `package:public`, never the workspace or private comparisons.
+
 ### Publishing and hosting
+
+Public hosting serves optimized display copies. Visitors can extract any geometry
+and textures their browser renders. HTTPS protects transfers, and the absence of
+a download button does not prevent copying. Keep editable masters on the publishing
+workstation and transfer only the generated release to the server.
+
+Furniture display copies use the existing simplification error limits, compressed
+geometry and preserved dimensions. Publishing removes glTF authoring extras, XMP,
+nonstandard root/asset metadata and unnecessary resource names. Copyright notices
+remain; doors/windows retain the part and material names needed for resizing.
+This cleanup does not scrub metadata inside embedded image files. Previously
+published revisions remain available for older rooms; retain their full library
+when preparing later releases.
+
+For generated planning models, the catalogue shows the source model's measured
+dimensions and checks that the proxy is within 3 mm on each axis. These are
+measurements of the source geometry. Confirm the actual product configuration
+against its specifications before procurement. Placement uses the display mesh
+dimensions.
 
 `npm run build` relocates legacy `public/models` masters to `private/models` and
 architectural masters to `private/openings`, then prepares viewing derivatives.
@@ -281,7 +366,8 @@ releases so older rooms keep their exact revisions.
 The public entry point has no source scanner, optimizer or maintenance handlers;
 it cannot switch to local mode. `npm start` now selects the public entry point and
 refuses an unpackaged workspace; use `start:local` for local work. Vite and `start:local` are
-trusted loopback-only developer tools. Published display geometry remains
+trusted loopback-only developer tools. Vite also denies direct requests for
+originals and private model files. Published display geometry remains
 extractable by old or modified browsers. Masters are protected by their absence
 from the deployment; public display URLs and room references remain compatible.
 
@@ -293,12 +379,13 @@ contacts are retained when opening existing rooms. These details are kept with s
 recovery drafts and draft imports/exports; use Save to persist changes.
 
 **Project → Export to PDF** starts with a room summary, project details,
-furniture quantities and entered real-life dimensions, opening sizes and notes.
+furniture quantities and dimensions, opening sizes and notes.
 The interface and its 2D/3D labels use bundled IBM Plex Sans, loaded before the
 planner renders. Reports use Regular and Medium; export waits for both
 faces to load before measuring text, with no external font service required.
 Furniture appears in one inventory with quantities, dimensions, size source and
-placement status. Missing real-life sizes use measured geometry and are labelled.
+placement status. Size sources distinguish entered dimensions, measured source
+models, display geometry and built-in samples.
 Long lists use banded rows and repeated headers; unplaced furniture is listed separately.
 Architectural schedules include every physical wall's measurements, opening coverage and
 existing clearance recommendations. It then includes
@@ -349,10 +436,9 @@ open planners. For preview or a different port, pass the server URL:
   and durable published library; a static-only deployment cannot resolve room files.
 - Saved rooms are local to one browser origin; portable Domus `.glb` files are the backup and transfer mechanism. Browser storage is not an external backup.
 - The renderer requires a browser with WebGL support.
-- AI assistance is experimental, furniture-only, non-streaming, and intended
-  for trusted local use. A static `dist` deployment does not provide its API
-  routes; the supported local runtime supplies the gateway. Public hosting still requires
-  authentication, quotas, and abuse protection.
+- AI assistance is experimental, furniture-only, and non-streaming. The local
+  runtime supplies the gateway. Public releases disable the assistant and
+  exclude the gateway routes.
 - Multi-user projects, authentication, and cloud services are not implemented.
 
 ## Developer guides

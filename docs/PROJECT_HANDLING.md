@@ -1,10 +1,18 @@
 # Current project handling
 
-The production release uses IndexedDB for named room documents, compact models,
-and recovery drafts. `.domus` files are complete editable ZIP backups;
-`.domus.json` files contain only layouts. See the README and ARCHITECTURE guide
-for storage limits and migration behavior. The verification below records the
-older localStorage implementation; its migration contract remains covered.
+The production release uses IndexedDB for named room documents and recovery
+drafts. Furniture is stored as references to exact published models. Export
+room creates an editable `.glb` with room geometry and furniture references.
+See the README and ARCHITECTURE guide for supported legacy formats and migration.
+
+Recovery can restore the layout while the model service is unavailable. Missing
+models use placeholders with the recorded dimensions and references. If a draft
+still cannot be restored, Domus retains it separately when another room is saved
+or opened. Readable copies appear under Storage & recovery. A damaged saved
+record stays in storage while other rooms and drafts remain accessible.
+
+The verification below records the older localStorage implementation. Automated
+checks still cover its migration contract.
 
 # Project handling verification
 

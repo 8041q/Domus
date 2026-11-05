@@ -129,14 +129,21 @@ export async function inspectProductGLB(filename: string, url: string, id: strin
     const nonnegative = (key: string) => typeof extras[key] === 'number' && Number.isFinite(extras[key]) ? Math.max(0, extras[key] as number) : 0;
     const category = normalizeProductCategory(text('domus_category', 'Others'));
     if (!category) throw new Error('Choose a supported product category in Blender.');
-    const display = { width: positive('domus_display_width_m'), depth: positive('domus_display_depth_m'), height: positive('domus_display_height_m') };
-    if (version >= 2 && (!display.width || !display.depth || !display.height || !text('domus_name') || !text('domus_category'))) throw new Error('Complete the product name, category and external dimensions in Blender, then save metadata again.');
+    const width = positive('domus_display_width_m'), depth = positive('domus_display_depth_m'), height = positive('domus_display_height_m');
+    const sourceModel = extras.domus_display_profile === 'topology-exterior-v2';
+    if (sourceModel && (!width || !depth || !height || Math.max(Math.abs(width - size.x), Math.abs(depth - size.z), Math.abs(height - size.y)) > .003001)) {
+      throw new Error('Planning model dimensions differ from its source measurements by more than 3 mm. Regenerate the planning model.');
+    }
+    const displayDimensions = width && depth && height
+      ? { width, depth, height, ...(sourceModel ? { source: 'source-model' as const } : {}) }
+      : undefined;
+    if (version >= 2 && (!displayDimensions || !text('domus_name') || !text('domus_category'))) throw new Error('Complete the product name, category and external dimensions in Blender, then save metadata again.');
     // v1 manually entered size and collider fields may be in the wrong units.
     // Geometry is authoritative for physics in every version.
     const product: ProductDefinition = {
       id, name: text('domus_name', path.basename(filename, path.extname(filename))), category,
       width: size.x, depth: size.z, height: Math.max(size.y, 0.001), available: true,
-      ...(display.width && display.depth && display.height ? { displayDimensions: display as { width: number; depth: number; height: number } } : {}),
+      ...(displayDimensions ? { displayDimensions } : {}),
       collision: extras.domus_collision !== false, wallAffinity: extras.domus_wall_affinity === true,
       collisionFootprint: { width: size.x, depth: size.z },
       clearance: { front: nonnegative('domus_clearance_front_m'), back: nonnegative('domus_clearance_back_m'), sides: nonnegative('domus_clearance_sides_m') },

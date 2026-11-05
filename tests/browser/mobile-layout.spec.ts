@@ -66,7 +66,16 @@ test('a sheet swipe commits the focused draft and the next tap still resizes', a
   await height.fill('2.85');
   // A touch browser can suppress click after a drag. Exercise that sequence
   // without blurring the input through a synthetic mouse press first.
-  await handle.dispatchEvent('pointerdown', { pointerId: 1, button: 0, clientY: 200 });
+  await handle.evaluate(node => {
+    // Synthetic events do not register an active pointer with the browser.
+    const capture = node.setPointerCapture;
+    node.setPointerCapture = () => {};
+    try {
+      node.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0, clientY: 200 }));
+    } finally {
+      node.setPointerCapture = capture;
+    }
+  });
   await handle.dispatchEvent('pointerup', { pointerId: 1, button: 0, clientY: 250 });
   await expect(sheet).toHaveClass(/mobile-sheet-peek/);
   await expect(height).not.toBeFocused();

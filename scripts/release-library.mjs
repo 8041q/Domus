@@ -57,11 +57,16 @@ export async function prepareRelease(workspace, destination, serverBundle) {
   if (await lstat(destination).catch(() => null)) throw new Error('Release destination already exists');
   const source = path.join(workspace, '.domus-published');
   const library = await validateLibrary(source);
-  const distFiles = await listFiles(path.join(workspace, 'dist'));
-  if (!distFiles.includes('index.html') || distFiles.some(file => sourceExtensions.test(file) || /(^|\/)(private|models|optimized-models|\.domus-published)(\/|$)/.test(file))) throw new Error('Public build contains source assets or lacks index.html');
+  const dist = path.join(workspace, 'dist');
+  const distFiles = await listFiles(dist);
+  if (!distFiles.includes('index.html') || distFiles.some(file => sourceExtensions.test(file) || /(^|\/)(private|og_models|models|optimized-models|\.domus-published)(\/|$)/.test(file))) throw new Error('Public build contains source assets or lacks index.html');
+  const index = (await readSafe(dist, 'index.html')).toString('utf8');
+  const head = /<head(?:\s[^>]*)?>/i;
+  if (!head.test(index)) throw new Error('Public build index.html lacks a head element');
+  const publicIndex = index.replace(head, '$&\n    <meta name="domus-deployment" content="public" />');
   await mkdir(destination, { recursive: true });
   const put = async (file, bytes) => { await mkdir(path.dirname(path.join(destination, file)), { recursive: true }); await writeFile(path.join(destination, file), bytes); };
-  for (const file of distFiles) await put(`dist/${file}`, await readSafe(path.join(workspace, 'dist'), file));
+  for (const file of distFiles) await put(`dist/${file}`, file === 'index.html' ? publicIndex : await readSafe(dist, file));
   for (const [id, record] of library.records) {
     await put(`.domus-published/${id}.json`, JSON.stringify(record));
     await put(`.domus-published/${id}.glb`, await readSafe(source, `${id}.glb`));
@@ -83,7 +88,7 @@ export async function validateRelease(root) {
   const expected = new Set([...Object.keys(inventory.files), 'release.json']);
   const actual = await listFiles(root);
   if (actual.some(file => file !== 'release.json' && file !== 'server.mjs' && !file.startsWith('dist/') && !file.startsWith('.domus-published/'))
-    || actual.filter(file => file.startsWith('dist/')).some(file => sourceExtensions.test(file) || /(^|\/)(private|models|optimized-models|\.domus-published)(\/|$)/.test(file))) throw new Error('Release contains source or tool files');
+    || actual.filter(file => file.startsWith('dist/')).some(file => sourceExtensions.test(file) || /(^|\/)(private|og_models|models|optimized-models|\.domus-published)(\/|$)/.test(file))) throw new Error('Release contains source or tool files');
   if (actual.length !== expected.size || actual.some(file => !expected.has(file))) throw new Error('Release contains unexpected or private files');
   const fingerprints = new Map();
   for (const [file, hash] of Object.entries(inventory.files)) {

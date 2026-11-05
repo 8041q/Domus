@@ -25,6 +25,9 @@ model-catalogue.json.*.tmp
 .domus-optimization.lock
 
 /private/
+# Original authoring models stay on this workstation and must never be committed.
+/og_models/
 /.domus-published/
 
 /release/
+/release-proxies/

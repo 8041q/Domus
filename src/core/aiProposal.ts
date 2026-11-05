@@ -1,3 +1,4 @@
+import { validateSnapshotSize } from './projectDocument';
 import { createId } from './id';
 import type { AiOperation, AiProposal } from '../ai/types';
 import { PRODUCTS } from './products';
@@ -76,6 +77,8 @@ export function applyAiProposal(snapshot: PlannerSnapshot, proposal: AiProposal)
     const error = applyOperation(next, operation, index);
     if (error) return { snapshot, error };
   }
+  try { validateSnapshotSize(next); }
+  catch { return { snapshot, error: 'The proposal exceeds the supported editing limits.' }; }
   const originalIds = new Set(snapshot.objects.map(object => object.id));
   const changedIds = new Set(proposal.operations.filter(operation => operation.type !== 'remove-object').map(operation => operation.objectId));
   // Validate the final arrangement rather than temporary intermediate positions.

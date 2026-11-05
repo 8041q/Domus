@@ -6,7 +6,9 @@ import { createServer } from 'node:net';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import os from 'node:os';
+import { pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
+import { createServer as createViteServer, loadConfigFromFile } from 'vite';
 import { createTestServer } from './helpers/vite.mjs';
 import { modelBytes } from './helpers/model.mjs';
 import { optimizeModels } from '../scripts/optimize-models.mjs';
@@ -21,7 +23,7 @@ const bundle = (await build({ entryPoints: ['server/index.ts'], bundle: true, pl
 async function fixture(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'domus-boundary-')); t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(path.join(root, 'private/models'), { recursive: true });
-  await mkdir(path.join(root, 'dist')); await writeFile(path.join(root, 'dist/index.html'), '<html>Domus fixture</html>');
+  await mkdir(path.join(root, 'dist')); await writeFile(path.join(root, 'dist/index.html'), '<!doctype html><html><head></head><body>Domus fixture</body></html>');
   const source = path.join(root, 'private/models/master.glb'); await writeFile(source, modelBytes({ dense: true }));
   const manifest = await optimizeModels(root);
   const scanner = new ModelCatalogue(root); await scanner.scan();
@@ -49,14 +51,65 @@ test('isolated public release serves approved meshes to any client but has no ma
   assert.ok(mesh.includes(Buffer.from('EXT_meshopt_compression')));
   const metadata = await (await fetch(origin + `/api/published-models/${h.product.id}.json`)).json();
   assert.equal(metadata.model.url, h.product.model.url); assert.ok(!JSON.stringify(metadata).includes('private/'));
-  for (const route of ['/models/master.glb', '/optimized-models/master.glb', '/private/models/master.glb', '/%2e%2e/private/models/master.glb', '/@fs/private/models/master.glb', '/api/model-catalogue/rescan', '/api/model-catalogue/compact']) {
+  for (const route of ['/models/master.glb', '/optimized-models/master.glb', '/private/models/master.glb', '/%2e%2e/private/models/master.glb', '/@fs/private/models/master.glb', '/api/model-catalogue/rescan', '/api/model-catalogue/compact', '/api/ai/config', '/api/ai/models', '/api/ai/turn']) {
     assert.equal((await fetch(origin + route)).status, 404);
     assert.equal((await fetch(origin + route, { method: 'POST' })).status, 404);
   }
+  assert.match(await (await fetch(origin)).text(), /<meta name="domus-deployment" content="public" \/>/);
+  assert.doesNotMatch(await readFile(path.join(h.root, 'dist/index.html'), 'utf8'), /domus-deployment/);
   assert.ok(!String(bundle).includes('inspectProductGLB')); assert.ok(!String(bundle).includes('ModelOptimizationQueue'));
   await writeFile(path.join(h.release, '.domus-published', `${h.product.id}.glb`), Buffer.alloc(mesh.length));
   assert.equal((await fetch(origin + h.product.model.url)).status, 404, 'Post-start modification cannot be served');
 });
+
+test('Vite serves approved assets and AI locally while denying private files and their aliases', async t => {
+  const { root, product } = await fixture(t);
+  const privateFiles = [
+    'og_models/nested/master.blend1',
+    'private/models/master.glb',
+    'private/proxy-previews/review.png',
+    'public/models/legacy.txt',
+    '.env',
+    '.env.local',
+    'secret.pem',
+    '.git/config'
+  ];
+  for (const file of privateFiles.filter(file => file !== 'private/models/master.glb')) {
+    const filename = path.join(root, file);
+    await mkdir(path.dirname(filename), { recursive: true });
+    await writeFile(filename, 'PRIVATE DUMMY DATA');
+  }
+  await writeFile(path.join(root, 'public/approved.txt'), 'approved fixture');
+  await symlink(path.join(root, privateFiles[0]), path.join(root, 'alias.txt'));
+  await symlink(path.join(root, privateFiles[2]), path.join(root, 'public/alias.png'));
+
+  const { config } = await loadConfigFromFile({ command: 'serve', mode: 'development' }, path.resolve('vite.config.ts'));
+  const dev = await createViteServer({
+    ...config, root, configFile: false, logLevel: 'silent',
+    cacheDir: path.join(root, '.vite'), optimizeDeps: { noDiscovery: true },
+    server: { ...config.server, host: '127.0.0.1', port: 0, ws: false }
+  });
+  try {
+    await dev.listen();
+    const origin = `http://127.0.0.1:${dev.httpServer.address().port}`;
+    const rawFile = file => '/@fs' + pathToFileURL(path.join(root, file)).pathname;
+    for (const route of [
+      ...privateFiles.flatMap(file => ['/' + file, rawFile(file)]),
+      '/models/legacy.txt', '/alias.txt', rawFile('alias.txt'), '/alias.png',
+      '/%6fg_models/nested/master.blend1', '/private/proxy-previews/review.png?raw'
+    ]) {
+      const response = await fetch(origin + route);
+      assert.equal(response.status, 403, route);
+      assert.doesNotMatch(await response.text(), /PRIVATE DUMMY DATA/);
+    }
+    assert.equal(await (await fetch(origin + '/approved.txt')).text(), 'approved fixture');
+    const published = await fetch(origin + product.model.url);
+    assert.equal(published.status, 200);
+    validateGLB(Buffer.from(await published.arrayBuffer()));
+    assert.equal((await fetch(origin + '/api/ai/config')).status, 200);
+  } finally { await dev.close(); }
+});
+
 test('publication refuses escapes, missing pipeline checksums, damaged assets and incomplete GLBs', async t => {
   const h = await fixture(t), entry = h.manifest.models['master.glb'];
   const artifact = path.join(h.root, 'public', entry.url), bytes = await readFile(artifact);
@@ -119,6 +172,12 @@ test('public display sanitization removes nested authoring data while preserving
   const source = Buffer.from(modelBytes()); const document = validateGLB(source);
   document.asset.extras = { source: '/private/master.blend' };
   document.asset.copyright = 'Model owner';
+  document.asset.sourceFile = '/private/master.blend';
+  document.sourceFile = '/private/master.blend';
+  document.accessors[0].name = 'Confidential CAD surface';
+  document.buffers[0].name = 'Confidential source buffer';
+  document.bufferViews[0].name = 'Confidential CAD vertices';
+  document.images = [{ name: 'Confidential image filename', uri: 'data:image/png;base64,AA==' }];
   document.extensionsUsed = ['KHR_xmp_json_ld'];
   document.extensions = { KHR_xmp_json_ld: { packets: [{ source: '/private/master.blend' }] } };
   document.nodes[0].name = 'Private authoring collection';
@@ -134,5 +193,20 @@ test('public display sanitization removes nested authoring data while preserving
   assert.equal(furniture.asset.extras, undefined); assert.equal(architecture.nodes[0].extras, undefined);
   assert.equal(furniture.extensions.KHR_xmp_json_ld, undefined); assert.deepEqual(furniture.extensionsUsed, []);
   assert.equal(furniture.asset.copyright, 'Model owner');
+  for (const result of [furniture, architecture]) {
+    assert.equal(result.sourceFile, undefined); assert.equal(result.asset.sourceFile, undefined);
+    for (const key of ['accessors', 'buffers', 'bufferViews', 'images']) assert.equal(result[key][0].name, undefined);
+    assert.equal(result.images[0].uri, document.images[0].uri);
+  }
+  const sanitized = publicDisplayGLB(privateModel);
+  assert.deepEqual(sanitized.subarray(20 + sanitized.readUInt32LE(12)), tail, 'Metadata cleanup must not change geometry or texture bytes');
+  assert.deepEqual(publicDisplayGLB(privateModel), sanitized, 'Publishing is deterministic');
   assert.equal(architecture.materials[0].name, 'glass coated frame'); assert.equal(architecture.materials[0].pbrMetallicRoughness.roughnessFactor, .2);
+});
+
+test('public packaging refuses an original-model folder even when its contents are not model files', async t => {
+  const h = await fixture(t);
+  await mkdir(path.join(h.root, 'dist/og_models'));
+  await writeFile(path.join(h.root, 'dist/og_models', 'private-notes.json'), '{}');
+  await assert.rejects(prepareRelease(h.root, path.join(h.root, 'unsafe-release'), path.join(h.root, 'public-server.mjs')), /source assets/);
 });
