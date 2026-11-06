@@ -37,3 +37,6 @@ model-catalogue.json.*.tmp
 
 /release/
 /release-proxies/
+
+# Generated output artifacts (lighting validation, PDFs, typography previews).
+/output/

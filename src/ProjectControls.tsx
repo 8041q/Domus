@@ -34,7 +34,7 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'The action could not be completed. Your current room has been kept.';
 }
 
-export function ProjectControls({ canExport, onExport, onExportPdf }: { canExport: boolean; onExport?: () => Promise<void>; onExportPdf?: () => void }) {
+export function ProjectControls({ canExport, onExport, onExportPdf, disabled }: { canExport: boolean; onExport?: () => Promise<void>; onExportPdf?: () => void; disabled?: boolean }) {
   const compact = useCompactWorkspace();
   const project = useRoomProjects();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -175,9 +175,9 @@ export function ProjectControls({ canExport, onExport, onExportPdf }: { canExpor
   </>;
 
   return <>
-    <div className="project-status" title={project.name} aria-live="polite"><strong>{project.name}</strong><small>{project.dirty ? 'Unsaved changes' : project.activeId ? 'Saved in this browser' : 'Not saved yet'}</small></div>
+    <div className={`project-status${disabled ? ' is-disabled' : ''}`} title={project.name} aria-live="polite"><strong>{project.name}</strong><small>{project.dirty ? 'Unsaved changes' : project.activeId ? 'Saved in this browser' : 'Not saved yet'}</small></div>
     <div className="project-menu-wrap" ref={menuRef}>
-      <Button variant="outline" size="sm" className="project-menu-trigger" aria-haspopup="menu" aria-expanded={menuOpen} disabled={!project.initialized}
+      <Button variant="outline" size="sm" className="project-menu-trigger" aria-haspopup="menu" aria-expanded={menuOpen} disabled={!project.initialized || disabled}
         onClick={() => { if (!menuOpen) setMenuSize('half'); setMenuOpen(!menuOpen); }}><Icon name="folder" />Project<Icon name="chevronDown" /></Button>
       {menuOpen && (compact ? <section className="project-menu mobile-project-sheet" data-size={menuSize} aria-label="Project tools">
         <header className="mobile-project-heading">

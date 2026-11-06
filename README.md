@@ -20,12 +20,6 @@
 Domus brings room planning into one workspace. Start with a room layout, add
 openings, furnish the space, and switch to 3D to explore the result.
 
-- Create and edit room layouts in a 2D plan.
-- Add doors, windows, and other openings.
-- Arrange furniture and adjust room finishes.
-- Explore the design in 3D or from eye level.
-- Save projects locally or export them as portable files.
-
 > **Current availability:** Domus currently runs locally from its source code.
 > There is no downloadable release yet. GitHub Actions checks changes; it does
 > not publish an app download.
@@ -124,54 +118,9 @@ To include them in a build, run:
 VITE_DOMUS_INTERIOR_WALLS=1 npm run build
 ```
 
-### Furniture models
-
-You can add your own GLB furniture files under `private/models/`. The local
-server prepares them for use. If a model-folder change is not picked up, run
-`npm run models:rescan` in another terminal.
-
-Keep original Blender files in `og_models/`. **Do not commit or upload that
-folder.** To create separate planning copies, use `npm run models:proxies`;
-generated copies belong in the ignored `private/` folder.
-
 ### AI assistant
 
 An experimental AI assistant is available when running the local app. Open **Plan room → AI Experimental**. It can suggest furniture changes for you to review. See the [AI guide](docs/AI.md) for setup and API-key information.
-
-## Tests
-
-Install the Playwright browsers once:
-
-```bash
-npx playwright install chromium firefox webkit
-```
-
-Then run:
-
-```bash
-npm test
-npm run test:e2e
-```
-
-The browser tests build the app and start test servers automatically. GitHub Actions runs Chromium and WebKit on macOS, Firefox on Ubuntu, and the unit tests on each push and pull request. It does not create releases.
-
-To run the interior-wall browser test:
-
-```bash
-VITE_DOMUS_INTERIOR_WALLS=1 npm run test:e2e -- tests/browser/interior-walls.spec.ts --project=chromium
-```
-
-## Hosting a public version
-
-Public hosting requires a prepared server package and a durable library of published furniture models. A regular static website host is not sufficient.
-
-To prepare a package on the computer that holds the models:
-
-```bash
-npm run package:public -- /path/to/new-release
-```
-
-Only deploy the package produced by this command. **Never deploy the project workspace or files from `og_models/`.** See [architectural models](docs/architectural-models.md) for model details.
 
 ## More information
 
@@ -179,3 +128,5 @@ Only deploy the package produced by this command. **Never deploy the project wor
 - [Architecture and code structure](docs/ARCHITECTURE.md)
 - [AI assistant](docs/AI.md)
 - [Preparing furniture models](docs/BLENDER_METADATA.md)
+- [Contributing & tests](docs/CONTRIBUTING.md)
+- [Hosting a public version](docs/HOSTING.md)

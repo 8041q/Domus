@@ -188,3 +188,13 @@ blender -b --factory-startup --python-exit-code 1 --python blender_addon/test_ma
 
 Append `-- --source-blend /path/to/C8c.blend` to also check the original C8c decal
 material without changing or saving its source file.
+
+## Furniture models in Domus
+
+You can add your own GLB furniture files under `private/models/`. The local
+server prepares them for use. If a model-folder change is not picked up, run
+`npm run models:rescan` in another terminal.
+
+Keep original Blender files in `og_models/`. **Do not commit or upload that
+folder.** To create separate planning copies, use `npm run models:proxies`;
+generated copies belong in the ignored `private/` folder.

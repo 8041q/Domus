@@ -56,7 +56,11 @@ export function Icon({ name, ...props }: SVGProps<SVGSVGElement> & { name: IconN
     settings: <><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.6-2-3.4-2.5 1a7 7 0 0 0-1.7-1L14.4 3h-4.8L9 6a7 7 0 0 0-1.7 1L4.8 6 2.8 9.4 5 11a7 7 0 0 0 0 2l-2.2 1.6 2 3.4 2.5-1a7 7 0 0 0 1.7 1l.6 3h4.8l.6-3a7 7 0 0 0 1.7-1l2.5 1 2-3.4-2.2-1.6c.1-.3.1-.7.1-1z"/></>,
     palette: <><path d="M12 3a9 9 0 1 0 0 18h1.5a2 2 0 0 0 0-4h-1a1.5 1.5 0 0 1 0-3H15a6 6 0 0 0 0-12z"/><circle cx="7.5" cy="10" r=".8" fill="currentColor" stroke="none"/><circle cx="10" cy="6.8" r=".8" fill="currentColor" stroke="none"/><circle cx="14" cy="6.8" r=".8" fill="currentColor" stroke="none"/><circle cx="17" cy="10" r=".8" fill="currentColor" stroke="none"/></>,
     ruler: <><path d="M4 15 15 4l5 5L9 20H4z"/><path d="m13 6 2 2M10 9l2 2M7 12l2 2"/></>,
+    pencil: <><path d="M12 3L5 12l7 7L19 12L12 3z"/><path d="M12 8v4"/></>,
+    door: <><path d="M8 21h8M12 3v18"/></>,
+    sofa: <><path d="M3 4h5v14H8v-3a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v3h2v-14H3z"/></>,
     cube: <><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/></>,
+    '3dcube': <><path d="m6 2 36-6v18L30 21z"/><path d="m12 9v9m0-9v9"/><path d="m(-6) 6h36"/><path d="m18-3v12"/><path d="m6-3v12"/></>,
     move: <path d={MOVE_ICON_PATH} />,
     plus: <><path d="M12 5v14M5 12h14"/></>,
     x: <><path d="m6 6 12 12M18 6 6 18"/></>,
@@ -71,7 +75,10 @@ export function Icon({ name, ...props }: SVGProps<SVGSVGElement> & { name: IconN
     arrowLeft: <><path d="m15 18-6-6 6-6"/><path d="M9 12h10"/></>,
     eye: <><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6S2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.5"/></>,
     grid: <><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></>,
-    box: <><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 9h16"/></>
+    box: <><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 9h16"/></>,
+    info: <><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><path d="M11 2h2v20h-2z"/></>,
+    link: <><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.73"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.73"/></>,
+    externalLink: <><path d="M14 2H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></>,
   };
   return <svg {...common} {...props}>{paths[name]}</svg>;
 }
@@ -79,4 +86,5 @@ export function Icon({ name, ...props }: SVGProps<SVGSVGElement> & { name: IconN
 export type IconName =
   | 'undo' | 'redo' | 'save' | 'folder' | 'more' | 'search' | 'settings' | 'palette'
   | 'ruler' | 'cube' | 'plus' | 'x' | 'copy' | 'rotateLeft' | 'rotateRight'
-  | 'chevronRight' | 'chevronDown' | 'download' | 'check' | 'arrowLeft' | 'eye' | 'grid' | 'box' | 'trash' | 'move';
+  | 'chevronRight' | 'chevronDown' | 'download' | 'check' | 'arrowLeft' | 'eye' | 'grid' | 'box' | 'trash' | 'move'
+  | 'info' | 'link' | 'externalLink' | 'pencil' | 'door' | 'sofa' | '3dcube'

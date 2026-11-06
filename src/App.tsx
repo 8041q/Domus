@@ -3,6 +3,7 @@ import { lazy, useCallback, useEffect, useRef, useState } from 'react';
 import { BuildRoom } from './BuildRoom';
 import { usePlannerStore } from './store';
 import { Button, Icon } from './ui';
+import { About } from './About';
 import { ProjectControls } from './ProjectControls';
 import { handlePlannerShortcut } from './core/plannerShortcuts';
 import { LoadingBoundary, LoadingProvider } from './LoadingStatus';
@@ -23,6 +24,7 @@ export default function App() {
   const undo = usePlannerStore((s) => s.undo);
   const redo = usePlannerStore((s) => s.redo);
   const [canExport, setCanExport] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const exportAction = useRef<(() => Promise<void>) | null>(null);
   const pdfAction = useRef<(() => Promise<void>) | null>(null);
   const registerPdfExport = useCallback((handler: (() => Promise<void>) | null) => { pdfAction.current = handler; }, []);
@@ -72,7 +74,7 @@ export default function App() {
   }, [mode, redo, remove, rotate, undo]);
 
   return (
-    <div className={`app-shell${compact ? ' is-compact' : ''}`} data-mobile-task={compact ? mobileTask : undefined}>
+    <div className={`app-shell${compact ? ' is-compact' : ''}${aboutOpen ? ' app-shell-about-open' : ''}`} data-mobile-task={compact ? mobileTask : undefined}>
       <header className="app-header">
         <div className="brand-block" aria-label="Domus room planner">
           <img className="brand-mark" src="/brand/app-icon.svg" alt="" width="32" height="32" aria-hidden="true" />
@@ -80,34 +82,41 @@ export default function App() {
         </div>
 
         <nav className="mode-stepper" aria-label="Planning workflow">
-          <button type="button" className={mode === 'build' ? 'active' : ''} aria-current={mode === 'build' ? 'step' : undefined} onClick={() => setMode('build')}>
+          <button type="button" className={mode === 'build' ? 'active' : ''} aria-current={mode === 'build' ? 'step' : undefined} disabled={aboutOpen} onClick={() => setMode('build')}>
             <Icon name="ruler" /><strong>Build room</strong>
           </button>
-          <button type="button" className={mode === 'plan' ? 'active' : ''} aria-current={mode === 'plan' ? 'step' : undefined} onClick={() => setMode('plan')}>
+          <button type="button" className={mode === 'plan' ? 'active' : ''} aria-current={mode === 'plan' ? 'step' : undefined} disabled={aboutOpen} onClick={() => setMode('plan')}>
             <Icon name="cube" /><strong>Plan room</strong>
           </button>
         </nav>
 
         <div className="header-actions">
+          <Button variant="ghost" size="icon" title={aboutOpen ? 'Hide About' : 'About Domus'} aria-label={aboutOpen ? 'Hide About' : 'Back'} onClick={() => setAboutOpen(!aboutOpen)}>
+            <Icon name={aboutOpen ? 'x' : 'info'} />
+          </Button>
           <div className="history-actions" role="group" aria-label="Edit history">
-            <Button variant="ghost" size="icon" title="Undo (Ctrl/Cmd+Z)" aria-label="Undo" onClick={undo}><Icon name="undo" /></Button>
-            <Button variant="ghost" size="icon" title="Redo (Ctrl/Cmd+Y)" aria-label="Redo" onClick={redo}><Icon name="redo" /></Button>
+            <Button variant="ghost" size="icon" title="Undo (Ctrl/Cmd+Z)" aria-label="Undo" disabled={aboutOpen} onClick={undo}><Icon name="undo" /></Button>
+            <Button variant="ghost" size="icon" title="Redo (Ctrl/Cmd+Y)" aria-label="Redo" disabled={aboutOpen} onClick={redo}><Icon name="redo" /></Button>
           </div>
-          <ProjectControls canExport={canExport} onExport={mode === 'plan' && canExport ? () => exportAction.current!() : undefined}
+          <ProjectControls canExport={canExport} disabled={aboutOpen} onExport={mode === 'plan' && canExport ? () => exportAction.current!() : undefined}
             onExportPdf={mode === 'plan' ? () => { void pdfAction.current?.(); } : undefined} />
         </div>
       </header>
 
       <main className="app-main">
-        <LoadingProvider key={`${mode}-${buildView}`}>
-        <ViewErrorBoundary key={`${mode}-${buildView}`}>
-          {mode === 'build' ? <BuildRoom /> : (
-            <LoadingBoundary label="Opening room planner…" detail="Getting your workspace ready">
-              <PlanRoom onExportReady={registerExport} onPdfExportReady={registerPdfExport} />
-            </LoadingBoundary>
-          )}
-        </ViewErrorBoundary>
-        </LoadingProvider>
+        {aboutOpen ? (
+          <About onClose={() => setAboutOpen(false)} />
+        ) : (
+          <LoadingProvider key={`${mode}-${buildView}`}>
+          <ViewErrorBoundary key={`${mode}-${buildView}`}>
+            {mode === 'build' ? <BuildRoom /> : (
+              <LoadingBoundary label="Opening room planner…" detail="Getting your workspace ready">
+                <PlanRoom onExportReady={registerExport} onPdfExportReady={registerPdfExport} />
+              </LoadingBoundary>
+            )}
+          </ViewErrorBoundary>
+          </LoadingProvider>
+        )}
       </main>
 
       {compact && <nav className="mobile-task-nav" aria-label="Phone workspace">
