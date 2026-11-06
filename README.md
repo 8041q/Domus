@@ -258,14 +258,20 @@ original file hashes are checked after generation.
 The generator freezes the current evaluated pose and rebuilds visible source
 geometry in a separate static scene. It removes small fasteners, loose wiring and
 internal detail while protecting distinctive board contours, handle openings,
-guards, rails and poles, including AInno20's four-lobed light heads. Source images
-are reduced to broad solid colours; output contains no images, UVs, original
-textures, rigging, animation, source names or private custom properties. These are
+guards, rails and poles, including AInno20's four-lobed light heads. Evaluated face-corner normals and scalar PBR finishes (including roughness,
+metalness, IOR, specular tint and coat) are preserved. Source images
+are reduced to broad solid colours; source textures, rigging, animation, source
+names and private custom properties are excluded. C8c receives a newly generated
+2048 px tangent normal map from the evaluated private reference, with a connected
+UV atlas and matching exported tangents. This restores bevel response without
+spreading bevel normals across broad faces or exceeding the geometry budget.
+The other models remain texture-free. These are
 real 3D meshes, with consistently aligned bed lengths and no global rescaling to
 conceal geometry lost during reduction.
 
-Each model gets six candidates: approximately 5,000, 10,000 and 20,000 triangles
-for each of two methods. Both simplify parts separately and pin representative
+Each model gets six candidates spanning normal-error weights from 1.0 down
+to 0.001 for each of two methods. The weight is relaxed only to fit the
+60,000-triangle budget; source normals are restored per corner after reduction. Both simplify parts separately and pin representative
 extrema. Protected features retain their mesh topology, including openings;
 suitable surfaces allow vertex repositioning. Thin parts and flat components
 whose smallest extent is under 12 mm keep their original vertex positions
@@ -281,10 +287,37 @@ Candidates are checked against the full evaluated original geometry from 15
 matching cardinal, orbit and close perspective views. Every view must retain at
 least 0.97 silhouette intersection-over-union, at least 90% of meaningful sampled
 openings, and a 95th-percentile overlapping-surface depth difference of no more
-than 10 mm. Overall bounds may drift by no more than 3 mm. The smallest passing
-candidate is selected; if none passes, generation fails and retains the active
+than 10 mm. Overall bounds may drift by no more than 3 mm. The passing candidate with the lowest shading-normal error within the
+60,000-triangle budget is selected; if none passes, generation fails and retains the active
 model. Private comparison reports also expose the measurements for inspection.
+Reports measure exported vertex shading normals separately from geometric face
+normals; they exclude normal-map response, which must also be checked in the
+actual room renderer.
+Candidates failing only sampled opening checks are rechecked at 512 pixels with
+the same thresholds. When fresh reductions cannot pass within budget, the pipeline
+can retain the existing display geometry and restore its source surface attributes;
+that result must pass the same reference checks before activation.
 The resulting low-poly assets remain usable in Blender and do not prevent copying.
+
+Check the served models in the actual `PlannerScene` at
+`http://localhost:5173/scripts/room-lighting-review.html` while the dev server is
+running. It uses two beds, fixed cameras and the room's paired window suns, with
+shadow reception, effective-normal, wireframe and close-view controls. The
+previous shadow sampler is available to isolate banding without changing the
+illumination. Saved rooms retain their pinned model revisions; newly placed
+catalogue models use the regenerated revision.
+
+For source-stage inspection, generate comparisons with
+`npm run models:proxies -- --compare-only --previews private/shading-response`.
+Put the selected candidate and its compressed derivative in that model’s comparison
+directory as `review.glb` and `runtime.glb`, then run
+`node scripts/review-planning-models.mjs D8d`. The local-only review shows the faithful
+reference, shell, candidate and compressed candidate under identical broad or
+grazing light, with shadow reception, normal and wireframe controls and a
+three-bed view. This studio view supplements the actual-room check. For C8c,
+`?candidate=1&stage=reference` (or `shell`, `candidate`, `compressed`) on the
+actual-room page uses this private review server; omit the query to check the
+active catalogue. References are never part of a public package.
 
 Final GLBs keep their existing filenames in ignored `private/models/`, so the
 existing model catalogue and publisher continue to work. Detailed references,

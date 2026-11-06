@@ -19,7 +19,7 @@ const host = option('--host', '127.0.0.1'), port = Number(option('--port', proce
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid public port');
 const root = process.cwd();
 const library = await validateRelease(root);
-const types: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.ttf': 'font/ttf', '.woff2': 'font/woff2', '.wasm': 'application/wasm', '.txt': 'text/plain' };
+const types: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.ico': 'image/x-icon', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.ttf': 'font/ttf', '.woff2': 'font/woff2', '.wasm': 'application/wasm', '.txt': 'text/plain' };
 function json(response: ServerResponse, value: unknown) { response.setHeader('Content-Type', 'application/json'); response.setHeader('Cache-Control', 'no-store'); response.end(JSON.stringify(value)); }
 async function asset(request: IncomingMessage, response: ServerResponse, relative: string, type: string, immutable = false) {
   const expected = library.fingerprints.get(relative);
@@ -29,6 +29,14 @@ async function asset(request: IncomingMessage, response: ServerResponse, relativ
   try {
     const info = await handle.stat();
     if (!info.isFile() || [info.dev, info.ino, info.size, info.mtimeMs, info.ctimeMs].join(':') !== expected) throw new Error('Release asset changed after validation');
+    // Social crawlers need an absolute image URL. Use the configured deployment
+    // origin so the same reviewed package can be hosted at any domain.
+    if (relative === 'dist/index.html') {
+      const html = (await handle.readFile('utf8')).replaceAll('content="/brand/social-card.png"', `content="${new URL('/brand/social-card.png', origin).href}"`);
+      response.setHeader('Content-Type', type); response.setHeader('Content-Length', Buffer.byteLength(html));
+      response.setHeader('Cache-Control', 'no-cache');
+      response.end(request.method === 'HEAD' ? undefined : html); return;
+    }
     response.setHeader('Content-Type', type); response.setHeader('Content-Length', info.size);
     response.setHeader('Cache-Control', immutable ? 'public, max-age=31536000, immutable' : 'no-cache');
     if (request.method === 'HEAD') { response.end(); return; }

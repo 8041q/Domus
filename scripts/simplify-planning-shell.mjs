@@ -1,3 +1,5 @@
+import * as THREE from 'three';
+import { MeshBVH } from 'three-mesh-bvh';
 import { NodeIO } from '@gltf-transform/core';
 import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
 import { compactPrimitive, dedup, flatten, getBounds, join, prune, transformPrimitive, weld } from '@gltf-transform/functions';
@@ -64,70 +66,83 @@ function smoothNormals(positions, indices) {
   normalizeNormals(normals); return normals;
 }
 
-function canonicalGeometry(positions, indices) {
-  // Blender can emit equivalent CAD faces in different vertex orders. Sorting
-  // welded positions and oriented triangles makes collapse tie-breaking stable.
-  const keys=new Map(),sourceKeys=[];
+/** Canonicalize complete attributes, never positions alone. This stabilizes
+ * CAD export order without welding different shading fans together. */
+function canonicalShading(positions, normals, indices) {
+  const rows=[],lookup=new Map(),remap=[];
   for(let i=0;i<positions.length;i+=3) {
-    const point=Array.from(positions.subarray(i,i+3),value=>Math.round(value*1e6)/1e6);
-    const key=point.join('/');sourceKeys.push(key);if(!keys.has(key))keys.set(key,point);
+    const row=[...positions.subarray(i,i+3),...normals.subarray(i,i+3)];
+    const key=row.join('/');
+    if(!lookup.has(key)){lookup.set(key,rows.length);rows.push(row);}
+    remap.push(lookup.get(key));
   }
-  const rows=[...keys].sort((a,b)=>a[1][0]-b[1][0]||a[1][1]-b[1][1]||a[1][2]-b[1][2]);
-  const lookup=new Map(rows.map(([key],i)=>[key,i]));
-  const remap=sourceKeys.map(key=>lookup.get(key)),triangles=[];
-  for(let i=0;i<indices.length;i+=3) {
-    const t=Array.from(indices.subarray(i,i+3),vertex=>remap[vertex]);
-    if(new Set(t).size<3)continue;
-    const first=t.indexOf(Math.min(...t));triangles.push([t[first],t[(first+1)%3],t[(first+2)%3]]);
-  }
-  triangles.sort((a,b)=>a[0]-b[0]||a[1]-b[1]||a[2]-b[2]);
-  return {positions:new Float32Array(rows.flatMap(([,point])=>point)),indices:new Uint32Array(triangles.flat())};
+  const order=rows.map((row,index)=>({row,index})).sort((a,b)=>{
+    for(let k=0;k<6;k++)if(a.row[k]!==b.row[k])return a.row[k]-b.row[k];return 0;
+  });
+  const sorted=new Uint32Array(rows.length);order.forEach((item,i)=>sorted[item.index]=i);
+  const faces=[];
+  for(let i=0;i<indices.length;i+=3){const t=Array.from(indices.subarray(i,i+3),v=>sorted[remap[v]]);const first=t.indexOf(Math.min(...t));faces.push([t[first],t[(first+1)%3],t[(first+2)%3]]);}
+  faces.sort((a,b)=>a[0]-b[0]||a[1]-b[1]||a[2]-b[2]);
+  return {positions:new Float32Array(order.flatMap(x=>x.row.slice(0,3))),normals:new Float32Array(order.flatMap(x=>x.row.slice(3))),indices:new Uint32Array(faces.flat())};
 }
 
-/** Regenerate smooth normals with real hard edges after changing topology. CAD
- * normal splits must not keep thousands of otherwise redundant vertices alive. */
-function creaseNormals(positions, indices) {
-  const usable=[];
+/** Attribute seams remain separate. Projection is confined to this primitive
+ * (one part/material) and rejects the opposite side of a thin surface. */
+export function transferSurfaceNormals(sourcePositions, sourceIndices, sourceNormals, positions, normals, maxDistance, projectPositions=false) {
+  const geometry=new THREE.BufferGeometry();
+  geometry.setAttribute('position',new THREE.BufferAttribute(sourcePositions,3));
+  geometry.setIndex(new THREE.BufferAttribute(sourceIndices.slice(),1));
+  const tree=new MeshBVH(geometry,{indirect:true});
+  const point=new THREE.Vector3(), closest=new THREE.Vector3(), direction=new THREE.Vector3();
+  const bary=new THREE.Vector3(), result=new THREE.Vector3(), corner=new THREE.Vector3();
+  const bestPoint=new THREE.Vector3(), triangle=new THREE.Triangle();
+  for(let i=0;i<positions.length;i+=3) {
+    point.fromArray(positions,i);direction.fromArray(normals,i);
+    let best=maxDistance*maxDistance,face=-1,alignment=-1;
+    tree.shapecast({
+      intersectsBounds:box=>box.distanceToPoint(point)**2<=best+1e-14,
+      intersectsTriangle:(t,index)=>{
+        const dot=t.getNormal(result).dot(direction);
+        if(dot<.1)return false;
+        t.closestPointToPoint(point,closest);const distance=closest.distanceToSquared(point);
+        if(distance<best-1e-14 || (distance<=best+1e-14 && dot>alignment)) {
+          best=distance;face=index;alignment=dot;bestPoint.copy(closest);
+        }
+        return false;
+      }
+    });
+    if(face<0)continue;
+    const offsets=[0,1,2].map(k=>sourceIndices[face*3+k]*3);
+    triangle.set(...offsets.map(offset=>new THREE.Vector3().fromArray(sourcePositions,offset)));
+    triangle.getBarycoord(bestPoint,bary);result.set(0,0,0);
+    for(let k=0;k<3;k++)result.addScaledVector(corner.fromArray(sourceNormals,offsets[k]),bary.getComponent(k));
+    if(result.dot(direction)>.1)result.normalize().toArray(normals,i);
+    if(projectPositions)bestPoint.toArray(positions,i);
+  }
+  geometry.dispose();normalizeNormals(normals);
+}
+
+export function coincidentOppositeArea(positions, indices) {
+  const faces=new Map();let area=0;
   for(let i=0;i<indices.length;i+=3) {
-    const [a,b,c]=Array.from(indices.subarray(i,i+3),v=>v*3);
-    const u=[0,1,2].map(k=>positions[b+k]-positions[a+k]),v=[0,1,2].map(k=>positions[c+k]-positions[a+k]);
-    if(Math.hypot(u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0])>1e-12) usable.push(...indices.subarray(i,i+3));
+    const points=Array.from(indices.subarray(i,i+3),v=>Array.from(positions.subarray(v*3,v*3+3),x=>Math.round(x*1e6)).join('/'));
+    if(new Set(points).size<3)continue;
+    const first=points.indexOf([...points].sort()[0]);
+    const ordered=[points[first],points[(first+1)%3],points[(first+2)%3]];
+    const key=[...ordered].sort().join('|'), winding=ordered.join('|');
+    if(faces.has(key)&&faces.get(key)!==winding) {
+      const [a,b,c]=Array.from(indices.subarray(i,i+3),v=>new THREE.Vector3().fromArray(positions,v*3));
+      area+=new THREE.Triangle(a,b,c).getArea();
+    } else faces.set(key,winding);
   }
-  indices=new Uint32Array(usable);
-  const adjacency=new Map(), faceNormals=[];
-  for(let i=0;i<indices.length;i+=3) {
-    const [a,b,c]=Array.from(indices.subarray(i,i+3),v=>v*3);
-    const u=[0,1,2].map(k=>positions[b+k]-positions[a+k]),v=[0,1,2].map(k=>positions[c+k]-positions[a+k]);
-    const n=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]];
-    const length=Math.hypot(...n)||1,face=faceNormals.length;
-    faceNormals.push({normal:n.map(value=>value/length),weighted:n});
-    for(const vertex of indices.subarray(i,i+3)) { if(!adjacency.has(vertex))adjacency.set(vertex,[]);adjacency.get(vertex).push(face); }
-  }
-  const resultPositions=[],resultNormals=[],mapping=new Map();
-  for(const [vertex,faces] of adjacency) {
-    const groups=[];
-    for(const face of faces) {
-      const n=faceNormals[face].normal;
-      const group=groups.find(group=>group.some(f=>faceNormals[f].normal.reduce((sum,value,k)=>sum+value*n[k],0)>.766));
-      if(group)group.push(face);else groups.push([face]);
-    }
-    for(const group of groups) {
-      const index=resultPositions.length/3,n=[0,0,0];
-      resultPositions.push(...positions.subarray(vertex*3,vertex*3+3));
-      for(const face of group) for(let k=0;k<3;k++)n[k]+=faceNormals[face].weighted[k];
-      const length=Math.hypot(...n)||1;resultNormals.push(...n.map(v=>v/length));
-      for(const face of group)mapping.set(`${vertex}/${face}`,index);
-    }
-  }
-  return {positions:new Float32Array(resultPositions),normals:new Float32Array(resultNormals),
-    indices:Uint32Array.from(indices,(vertex,i)=>mapping.get(`${vertex}/${Math.floor(i/3)}`))};
+  return area;
 }
 
 /** Geometry-only reduction. Private part roles are discarded after the selective
  * stage. No global rescaling is used to conceal lost extremities. */
 export async function simplifyPlanningShell(input, output = input, options = {}) {
-  const { method = 'protected', targetTriangles = 10000, maxError = .003, stableSurfaceError = .0015, thinSurfaceError = .0015, remeshResolution = 128 } = options;
-  if (!['protected', 'remesh'].includes(method) || !Number.isInteger(targetTriangles) || targetTriangles < 12
+  const { normalWeight = 1, thinNormalWeight = normalWeight, method = 'protected', targetTriangles = 10000, maxError = .003, stableSurfaceError = .0015, thinSurfaceError = .0015, remeshResolution = 128 } = options;
+  if (!Number.isFinite(thinNormalWeight) || thinNormalWeight<=0 || thinNormalWeight>1 || !Number.isFinite(normalWeight) || normalWeight <= 0 || normalWeight > 1 || !['protected', 'remesh'].includes(method) || !Number.isInteger(targetTriangles) || targetTriangles < 12
     || !Number.isFinite(maxError) || maxError <= 0 || !Number.isFinite(stableSurfaceError) || stableSurfaceError <= 0 || !Number.isFinite(thinSurfaceError) || thinSurfaceError <= 0
     || !Number.isInteger(remeshResolution) || remeshResolution < 4 || remeshResolution > 256) {
     throw new Error('Invalid planning simplification options');
@@ -175,10 +190,10 @@ export async function simplifyPlanningShell(input, output = input, options = {})
   for(const part of parts) {
     const {primitive,role,shape}=part;
     let {positions,indices}=part, normals=primitive.getAttribute('NORMAL')?.getArray();
-    // Reconnect identical positions across imported normal seams. Geometry and
-    // broad material boundaries remain; source shading topology is disposable.
-    ({positions,indices}=canonicalGeometry(positions,indices));
-    normals=smoothNormals(positions,indices);
+    normals=normals ? new Float32Array(normals) : smoothNormals(positions,indices);
+    ({positions,normals,indices}=canonicalShading(positions,normals,indices));
+    const sourcePositions=positions.slice(),sourceIndices=indices.slice(),sourceNormals=normals.slice();
+    const sourceOppositeArea=coincidentOppositeArea(positions,indices);
     let remeshed=false;
     const quota=Math.max(12,Math.round(targetTriangles*part.weight/weight));
     if(method==='remesh' && role==='bulk' && part.singleMaterial && indices.length>300 && Math.min(...shape.size)>.025) {
@@ -194,34 +209,69 @@ export async function simplifyPlanningShell(input, output = input, options = {})
     const flags=['Permissive','ErrorAbsolute','Sparse'];
     const stableSurface=role==='thin'||Math.min(...shape.size)<.012||shape.thickness<.012;
     if(remeshed||stableSurface)flags.push('PreserveFolds');
+    const board=role==='feature' && shape.size[0]>.4 && shape.size[1]>.2 && shape.size[2]<.2;
+    const colour=primitive.getMaterial()?.getBaseColorFactor().slice(0,3)??[1,1,1];
+    const overlay=stableSurface && Math.max(...colour)-Math.min(...colour)>.2;
+    const perforatedPanel=role==='feature' && shape.size[0]>.4 && shape.size[1]<.08;
+    const upright=role==='feature' && shape.size[0]<.2 && shape.size[1]>.15;
+    const attributeWeight=(perforatedPanel||board||upright)?Math.max(.03,normalWeight):role==='thin'?thinNormalWeight:normalWeight;
     let count,error;
     if(stableSurface&&!remeshed) {
-      const result=MeshoptSimplifier.simplifyWithAttributes(indices,positions,3,normals,3,[.001,.001,.001],locks,
-        Math.min(indices.length,quota*3),Math.min(maxError,stableSurfaceError,role==='thin'?thinSurfaceError:Infinity),flags);
+      const result=MeshoptSimplifier.simplifyWithAttributes(indices,positions,3,normals,3,[attributeWeight,attributeWeight,attributeWeight],locks,
+        Math.min(indices.length,quota*3),Math.min(maxError,perforatedPanel?Math.min(stableSurfaceError,.0015):stableSurfaceError,overlay?.0001:Infinity,role==='thin'?thinSurfaceError:Infinity),flags);
       indices=result[0];count=indices.length;error=result[1];
-    } else [count,error]=MeshoptSimplifier.simplifyWithUpdate(indices,positions,3,normals,3,[.001,.001,.001],locks,
+    } else [count,error]=MeshoptSimplifier.simplifyWithUpdate(indices,positions,3,normals,3,[attributeWeight,attributeWeight,attributeWeight],locks,
       Math.min(indices.length,quota*3),maxError,flags);
     indices=indices.slice(0,count); normalizeNormals(normals);
     for(let i=0;i<positions.length;i+=3) if(Math.hypot(positions[i]-beforePositions[i],positions[i+1]-beforePositions[i+1],positions[i+2]-beforePositions[i+2])>1e-7) repositionedVertices++;
-    ({positions,normals,indices}=creaseNormals(positions,indices));
+    // Restore per-corner shading fans after permissive geometry reduction.
+    // Face direction disambiguates the two sides of a nearby thin surface.
+    const expandedPositions=new Float32Array(indices.length*3),expandedNormals=new Float32Array(indices.length*3);
+    for(let i=0;i<indices.length;i+=3) {
+      const triangle=new THREE.Triangle(...Array.from(indices.subarray(i,i+3),v=>new THREE.Vector3().fromArray(positions,v*3)));
+      const direction=triangle.getNormal(new THREE.Vector3());
+      for(let k=0;k<3;k++){
+        expandedPositions.set(positions.subarray(indices[i+k]*3,indices[i+k]*3+3),(i+k)*3);
+        const guide=new THREE.Vector3().fromArray(normals,indices[i+k]*3);
+        (guide.lengthSq()>1e-12?guide.normalize():direction).toArray(expandedNormals,(i+k)*3);
+      }
+    }
+    positions=expandedPositions;normals=expandedNormals;indices=Uint32Array.from({length:positions.length/3},(_,i)=>i);
+    transferSurfaceNormals(sourcePositions,sourceIndices,sourceNormals,positions,normals,maxError*2);
+    let oppositeArea=coincidentOppositeArea(positions,indices);
+    const reducedTriangles=indices.length/3;
+    const overlapFallback=oppositeArea>sourceOppositeArea+1e-5;
+    if(overlapFallback) {
+      // A collapse can leave the same triangle twice with opposite winding.
+      // Keep one surface for double-sided materials; never create two depth
+      // competitors. Single-sided solids retain the unreduced part instead.
+      if(primitive.getMaterial()?.getDoubleSided()) {
+        const seen=new Set(),clean=[];
+        for(let i=0;i<indices.length;i+=3) {
+          const key=Array.from(indices.subarray(i,i+3),v=>Array.from(positions.subarray(v*3,v*3+3),x=>Math.round(x*1e6)).join('/')).sort().join('|');
+          if(!seen.has(key)){seen.add(key);clean.push(...indices.subarray(i,i+3));}
+        }
+        indices=new Uint32Array(clean);oppositeArea=coincidentOppositeArea(positions,indices);
+      } else {positions=sourcePositions;indices=sourceIndices;normals=sourceNormals;oppositeArea=sourceOppositeArea;}
+    }
     const buffer=primitive.getAttribute('POSITION').getBuffer();
     primitive.setAttribute('POSITION',doc.createAccessor().setBuffer(buffer).setType('VEC3').setArray(positions));
     primitive.setAttribute('NORMAL',doc.createAccessor().setBuffer(buffer).setType('VEC3').setArray(normals));
     primitive.setIndices(doc.createAccessor().setBuffer(buffer).setType('SCALAR').setArray(indices));
     for(const semantic of primitive.listSemantics()) if(!['POSITION','NORMAL'].includes(semantic)) primitive.setAttribute(semantic,null);
     primitive.setExtras({}); compactPrimitive(primitive);
-    partReports.push({role,sourceTriangles:part.indices.length/3,triangles:indices.length/3,remeshed,errorMetres:error});
+    partReports.push({role,sourceTriangles:part.indices.length/3,triangles:indices.length/3,remeshed,errorMetres:error,sourceOppositeArea,oppositeArea,overlapFallback,reducedTriangles});
   }
   for(const collection of ['listNodes','listMeshes','listMaterials','listAccessors','listBuffers','listScenes']) {
     for(const property of root[collection]()) { property.setName(''); property.setExtras({}); }
   }
   root.setExtras({});
-  await doc.transform(dedup(),flatten(),join({keepNamed:false}),prune());
+  await doc.transform(weld(),dedup(),flatten(),join({keepNamed:false}),prune());
   if(metadata) scene.addChild(doc.createNode('Planning model').setExtras(metadata));
   const after=getBounds(scene);
   const boundsDriftMetres=Math.max(...['min','max'].flatMap(edge=>bounds[edge].map((value,i)=>Math.abs(value-after[edge][i]))));
   const afterTriangles=root.listMeshes().reduce((sum,mesh)=>sum+mesh.listPrimitives().reduce((n,p)=>n+p.getIndices().getCount()/3,0),0);
-  const report={method,targetTriangles,beforeTriangles,afterTriangles,remeshedParts,repositionedVertices,boundsDriftMetres,parts:partReports};
+  const report={method,normalWeight,targetTriangles,beforeTriangles,afterTriangles,remeshedParts,repositionedVertices,boundsDriftMetres,parts:partReports};
   if(!Number.isFinite(boundsDriftMetres)||boundsDriftMetres>.003) throw new Error(`Simplification changed bounds by ${(boundsDriftMetres*1000).toFixed(2)} mm; candidate rejected`);
   await io.write(output,doc);
   return report;

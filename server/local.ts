@@ -18,7 +18,7 @@ let ai!: (request: IncomingMessage, response: ServerResponse, next: () => void) 
 const aiPlugin = experimentalAiGateway(process.env.OLLAMA_ALLOWED_ENDPOINTS);
 const configure = aiPlugin.configureServer as (server: unknown) => void;
 configure({ middlewares: { use(handler: typeof ai) { ai = handler; } } });
-const types: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.svg': 'image/svg+xml', '.ttf': 'font/ttf', '.woff2': 'font/woff2', '.glb': 'model/gltf-binary', '.wasm': 'application/wasm', '.txt': 'text/plain; charset=utf-8' };
+const types: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.ico': 'image/x-icon', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.svg': 'image/svg+xml', '.ttf': 'font/ttf', '.woff2': 'font/woff2', '.glb': 'model/gltf-binary', '.wasm': 'application/wasm', '.txt': 'text/plain; charset=utf-8' };
 async function serve(request: IncomingMessage, response: ServerResponse) {
   if (!['GET', 'HEAD'].includes(request.method ?? '')) { response.writeHead(405, { Allow: 'GET, HEAD' }).end(); return; }
   const url = new URL(request.url ?? '/', 'http://localhost');

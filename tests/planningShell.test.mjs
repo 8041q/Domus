@@ -209,7 +209,8 @@ for (const method of ['protected', 'remesh']) {
     });
     const result = await io.read(output), after = triangles(result);
     assert.deepEqual(await readFile(input), originalBytes, 'Generating a candidate must not overwrite its input');
-    assert.ok(after < before / 2, `${before} input triangles should be substantially reduced (got ${after})`);
+    // Authored hard seams take priority over the old 50% reduction target.
+    assert.ok(after < before * .8, `${before} input triangles should be substantially reduced (got ${after})`);
     assert.equal(report.beforeTriangles, before); assert.equal(report.afterTriangles, after);
     if (method === 'remesh') assert.ok(report.remeshedParts > 0, 'The bulky base should receive new topology');
     else assert.equal(report.remeshedParts, 0);
@@ -330,4 +331,76 @@ test('shared mesh instances retain independent transforms and part processing', 
   assert.equal(intersects(result, [-1, 0, 2], [0, 0, -1]), true);
   assert.equal(intersects(result, [1, .3, 2], [0, 0, -1]), true);
   assert.equal(intersects(result, [0, 0, 2], [0, 0, -1]), false);
+});
+
+test('surface transfer interpolates authored normals and keeps opposite thin faces separate', async () => {
+  const { transferSurfaceNormals, coincidentOppositeArea } = await import('../scripts/simplify-planning-shell.mjs');
+  const positions = new Float32Array([0,0,0, 1,0,0, 0,1,0, 0,0,.0001, 0,1,.0001, 1,0,.0001]);
+  const indices = new Uint32Array([0,1,2,3,4,5]);
+  const sourceNormals = new Float32Array([0,0,1, .6,0,.8, 0,.6,.8, 0,0,-1, 0,0,-1, 0,0,-1]);
+  const destination = new Float32Array([.25,.25,0, .25,.25,.0001]);
+  const normals = new Float32Array([0,0,1, 0,0,-1]);
+  transferSurfaceNormals(positions, indices, sourceNormals, destination, normals, .001);
+  const expected = new THREE.Vector3(.15,.15,.9).normalize();
+  assert.ok(new THREE.Vector3().fromArray(normals).distanceTo(expected)<1e-6);
+  assert.deepEqual(Array.from(normals.slice(3)),[0,0,-1]);
+  assert.equal(coincidentOppositeArea(positions, indices),0);
+  assert.equal(coincidentOppositeArea(positions,new Uint32Array([0,1,2,0,2,1])),.5);
+});
+
+test('simplification retains distinct roughness and specular extensions', async t => {
+  const { KHRMaterialsSpecular } = await import('@gltf-transform/extensions');
+  const directory=await mkdtemp(path.join(os.tmpdir(),'domus-finishes-'));
+  t.after(()=>rm(directory,{recursive:true,force:true}));
+  const document=sphereFixture([{}]), materials=document.createExtension(KHRMaterialsSpecular);
+  const material=document.createMaterial().setRoughnessFactor(.048634).setMetallicFactor(.7)
+    .setExtension('KHR_materials_specular',materials.createSpecular().setSpecularFactor(.8).setSpecularColorFactor([.52,.56,.58]));
+  document.getRoot().listMeshes()[0].listPrimitives()[0].setMaterial(material);
+  const io=new NodeIO().registerExtensions([KHRMaterialsSpecular]);
+  const input=path.join(directory,'input.glb'),output=path.join(directory,'output.glb');
+  await io.write(input,document);await simplifyPlanningShell(input,output);
+  const result=(await io.read(output)).getRoot().listMaterials()[0];
+  assert.equal(result.getRoughnessFactor(),.048634);
+  assert.equal(result.getMetallicFactor(),.7);
+  assert.deepEqual(result.getExtension('KHR_materials_specular').getSpecularColorFactor(),[.52,.56,.58]);
+});
+
+test('surface restoration preserves a verified geometry budget and restores source finishes', async t => {
+  const {restorePlanningSurfaces}=await import('../scripts/restore-planning-surfaces.mjs');
+  const directory=await mkdtemp(path.join(os.tmpdir(),'domus-surface-restore-'));
+  t.after(()=>rm(directory,{recursive:true,force:true}));
+  const io=new NodeIO(),reference=sphereFixture([{}]);
+  reference.getRoot().listMeshes()[0].listPrimitives()[0].setMaterial(reference.createMaterial().setRoughnessFactor(.048634).setBaseColorFactor([.8,.8,.8,1]));
+  const source=path.join(directory,'reference.glb'),baseline=path.join(directory,'baseline.glb'),output=path.join(directory,'output.glb');
+  await io.write(source,reference);const before=await io.read(source);
+  before.getRoot().listMaterials()[0].setRoughnessFactor(.65);
+  before.getRoot().listScenes()[0].addChild(before.createNode().setExtras({domus_schema_version:2,domus_display_profile:'topology-exterior-v2',private_note:'PRIVATE_SENTINEL'}));
+  await io.write(baseline,before);
+  const report=await restorePlanningSurfaces(baseline,source,output),result=await io.read(output);
+  assert.equal(report.unmatched,0);assert.equal(triangles(result),triangles(before));
+  const carrier=result.getRoot().listNodes().find(n=>n.getExtras().domus_schema_version);
+  assert.equal(carrier.getExtras().domus_display_profile,'topology-exterior-v2');
+  assert.equal(carrier.getExtras().private_note,undefined);
+  assert.deepEqual(positionKeys(result),positionKeys(before));
+  assert.equal(result.getRoot().listMaterials()[0].getRoughnessFactor(),.048634);
+  const {optimizeModel}=await import('../scripts/optimize-models.mjs');
+  const optimized=await optimizeModel(output,path.join(directory,'runtime.glb'));
+  assert.equal(optimized.after.triangles,report.afterTriangles,'Compression must not simplify a restored display mesh again');
+});
+
+test('surface restoration keeps broad manufactured faces flat at bevel-adjacent corners', async t => {
+  const {restorePlanningSurfaces}=await import('../scripts/restore-planning-surfaces.mjs');
+  const directory=await mkdtemp(path.join(os.tmpdir(),'domus-flat-faces-'));t.after(()=>rm(directory,{recursive:true,force:true}));
+  const d=new Document(),buffer=d.createBuffer(),scene=d.createScene(),g=new THREE.BoxGeometry(1,1,.1);
+  const p=d.createPrimitive().setMaterial(d.createMaterial());
+  for(const [semantic,name]of [['POSITION','position'],['NORMAL','normal']])p.setAttribute(semantic,d.createAccessor().setBuffer(buffer).setType('VEC3').setArray(g.getAttribute(name).array.slice()));
+  p.setIndices(d.createAccessor().setBuffer(buffer).setType('SCALAR').setArray(g.index.array.slice()));scene.addChild(d.createNode().setMesh(d.createMesh().addPrimitive(p)));g.dispose();
+  const io=new NodeIO(),source=path.join(directory,'source.glb'),baseline=path.join(directory,'baseline.glb'),output=path.join(directory,'output.glb');await io.write(source,d);
+  const normals=p.getAttribute('NORMAL').getArray(),positions=p.getAttribute('POSITION').getArray();
+  for(let i=0;i<normals.length;i+=3)new THREE.Vector3().fromArray(positions,i).normalize().toArray(normals,i);
+  await io.write(baseline,d);await restorePlanningSurfaces(baseline,source,output);
+  for(const mesh of (await io.read(output)).getRoot().listMeshes())for(const primitive of mesh.listPrimitives()){
+    const pos=primitive.getAttribute('POSITION').getArray(),n=primitive.getAttribute('NORMAL').getArray(),indices=primitive.getIndices().getArray();
+    for(let i=0;i<indices.length;i+=3){const ids=Array.from(indices.subarray(i,i+3));const face=new THREE.Triangle(...ids.map(v=>new THREE.Vector3().fromArray(pos,v*3))).getNormal(new THREE.Vector3());for(const v of ids)assert.ok(face.dot(new THREE.Vector3().fromArray(n,v*3))>.9999);}
+  }
 });

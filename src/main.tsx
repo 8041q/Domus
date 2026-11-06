@@ -10,7 +10,8 @@ import { roomProjects } from './roomProjects';
 
 applyThemeTokens();
 const root = createRoot(document.getElementById('root')!);
-root.render(<div className="project-progress" role="status">Opening Domus…</div>);
+const startupLogo = <img className="project-progress-logo" src="/brand/app-icon.svg" alt="" width="64" height="64" />;
+root.render(<div className="project-progress" role="status">{startupLogo}Opening Domus…</div>);
 async function start() {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -24,7 +25,7 @@ async function start() {
     const stopCatalogueUpdates = startProductCatalogueUpdates();
     import.meta.hot?.dispose(stopCatalogueUpdates);
   } catch {
-    root.render(<div className="project-progress" role="alert"><p>Domus could not finish starting. Your saved rooms are still in this browser.</p><button onClick={() => location.reload()}>Try again</button></div>);
+    root.render(<div className="project-progress" role="alert">{startupLogo}<p>Domus could not finish starting. Your saved rooms are still in this browser.</p><button onClick={() => location.reload()}>Try again</button></div>);
   } finally { clearTimeout(timer); }
 }
 void start();

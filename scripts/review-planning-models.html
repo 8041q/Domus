@@ -1,0 +1,33 @@
+<!doctype html><meta charset="utf-8"><title>Private surface-response comparison</title>
+<style>body{margin:0;font:15px system-ui;background:#d2d2d2;color:#18232b}header{padding:14px;background:white}label{margin-right:18px}select{font:inherit;padding:5px}.labels{display:flex}.labels span{width:25%;text-align:center;padding:8px}canvas{display:block}#status{padding:10px}</style>
+<header><b>Private surface-response comparison</b><p>
+<label>View <select id="view"><option value="full">Full model</option><option value="board">Board close-up</option><option value="room">Three-bed room</option></select></label>
+<label>Illumination <select id="light"><option value="broad">Broad</option><option value="grazing">Grazing</option></select></label>
+<label>Surface <select id="surface"><option value="pbr">Original materials + shadows</option><option value="no-shadow">Original materials, no received shadows</option><option value="normals">Normals</option><option value="wireframe">Wireframe</option></select></label></p></header>
+<div class="labels"><span>Faithful reference</span><span>Unreduced shell</span><span>Simplified candidate</span><span>Compressed candidate</span></div><div id="canvas"></div><div id="status">Loading…</div>
+<script type="module">
+import * as THREE from '/node_modules/three/build/three.module.js';
+import {GLTFLoader} from '/node_modules/three/examples/jsm/loaders/GLTFLoader.js';
+import {MeshoptDecoder} from '/node_modules/three/examples/jsm/libs/meshopt_decoder.module.js';
+import {RoomEnvironment} from '/node_modules/three/examples/jsm/environments/RoomEnvironment.js';
+const renderer=new THREE.WebGLRenderer({antialias:true});renderer.setSize(1600,650);renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.NeutralToneMapping;renderer.toneMappingExposure=.98;renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFShadowMap;document.querySelector('#canvas').append(renderer.domElement);
+const pmrem=new THREE.PMREMGenerator(renderer),room=new RoomEnvironment(),environment=pmrem.fromScene(room,.04);room.dispose();
+const loader=new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
+const models=await Promise.all(['reference','shell','candidate','compressed'].map(key=>loader.loadAsync('/review-assets/'+key+'.glb?model='+encodeURIComponent(new URLSearchParams(location.search).get('model')??'D8d')+'&revision='+Date.now()).then(g=>g.scene)));
+const referenceSize=new THREE.Box3().setFromObject(models[0]).getSize(new THREE.Vector3());
+const original=new WeakMap();for(const model of models)model.traverse(n=>{if(n.isMesh){original.set(n,n.material);n.castShadow=true;n.receiveShadow=true;}});
+const normal=new THREE.MeshNormalMaterial({side:THREE.DoubleSide}),wire=new THREE.MeshBasicMaterial({color:0x283a4a,wireframe:true});
+function render(){renderer.setScissorTest(true);for(const [i,source]of models.entries()){
+ const scene=new THREE.Scene();scene.background=new THREE.Color(0xd2d2d2);scene.environment=environment.texture;scene.environmentIntensity=.85;
+ const model=source.clone(true);model.traverse(n=>{if(n.isMesh){const surface=document.querySelector('#surface').value;n.material=surface==='normals'?normal:surface==='wireframe'?wire:n.material;n.receiveShadow=surface!=='no-shadow';}});
+ const bounds=new THREE.Box3().setFromObject(model),size=bounds.getSize(new THREE.Vector3()),centre=bounds.getCenter(new THREE.Vector3());model.position.set(-centre.x,-bounds.min.y,-centre.z);scene.add(model);
+ const view=document.querySelector('#view').value;if(view==='room')for(const x of [-1.6,1.6]){const copy=model.clone(true);copy.position.x+=x;scene.add(copy);}
+ const floor=new THREE.Mesh(new THREE.PlaneGeometry(12,12),new THREE.MeshStandardMaterial({color:0x999999,roughness:.9}));floor.rotation.x=-Math.PI/2;floor.receiveShadow=true;floor.position.y=-.003;scene.add(floor);
+ if(view==='room'){for(const [x,z,rotation,width] of [[0,-3.5,0,9],[-4.5,0,Math.PI/2,7]]){const wall=new THREE.Mesh(new THREE.PlaneGeometry(width,2.6),new THREE.MeshStandardMaterial({color:0xeeeeee,roughness:.8,side:THREE.DoubleSide}));wall.position.set(x,1.3,z);wall.rotation.y=rotation;wall.receiveShadow=true;scene.add(wall);}}
+ const grazing=document.querySelector('#light').value==='grazing';scene.add(new THREE.HemisphereLight(0xf7f8fa,0xb8b4ae,.6),new THREE.AmbientLight(0xffffff,.15));
+ const light=new THREE.DirectionalLight(0xfff6eb,1.55);light.position.set(grazing?4:3,grazing?.65:5,2);light.castShadow=true;light.shadow.mapSize.set(1024,1024);Object.assign(light.shadow.camera,{left:-9,right:9,top:9,bottom:-9,near:.1,far:30});light.shadow.bias=-.00012;light.shadow.normalBias=.01;light.shadow.radius=5;scene.add(light);
+ const camera=new THREE.PerspectiveCamera(38,400/650,.01,100);if(view==='board'){camera.position.set(1.0,.8,referenceSize.z/2+1.2);camera.lookAt(0,.6,referenceSize.z/2-.05);}else{const radius=referenceSize.length()/2+(view==='room'?1.6:0);const horizontalHalf=Math.atan(Math.tan(THREE.MathUtils.degToRad(19))*400/650);const target=new THREE.Vector3(0,referenceSize.y*.45,0);camera.position.copy(target).add(new THREE.Vector3(2.5,2.2,3.4).normalize().multiplyScalar(radius/Math.sin(horizontalHalf)*1.1));camera.lookAt(target);}
+ renderer.setViewport(i*400,0,400,650);renderer.setScissor(i*400,0,400,650);renderer.render(scene,camera);floor.geometry.dispose();floor.material.dispose();light.shadow.dispose();
+ }document.querySelector('#status').textContent='Ready — identical cameras, illumination and exposure across all four stages.';}
+const query=new URLSearchParams(location.search);for(const select of document.querySelectorAll('select')){if(query.has(select.id))select.value=query.get(select.id);select.onchange=render;}render();
+</script>

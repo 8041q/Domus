@@ -48,7 +48,7 @@ function safePublicAssets(): Plugin {
           if (isUnpublished(requestedFile) || (target && isUnpublished(target))) {
             response.writeHead(403).end(); return;
           }
-          if (!/\.(png|jpe?g|webp|svg|ttf|woff2?|txt)$/i.test(relative) || relative.split(/[\\/]/).some(part => part === '..' || part.startsWith('.'))) { next(); return; }
+          if (!/\.(png|jpe?g|webp|svg|ico|webmanifest|ttf|woff2?|txt)$/i.test(relative) || relative.split(/[\\/]/).some(part => part === '..' || part.startsWith('.'))) { next(); return; }
           const filename = path.join(root, 'public', relative);
           const publicTarget = await resolveFile(filename);
           if (!publicTarget) { next(); return; }
@@ -58,7 +58,7 @@ function safePublicAssets(): Plugin {
           }
           const info = await stat(publicTarget);
           if (!info.isFile()) { next(); return; }
-          const types: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.ttf': 'font/ttf', '.woff': 'font/woff', '.woff2': 'font/woff2', '.txt': 'text/plain' };
+          const types: Record<string, string> = { '.webmanifest': 'application/manifest+json', '.ico': 'image/x-icon', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.ttf': 'font/ttf', '.woff': 'font/woff', '.woff2': 'font/woff2', '.txt': 'text/plain' };
           response.setHeader('Content-Type', types[path.extname(filename).toLowerCase()] ?? 'application/octet-stream');
           const stream = createReadStream(publicTarget); stream.on('error', () => response.destroy()); response.on('close', () => stream.destroy()); stream.pipe(response);
         })().catch(next);

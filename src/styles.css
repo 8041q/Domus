@@ -80,7 +80,7 @@ button:disabled { cursor: default; opacity: .45; }
   height: 64px; padding: 0 16px; background: color-mix(in oklch, var(--card) 96%, transparent); border-bottom: 1px solid var(--border); backdrop-filter: blur(12px);
 }
 .brand-block { display: flex; align-items: center; gap: 10px; min-width: 0; justify-self: start; }
-.brand-mark { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: var(--interaction); color: var(--foreground); font-size: 13px; font-weight: 650; letter-spacing: var(--font-strong-spacing); }
+.brand-mark { display: block; width: 32px; height: 32px; flex: 0 0 auto; object-fit: contain; }
 .brand-block > div:last-child { display: grid; line-height: 1.1; }
 .brand-block strong { font-size: 13px; letter-spacing: var(--font-strong-spacing); }
 .brand-block span { margin-top: 4px; color: var(--muted-foreground); font-size: 10px; }
@@ -835,6 +835,7 @@ input[type="range"]:disabled { opacity: .45; }
 }
 .movable-hover-overlay[hidden] { display: none; }
 .project-progress, .project-progress.loading-status { position: fixed; z-index: 10000; inset: 0; display: grid; place-content: center; background: #ffffffed; font-size: 16px; font-weight: 600; }
+.project-progress-logo { width: 64px; height: 64px; justify-self: center; margin-bottom: 20px; }
 .project-storage { display: grid; grid-template-columns: 1fr auto; gap: 10px; font-size: 13px; }
 .project-storage dd { margin: 0; font-variant-numeric: tabular-nums; }
 .project-recovery-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; }

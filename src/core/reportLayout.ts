@@ -1,4 +1,5 @@
 import { setCanvasFont } from './reportFonts';
+import { drawBrandMark } from '../brand/drawBrand';
 
 /** Word wrapping with a character fallback for long, unbroken identifiers. */
 export function wrapReportText(ctx: Pick<CanvasRenderingContext2D, 'measureText'>, text: string, width: number): string[] {
@@ -33,7 +34,8 @@ export function reportHeading(ctx: CanvasRenderingContext2D, roomName: string, s
 }
 
 export function reportFooter(ctx: CanvasRenderingContext2D, date: string, page: number, total: number) {
-  reportFont(ctx, 20); ctx.fillStyle = '#71717a'; ctx.fillText(`Domus · Exported ${date}`, 70, 1200);
+  drawBrandMark(ctx, 67, 1192, 32);
+  reportFont(ctx, 20); ctx.fillStyle = '#71717a'; ctx.fillText(`Domus · Exported ${date}`, 112, 1200);
   ctx.textAlign = 'right'; ctx.fillText(`${page} / ${total}`, 1730, 1200);
 }
 

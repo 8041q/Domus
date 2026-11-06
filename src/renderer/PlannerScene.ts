@@ -307,7 +307,9 @@ export class PlannerScene {
       this.restingPixelRatio = pixelRatio;
       this.renderer.setPixelRatio(pixelRatio);
       this.renderer.shadowMap.enabled = true;
-      this.renderer.shadowMap.type = THREE.PCFShadowMap;
+      // Bilinear PCF keeps shadow transitions continuous on receiving surfaces.
+      // Sparse PCF with a wide radius creates visible brightness bands.
+      this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
       this.renderer.shadowMap.autoUpdate = false;
       this.renderer.shadowMap.needsUpdate = true;
       this.raycaster.firstHitOnly = true;

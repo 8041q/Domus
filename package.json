@@ -4,6 +4,7 @@
   "version": "0.8.0",
   "type": "module",
   "scripts": {
+    "brand:generate": "node scripts/generate-brand-assets.mjs",
     "predev": "node scripts/optimize-models.mjs --optional",
     "dev": "node node_modules/vite/bin/vite.js",
     "prebuild": "node scripts/publish-assets.mjs",

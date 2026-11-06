@@ -16,6 +16,12 @@ __pycache__/
 /public/fonts/ibm-plex-sans/*
 !/public/fonts/ibm-plex-sans/OFL.txt
 
+# Reviewed, reproducible app branding only; model directories stay ignored.
+!/public/brand/
+!/public/brand/**
+!/public/favicon.ico
+!/public/site.webmanifest
+
 server-dist/
 *.tsbuildinfo
 playwright-report/

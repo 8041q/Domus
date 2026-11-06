@@ -20,8 +20,8 @@ from planning_model_roles import classify_part
 from planning_model_paths import validate_output_paths
 
 RECIPES = {
-    'c8c': {'name': 'C8c', 'category': 'Hospital Bed'},
-    'd8d': {'name': 'D8d', 'category': 'Hospital Bed'},
+    'c8c': {'name': 'C8c', 'category': 'Hospital Bed', 'bakeNormals': True},
+    'd8d': {'name': 'D8d', 'category': 'Hospital Bed', 'stableSurfaceError': .002},
     'v8v': {'name': 'V8v', 'category': 'Hospital Bed', 'stableSurfaceError': .003, 'thinSurfaceError': .0005},
     'z7z': {'name': 'Z7z', 'category': 'Hospital Bed', 'stableSurfaceError': .003},
     'ainno20': {'name': 'AInno20', 'category': 'Others', 'lamp': True},
@@ -33,14 +33,14 @@ def fingerprint(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def material(name, color, metallic=0):
+def material(name, color, properties):
     result = bpy.data.materials.new(name)
     result.diffuse_color = color
     result.use_nodes = True
     shader = result.node_tree.nodes.get('Principled BSDF')
     shader.inputs['Base Color'].default_value = color
-    shader.inputs['Roughness'].default_value = .65
-    shader.inputs['Metallic'].default_value = metallic
+    for key, value in properties:
+        shader.inputs[key].default_value = value
     return result
 
 
@@ -52,14 +52,18 @@ def source_palette(mesh):
         if key in cache:
             colors.append(cache[key]); continue
         color = (.8, .8, .8, 1)
-        metallic = 0
+        properties = (('Roughness', .65), ('Metallic', 0))
         if mat:
             color = tuple(mat.diffuse_color)
             if mat.use_nodes:
                 shader = next((n for n in mat.node_tree.nodes if n.type == 'BSDF_PRINCIPLED'), None)
                 if shader:
                     color = tuple(shader.inputs['Base Color'].default_value)
-                    metallic = shader.inputs['Metallic'].default_value
+                    keys = ['Roughness', 'Metallic', 'IOR', 'Specular IOR Level', 'Specular Tint',
+                            'Coat Weight', 'Coat Roughness', 'Coat IOR', 'Coat Tint']
+                    properties = tuple((name, tuple(shader.inputs[name].default_value)
+                        if hasattr(shader.inputs[name].default_value, '__len__')
+                        else float(shader.inputs[name].default_value)) for name in keys if name in shader.inputs)
                 # Reduce linked image appearance to one broad colour; never export
                 # the image, UV coordinates, decals or its fine visual information.
                 texture = next((n for n in mat.node_tree.nodes if n.type=='TEX_IMAGE' and n.image and n.outputs['Color'].is_linked),None)
@@ -76,9 +80,9 @@ def source_palette(mesh):
                             source_palette.decals.add(key)
                         color=tuple(average)+(1,)
         # Keep broad colours, without images, original shaders or material names.
-        value=(tuple(round(max(0,min(1,float(c)))*24)/24 for c in color[:3])+(1,),round(float(metallic)*2)/2)
+        value=(tuple(float(c) for c in color[:3])+(1,),properties)
         cache[key]=value; colors.append(value)
-    return colors or [((.8,.8,.8,1),0)]
+    return colors or [((.8,.8,.8,1), (('Roughness', .65), ('Metallic', 0)))]
 
 
 def visible_collections(collection, allowed=True):
@@ -119,10 +123,16 @@ def extract_shell(path, recipe):
             lower=np.minimum(lower,lo);upper=np.maximum(upper,hi)
             mesh.calc_loop_triangles()
             faces=np.empty(len(mesh.loop_triangles)*3,dtype=np.int32);mesh.loop_triangles.foreach_get('vertices',faces)
+            loops=np.empty(len(mesh.loop_triangles)*3,dtype=np.int32);mesh.loop_triangles.foreach_get('loops',loops)
+            corner_normals=np.array([n.vector[:] for n in mesh.corner_normals],dtype=np.float64)[loops].reshape((-1,3,3))
+            normal_matrix=np.linalg.inv(matrix[:3,:3]).T
+            corner_normals=corner_normals@normal_matrix.T
+            corner_normals/=np.maximum(np.linalg.norm(corner_normals,axis=2,keepdims=True),1e-20)
             # Baking a mirrored world transform reverses handedness. Preserve the
             # original outward winding before regenerating normals in a new scene.
             if np.linalg.det(matrix[:3,:3])<0:
                 faces=faces.reshape((-1,3))[:,[0,2,1]].reshape(-1)
+                corner_normals=corner_normals[:,[0,2,1],:]
             materials=np.empty(len(mesh.loop_triangles),dtype=np.int32);mesh.loop_triangles.foreach_get('material_index',materials)
             source_triangles+=len(materials)
             size=hi-lo; sorted_size=sorted(size)
@@ -133,7 +143,7 @@ def extract_shell(path, recipe):
             ancestors=[];parent=obj.parent
             while parent:
                 ancestors.append(parent.name.lower());parent=parent.parent
-            parts.append({'positions':coordinates.astype(np.float32),'faces':faces.reshape((-1,3))[keep],'materialIndices':materials[keep],'palette':palette,'lo':lo,'hi':hi,
+            parts.append({'positions':coordinates.astype(np.float32),'faces':faces.reshape((-1,3))[keep],'normals':corner_normals[keep].astype(np.float32),'materialIndices':materials[keep],'palette':palette,'lo':lo,'hi':hi,
                           'label':label,'ancestry':' '.join(ancestors),
                           'significant':size.max()>=.075 and sorted_size[-1]*sorted_size[-2]>=.0018 and not any(word in label for word in ['cable','cord','wire'])})
         finally:evaluated.to_mesh_clear()
@@ -183,23 +193,30 @@ def rebuild_shell(parts, dimensions, recipe, source_bounds, clean=True):
     for index,part in enumerate(parts):
         mesh=bpy.data.meshes.new('Display surface')
         mesh.from_pydata(part['positions'].tolist(),[],part['faces'].tolist());mesh.update()
-        for color,metallic in part['palette']:
-            key=(color,metallic)
-            if key not in palette:palette[key]=material('Display colour '+str(len(palette)),color,metallic)
+        for color,properties in part['palette']:
+            key=(color,properties)
+            if key not in palette:palette[key]=material('Display finish '+str(len(palette)),color,properties)
             mesh.materials.append(palette[key])
         mesh.polygons.foreach_set('material_index',part['materialIndices'])
         obj=bpy.data.objects.new('Surface '+str(index),mesh);bpy.context.scene.collection.objects.link(obj)
         obj['domus_part_role']=part['role']
-        bpy.context.view_layer.objects.active=obj
+        # Preserve normals as corner data through planar cleanup. BMesh carries
+        # corner layers across dissolved triangulation without merging hard fans.
+        normals=part['normals'].reshape((-1,3))
         if clean:
             bm=bmesh.new();bm.from_mesh(mesh)
+            layer=bm.loops.layers.float_vector.new('display_normal')
+            for face in bm.faces:
+                for corner,loop in enumerate(face.loops):loop[layer]=normals[mesh.polygons[face.index].loop_start+corner]
             bmesh.ops.remove_doubles(bm,verts=list(bm.verts),dist=.00005)
             bmesh.ops.dissolve_limit(bm,angle_limit=math.radians(1),verts=list(bm.verts),edges=list(bm.edges),delimit={'MATERIAL'})
             bm.to_mesh(mesh);bm.free();mesh.update()
-        for polygon in obj.data.polygons:polygon.use_smooth=True
-        obj.data.set_sharp_from_angle(angle=math.radians(40))
-        # Sharp edges already define the split normals used by the GLB exporter.
-        # Avoid per-object operator evaluation (quadratic on large CAD assemblies).
+            attribute=mesh.attributes.get('display_normal')
+            normals=np.empty((len(mesh.loops),3),dtype=np.float32)
+            attribute.data.foreach_get('vector',normals.reshape(-1))
+            mesh.attributes.remove(attribute)
+        for polygon in mesh.polygons:polygon.use_smooth=True
+        mesh.normals_split_custom_set(normals.tolist())
         objects.append(obj)
     # The source may have its long bed axis in X; standardize the displayed footprint.
     rotate=not recipe.get('lamp') and dimensions[0]>dimensions[1]
@@ -210,7 +227,10 @@ def rebuild_shell(parts, dimensions, recipe, source_bounds, clean=True):
             vertex.co-=origin
     if rotate:
         for obj in objects:
+            normals=np.array([n.vector[:] for n in obj.data.corner_normals])
+            normals=normals[:,[1,0,2]]*np.array([-1,1,1])
             for vertex in obj.data.vertices:vertex.co=(-vertex.co.y,vertex.co.x,vertex.co.z)
+            obj.data.normals_split_custom_set(normals.tolist())
         dimensions=[dimensions[1],dimensions[0],dimensions[2]]
     bpy.context.view_layer.update()
     bpy.context.view_layer.update()
@@ -302,9 +322,9 @@ def main():
         candidates=[];summaries={}
         node=shutil.which('node') or '/usr/local/bin/node'
         for method in ['protected','remesh']:
-            for target_count in [5000,10000,20000]:
-                candidate=comparison/f'{method}-{target_count}.glb'
-                options={'method':method,'targetTriangles':target_count,'maxError':.003,'remeshResolution':64}
+            for target_count,normal_weight in [(5000,1),(2000,.01),(5000,.001)]:
+                candidate=comparison/f'{method}-{target_count}-n{normal_weight}.glb'
+                options={'method':method,'targetTriangles':target_count,'maxError':.003,'remeshResolution':64,'normalWeight':normal_weight}
                 if 'stableSurfaceError' in recipe:options['stableSurfaceError']=recipe['stableSurfaceError']
                 if 'thinSurfaceError' in recipe:options['thinSurfaceError']=recipe['thinSurfaceError']
                 candidate.unlink(missing_ok=True)
@@ -321,11 +341,51 @@ def main():
                 print('DOMUS_CANDIDATE '+json.dumps({key:summary[key] for key in ['method','targetTriangles','beforeTriangles','afterTriangles','remeshedParts','boundsDriftMetres']}),flush=True)
         qa=verify(reference,candidates,comparison/'verification',args.qa_resolution) if candidates else {'candidates':[]}
         passing=[entry for entry in qa['candidates'] if entry['passed'] and entry['triangles']<=60000]
+        verification_file=comparison/'verification/report.json'
+        if not passing and args.qa_resolution<512:
+            borderline=[Path(entry['file']) for entry in qa['candidates'] if entry['triangles']<=60000
+                and entry['failures'] and all(reason.endswith(':holes') for reason in entry['failures'])]
+            if borderline:
+                detailed=verify(reference,borderline,comparison/'verification-512',512)
+                passing=[entry for entry in detailed['candidates'] if entry['passed'] and entry['triangles']<=60000]
+                if passing:verification_file=comparison/'verification-512/report.json'
         if fingerprint(path)!=before_hash:raise RuntimeError('Original unexpectedly changed')
+        if not passing and (output/(recipe['name']+'-proxy.glb')).exists():
+            # Keep a previously verified geometry budget when a fresh reduction
+            # cannot preserve all sampled openings. Restore attributes against
+            # the faithful evaluated reference, then run the same geometry gates.
+            fallback=comparison/'surface-restored.glb'
+            result=subprocess.run([node,str(Path(__file__).with_name('restore-planning-surfaces.mjs')),
+                str(output/(recipe['name']+'-proxy.glb')),str(reference),str(fallback)],capture_output=True,text=True)
+            if result.returncode==0:
+                summary=json.loads(result.stdout.strip().splitlines()[-1])
+                summary.update({'targetTriangles':60000,'remeshedParts':0,'boundsDriftMetres':0})
+                summaries[fallback.name]=summary
+                fallback.with_suffix('.json').write_text(json.dumps(summary,indent=2)+'\n')
+                fallback_qa=verify(reference,[fallback],comparison/'surface-verification',max(512,args.qa_resolution))
+                verification_file=comparison/'surface-verification/report.json'
+                passing=[entry for entry in fallback_qa['candidates'] if entry['passed'] and entry['triangles']<=60000]
+            else:print('DOMUS_SURFACE_RESTORE_REJECTED '+result.stderr[-2000:],flush=True)
         if not passing:
             raise ValueError(f"{recipe['name']}: no candidate passed visual geometry checks; active model retained. See {comparison/'verification/report.json'}")
-        winner=min(passing,key=lambda item:(item['triangles'],-item['minimumSilhouetteIoU'],item['file']))
+        winner=min(passing,key=lambda item:(item.get('maximumShadingNormalAngleP95Degrees',180),-item['minimumSilhouetteIoU'],item['triangles'],item['file']))
         selected=Path(winner['file']);summary=summaries[selected.name]
+        surface_bake=None
+        if recipe.get('bakeNormals'):
+            # Vertex interpolation cannot represent narrow bevels across a large
+            # reduced face. Bake only its normal response from the evaluated copy.
+            import runpy
+            bake_surface=runpy.run_path(str(Path(__file__).with_name('bake-planning-surface.py')))['bake_surface']
+            baked=comparison/'surface-baked.glb'
+            surface_bake=bake_surface(reference,selected,baked)
+            baked_qa=verify(reference,[baked],comparison/'baked-verification',max(512,args.qa_resolution))
+            winner=baked_qa['candidates'][0]
+            if not winner['passed'] or winner['triangles']>60000:
+                raise ValueError(f"{recipe['name']}: baked display failed geometry checks; active model retained")
+            selected=baked
+            summary={**summary,'afterTriangles':surface_bake['triangles']}
+            verification_file=comparison/'baked-verification/report.json'
+        if fingerprint(path)!=before_hash:raise RuntimeError('Original unexpectedly changed')
         target=output/(recipe['name']+'-proxy.glb')
         if not args.compare_only:
             with tempfile.NamedTemporaryFile(dir=output,prefix='planning-',suffix='.tmp',delete=False) as stream:
@@ -337,13 +397,13 @@ def main():
             bpy.ops.wm.read_factory_settings(use_empty=True);bpy.ops.import_scene.gltf(filepath=str(selected))
             objects=[obj for obj in bpy.context.scene.objects if obj.type=='MESH']
             preview(bpy.context.scene,objects,normalized_dimensions,previews/(recipe['name']+'-proxy.png'))
-        item={'name':recipe['name'],'sourceTriangles':source_triangles,'proxyTriangles':summary['afterTriangles'],
+        item={'name':recipe['name'],'sourceSha256':before_hash,'sha256':fingerprint(selected),'sourceTriangles':source_triangles,'proxyTriangles':summary['afterTriangles'],
               'dimensionsMetres':normalized_dimensions,'bytes':selected.stat().st_size,'sourceUnchanged':True,
               'mode':'topology-exterior','method':summary['method'],'retainedParts':retained_count,
               'selectedCandidate':selected.name,'remeshedParts':summary['remeshedParts'],
               'minimumSilhouetteIoU':winner['minimumSilhouetteIoU'],'minimumHoleRetention':winner['minimumHoleRetention'],
-              'boundsDriftMetres':winner['boundsDriftMetres'],'verification':str(comparison/'verification/report.json'),
-              'activated':not args.compare_only}
+              'boundsDriftMetres':winner['boundsDriftMetres'],'verification':str(verification_file),
+              'surfaceBake':surface_bake,'activated':not args.compare_only}
         report.append(item);print('DOMUS_PROXY '+json.dumps(item),flush=True)
         # Persist each verified result even if a later model in a batch fails.
         updated={item['name']:item for item in json.loads(report_path.read_text())} if report_path.exists() else {}

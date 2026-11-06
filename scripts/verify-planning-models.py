@@ -27,6 +27,7 @@ import sys
 import bpy
 import numpy as np
 from mathutils import Vector
+from mathutils.geometry import barycentric_transform
 from mathutils.bvhtree import BVHTree
 
 
@@ -40,7 +41,7 @@ def load_geometry(path):
     bpy.ops.import_scene.gltf(filepath=str(path))
     bpy.context.view_layer.update()
     graph = bpy.context.evaluated_depsgraph_get()
-    vertices, faces = [], []
+    vertices, faces, shading = [], [], []
     offset = 0
     for obj in bpy.context.scene.objects:
         if obj.type != 'MESH' or obj.hide_render:
@@ -57,6 +58,12 @@ def load_geometry(path):
             mesh.calc_loop_triangles()
             triangles = np.empty(len(mesh.loop_triangles) * 3, dtype=np.int32)
             mesh.loop_triangles.foreach_get('vertices', triangles)
+            loops=np.empty(len(mesh.loop_triangles)*3,dtype=np.int32)
+            mesh.loop_triangles.foreach_get('loops',loops)
+            corner=np.array([n.vector[:] for n in mesh.corner_normals])[loops].reshape((-1,3,3))
+            corner=corner@np.linalg.inv(matrix[:3,:3])
+            corner/=np.maximum(np.linalg.norm(corner,axis=2,keepdims=True),1e-20)
+            shading.append(corner.astype(np.float32))
             vertices.append(points)
             faces.append(triangles.reshape((-1, 3)) + offset)
             offset += len(points)
@@ -72,6 +79,7 @@ def load_geometry(path):
         'triangles': len(triangles),
         'vertices': len(points),
         'tree': BVHTree.FromPolygons(points, triangles, all_triangles=True),
+        'points':points,'faces':triangles,'shading':np.concatenate(shading),
     }
     return result
 
@@ -125,9 +133,11 @@ def views_for(bounds):
     return views
 
 
-def sample(tree, view, resolution):
+def sample(geometry, view, resolution):
+    tree=geometry['tree']
     depth = np.full((resolution, resolution), np.nan, dtype=np.float32)
     normals = np.zeros((resolution, resolution, 3), dtype=np.float32)
+    shading=np.zeros_like(normals)
     eye = Vector(view['eye'])
     right, up, forward = (Vector(view[key]) for key in ('right', 'up', 'forward'))
     perspective = view['kind'] == 'perspective'
@@ -143,7 +153,13 @@ def sample(tree, view, resolution):
             if index is not None:
                 depth[y, x] = distance
                 normals[y, x] = normal
-    return {'depth': depth, 'normals': normals, 'mask': np.isfinite(depth)}
+                triangle=geometry['points'][geometry['faces'][index]]
+                interpolated=barycentric_transform(hit,*[Vector(v) for v in triangle],*[Vector(v) for v in geometry['shading'][index]])
+                # Display proxies use two-sided surfaces; compare the normal
+                # seen by this camera, including the back-face shader flip.
+                if interpolated.dot(direction)>0:interpolated.negate()
+                shading[y,x]=interpolated.normalized()
+    return {'depth': depth, 'normals': normals, 'shading':shading, 'mask': np.isfinite(depth)}
 
 
 def enclosed_holes(mask):
@@ -174,7 +190,10 @@ def compare(reference, candidate, holes):
     depths = np.abs(reference['depth'][overlap] - candidate['depth'][overlap])
     dot = np.einsum('ij,ij->i', reference['normals'][overlap], candidate['normals'][overlap])
     angles = np.degrees(np.arccos(np.clip(dot, -1, 1)))
+    shading_dot=np.einsum('ij,ij->i',reference['shading'][overlap],candidate['shading'][overlap])
+    shading_angles=np.degrees(np.arccos(np.clip(shading_dot,-1,1)))
     return {
+        'shadingNormalAngleP95Degrees':percentile(shading_angles,95),
         'silhouetteIoU': float(overlap.sum() / union.sum()) if union.any() else 1.0,
         'silhouetteRecall': float(overlap.sum() / expected.sum()) if expected.any() else 1.0,
         'silhouettePrecision': float(overlap.sum() / actual.sum()) if actual.any() else 0.0,
@@ -329,9 +348,9 @@ def main():
     bounds = np.array(geometry['bounds'])
     views = views_for(bounds)
     print('DOMUS_VERIFY_REFERENCE ' + json.dumps({'path': str(reference), 'triangles': geometry['triangles'], 'views': len(views)}), flush=True)
-    reference_samples = {view['name']: sample(geometry['tree'], view, args.resolution) for view in views}
+    reference_samples = {view['name']: sample(geometry, view, args.resolution) for view in views}
     holes = {name: enclosed_holes(data['mask']) for name, data in reference_samples.items()}
-    report = {'schemaVersion': 1, 'reference': {'file': str(reference), 'sha256': original_hashes[str(reference)],
+    report = {'schemaVersion': 1, 'shadingNormalsScope': 'interpolated vertex normals only; normal maps excluded', 'reference': {'file': str(reference), 'sha256': original_hashes[str(reference)],
               'triangles': geometry['triangles'], 'vertices': geometry['vertices'], 'bounds': geometry['bounds']},
               'resolution': args.resolution, 'views': views,
               'thresholds': {'minSilhouetteIoU': args.min_iou, 'maxBoundsDriftMetres': args.max_bounds_drift,
@@ -357,7 +376,7 @@ def main():
         if drift > args.max_bounds_drift:
             failures.append('bounds')
         for view in views:
-            sampled = sample(geometry['tree'], view, args.resolution)
+            sampled = sample(geometry, view, args.resolution)
             metrics = compare(reference_samples[view['name']], sampled, holes[view['name']])
             metrics['name'] = view['name']
             view_failures = []
@@ -384,6 +403,7 @@ def main():
         item['meanSilhouetteIoU'] = float(np.mean([view['silhouetteIoU'] for view in item['views']]))
         item['maximumDepthP95Metres'] = max((view['depthP95Metres'] for view in item['views'] if view['depthP95Metres'] is not None), default=None)
         item['minimumHoleRetention'] = min(view['holeRetention'] for view in item['views'] if view['referenceHolePixels'] >= 16) if any(view['referenceHolePixels'] >= 16 for view in item['views']) else 1.0
+        item['maximumShadingNormalAngleP95Degrees']=max((v['shadingNormalAngleP95Degrees'] for v in item['views'] if v['shadingNormalAngleP95Degrees'] is not None),default=180)
         item['passed'] = not failures
         item['failures'] = failures
         report['candidates'].append(item)

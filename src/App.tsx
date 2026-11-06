@@ -75,7 +75,7 @@ export default function App() {
     <div className={`app-shell${compact ? ' is-compact' : ''}`} data-mobile-task={compact ? mobileTask : undefined}>
       <header className="app-header">
         <div className="brand-block" aria-label="Domus room planner">
-          <div className="brand-mark">D</div>
+          <img className="brand-mark" src="/brand/app-icon.svg" alt="" width="32" height="32" aria-hidden="true" />
           <div><strong>Domus</strong></div>
         </div>
 
