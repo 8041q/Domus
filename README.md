@@ -1,12 +1,37 @@
-# Domus
+<p align="center">
+  <img src="public/brand/logo-mono-light.png" alt="Domus logo" width="220" />
+</p>
 
-Design a room, place furniture and explore the result in 3D.
+<h1 align="center">Domus</h1>
 
-Domus runs on your computer in a web browser. **There is no downloadable
-release yet.** Follow the quick start below to run it from the source code.
-GitHub Actions checks changes; it does not publish an app download.
+<p align="center">
+  <em>Design a room, arrange furniture, and explore your space in 3D.</em>
+</p>
+
+<p align="center">
+  A browser-based room planner for shaping layouts, experimenting with interiors,
+  and visualising your ideas.
+</p>
 
 ---
+
+## How it works
+
+Domus brings room planning into one workspace. Start with a room layout, add
+openings, furnish the space, and switch to 3D to explore the result.
+
+- Create and edit room layouts in a 2D plan.
+- Add doors, windows, and other openings.
+- Arrange furniture and adjust room finishes.
+- Explore the design in 3D or from eye level.
+- Save projects locally or export them as portable files.
+
+> **Current availability:** Domus currently runs locally from its source code.
+> There is no downloadable release yet. GitHub Actions checks changes; it does
+> not publish an app download.
+
+---
+
 
 ## What you can do
 
