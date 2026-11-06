@@ -3,6 +3,7 @@ on: [push, pull_request]
 jobs:
   check:
     runs-on: macos-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -12,8 +13,8 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
-      - run: npx playwright install chromium firefox webkit
-      - run: npm run test:e2e
+      - run: npx playwright install chromium webkit
+      - run: npm run test:e2e -- --project=chromium --project=webkit
       - run: npm run test:e2e -- tests/browser/interior-walls.spec.ts --project=chromium
         env:
           VITE_DOMUS_INTERIOR_WALLS: '1'
@@ -21,6 +22,29 @@ jobs:
         if: failure()
         with:
           name: browser-test-results
+          path: test-results/
+  firefox:
+    # Give Firefox's WebGL2 tests an explicit graphics backend on hosted runners.
+    # Use Mesa software rendering with a virtual display; retain the full suite.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      LIBGL_ALWAYS_SOFTWARE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps firefox
+      - name: Install Mesa software graphics
+        run: sudo apt-get install -y libegl1 libgl1-mesa-dri libglx-mesa0
+      - run: xvfb-run --auto-servernum npm run test:e2e -- --project=firefox --headed
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-test-results-firefox
           path: test-results/
   planning-proxies:
     runs-on: macos-latest

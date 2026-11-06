@@ -8,6 +8,10 @@ The application is local-first. It has no accounts, remote database, or cloud sy
 An opt-in experimental AI assistant is available through a small gateway that
 runs with the local production runtime and Vite development/preview servers.
 
+There is no prebuilt download in GitHub Releases. Run Domus from source using
+the [local setup instructions](#run-locally) below. GitHub Actions verifies the
+source on pushes and pull requests; it does not publish a release or deploy the app.
+
 ## What it does
 
 ### Build Room
@@ -65,14 +69,43 @@ resources; returning to 2D retains the layout.
 
 ## Run locally
 
-Use Node.js 24 LTS (see `.nvmrc`) and npm 10 or newer.
+Install Node.js 24 LTS (see `.nvmrc`) and npm 10 or newer. Use a browser with
+WebGL2 support for 3D views. Blender and private model files are optional; a fresh
+checkout runs with the built-in sample furniture and generated opening fallbacks.
+
+Clone the repository and install its dependencies:
 
 ```bash
+git clone https://github.com/8041q/Domus.git
+cd Domus
 npm ci
+```
+
+Alternatively, choose **Code → Download ZIP** on GitHub, extract it, open a terminal
+in the extracted folder, and run `npm ci`. If you use nvm, run `nvm install` and
+`nvm use` inside the project folder to select the version in `.nvmrc`.
+
+To run the app for everyday local use:
+
+```bash
+npm run build
+npm run start:local
+```
+
+Open `http://localhost:5173` and keep the terminal running. Press `Ctrl+C` to stop
+the server. After updating the source, run `npm ci` and `npm run build` again before
+restarting it. Keep the same hostname and port to retain access to your browser saves.
+
+For development with automatic refresh as you edit:
+
+```bash
 npm run dev
 ```
 
-Vite serves the app at `http://localhost:5173` by default.
+Open the URL printed by Vite, normally `http://localhost:5173`.
+Both commands serve the app locally; opening `index.html` directly will not run it.
+`npm start` is reserved for a packaged public deployment. Use `npm run start:local`
+when running this repository.
 
 Development startup and production builds prepare compressed viewport copies of
 GLBs in `private/models` (legacy `public/models` is relocated by the build). Originals stay intact; the catalogue still measures the
@@ -115,16 +148,9 @@ additional endpoints can be approved when starting the server:
 OLLAMA_ALLOWED_ENDPOINTS=http://192.168.1.50:11434 npm run dev
 ```
 
-Build and run the supported local release with:
-
-```bash
-npm run build
-npm run start:local
-```
-
 `npm run start:local` serves the built app and its catalogue/experimental AI routes at
 `http://localhost:5173`. It binds only to a loopback address and refuses an occupied
-port. Keep the same hostname and port to retain access to the same browser saves.
+port; stop the other Domus server before starting it.
 `npm run preview` remains a build-preview tool. Use `npm run dev` for source editing.
 
 ## Verification
@@ -140,8 +166,18 @@ VITE_DOMUS_INTERIOR_WALLS=1 npm run test:e2e -- tests/browser/interior-walls.spe
 Browser checks build the app and run an isolated local server on port 5199 and a
 master-free public deployment on port 5200.
 Generated fixtures replace private model files; tests do not scan your model
-folder, rewrite your registry, or open your normal saved rooms. CI runs the same
-checks on Node 24, plus the planning proxy Python tests and a Blender smoke test
+folder, rewrite your registry, or open your normal saved rooms. CI uses Node 24
+and runs Chromium/WebKit on macOS and Firefox on Ubuntu with a virtual display
+and Mesa software rendering for WebGL2. To reproduce the Firefox CI invocation
+on Ubuntu after installing its dependencies with
+`npx playwright install --with-deps firefox` and installing Mesa, run:
+
+```bash
+sudo apt-get install -y libegl1 libgl1-mesa-dri libglx-mesa0
+LIBGL_ALWAYS_SOFTWARE=1 xvfb-run --auto-servernum npm run test:e2e -- --project=firefox --headed
+```
+
+CI also runs the planning proxy Python tests and a Blender smoke test
 with synthetic originals. Optional checks against private architectural GLBs
 remain skipped when those files are absent.
 
