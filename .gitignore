@@ -43,6 +43,8 @@ model-catalogue.json.*.tmp
 
 # Others
 blender_addon/
+!blender_addon/catalogue_schema.json
 output/
 tests/
+!tests/browser/walk-profile.spec.ts
 model-catalogue.json
