@@ -3,7 +3,7 @@ import { defineConfig, devices } from '@playwright/test';
 const softwareGraphics = Boolean(process.env.CI || process.env.DOMUS_TEST_SOFTWARE_GL) || process.platform !== 'darwin';
 
 export default defineConfig({
-  testDir: './tests/browser', fullyParallel: false, workers: 1, timeout: process.env.CI ? 240_000 : 60_000,
+  testDir: './tests/browser', fullyParallel: false, workers: process.env.CI ? 2 : 1, timeout: process.env.CI ? 240_000 : 60_000,
   expect: { timeout: process.env.CI ? 60_000 : 15_000 }, retries: process.env.CI ? 1 : 0,
   use: { baseURL: 'http://127.0.0.1:5199', trace: 'retain-on-failure', screenshot: 'only-on-failure', acceptDownloads: true },
   projects: [
