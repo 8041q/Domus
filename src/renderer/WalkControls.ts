@@ -114,10 +114,14 @@ export class WalkControls {
     let forward = Number(this.keys.has('KeyW') || this.keys.has('ArrowUp')) - Number(this.keys.has('KeyS') || this.keys.has('ArrowDown'));
     const length = Math.hypot(right, forward);
     if (length) { right *= WALK_SPEED / length; forward *= WALK_SPEED / length; }
-    const dt = this.lastUpdate == null || !Number.isFinite(nowMs) ? 0 : THREE.MathUtils.clamp((nowMs - this.lastUpdate) / 1000, 0, 0.05);
+    const rawDt = this.lastUpdate == null || !Number.isFinite(nowMs) ? 0 : (nowMs - this.lastUpdate) / 1000;
     this.lastUpdate = Number.isFinite(nowMs) ? nowMs : null;
     const time = length ? ACCELERATION_TIME : BRAKING_TIME;
-    const decay = Math.exp(-dt / time);
+    // Decay in real time so the settling tail is bounded by wall-clock time, not
+    // frame count: on a slow CI runner a clamped 50 ms step can stretch over >100 ms.
+    const decay = Math.exp(-rawDt / time);
+    // Clamp dt used for integration only, so a long tab background can't teleport.
+    const dt = Math.min(rawDt, 0.05);
     // Integrating the exponential exactly keeps acceleration and travel equal at
     // 30, 60 and 144 Hz. A fresh input establishes time without a fake 1/60 step.
     const travelRight = right * dt + (this.velocity.x - right) * time * (1 - decay);
