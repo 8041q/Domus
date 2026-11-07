@@ -101,8 +101,6 @@ tests/
 !tests/browser/project-menu.spec.ts
 !tests/browser/public-host.spec.ts
 !tests/browser/roomFile.ts
-!tests/browser/walk-profile.spec.ts
-!tests/browser/walk.spec.ts
 # Test helpers imported by unit tests and e2e server
 !tests/helpers/model.mjs
 !tests/helpers/vite.mjs
