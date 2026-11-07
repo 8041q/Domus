@@ -892,6 +892,7 @@ input[type="range"]:disabled { opacity: .45; }
 .about-back {
   margin-left: 0;
 }
+.about-back:hover { background: transparent; color: inherit; }
 
 .about-header-row {
   display: flex;
@@ -914,7 +915,7 @@ input[type="range"]:disabled { opacity: .45; }
   position: relative;
 }
 .about-logo picture { display: block; }
-.about-logo img { width: 64px; height: 64px; }
+.about-logo img { width: 80px; height: 80px; }
 
 /* Title block: title + version badge + tagline */
 .about-title-block {

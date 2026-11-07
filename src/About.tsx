@@ -59,15 +59,15 @@ export function About({ onClose }: { onClose: () => void }) {
           <h2>What you can do</h2>
           <ul className="about-features">
             <li>
-              <span className="about-check"><Icon name="pencil" width={16} height={16} /></span>
+              <span className="about-check"><Icon name="ruler" width={16} height={16} /></span>
               <span>Draw and edit room layouts in 2D.</span>
             </li>
             <li>
-              <span className="about-check"><Icon name="door" width={16} height={16} /></span>
+              <span className="about-check"><Icon name="grid" width={16} height={16} /></span>
               <span>Add doors, windows, and other openings.</span>
             </li>
             <li>
-              <span className="about-check"><Icon name="sofa" width={16} height={16} /></span>
+              <span className="about-check"><Icon name="move" width={16} height={16} /></span>
               <span>Place, move, and rotate furniture.</span>
             </li>
             <li>
@@ -75,7 +75,7 @@ export function About({ onClose }: { onClose: () => void }) {
               <span>Change room colours, floors, and lighting.</span>
             </li>
             <li>
-              <span className="about-check"><Icon name="3dcube" width={16} height={16} /></span>
+              <span className="about-check"><Icon name="cube" width={16} height={16} /></span>
               <span>Explore the design in 3D or at eye level.</span>
             </li>
           </ul>
