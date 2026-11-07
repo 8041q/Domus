@@ -46,5 +46,11 @@ blender_addon/
 !blender_addon/catalogue_schema.json
 output/
 tests/
+!tests/helpers/model.mjs
+!tests/helpers/vite.mjs
+!tests/helpers/openingAsset.mjs
+!tests/browser/roomFile.ts
 !tests/browser/walk-profile.spec.ts
+!tests/planning_model_paths_test.py
+!tests/planning_model_roles_test.py
 model-catalogue.json
