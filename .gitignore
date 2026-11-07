@@ -40,3 +40,9 @@ model-catalogue.json.*.tmp
 
 # Generated output artifacts (lighting validation, PDFs, typography previews).
 /output/
+
+# Others
+blender_addon/
+output/
+tests/
+model-catalogue.json
