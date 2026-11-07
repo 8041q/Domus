@@ -86,8 +86,6 @@ tests/
 !tests/planning_model_paths_test.py
 !tests/planning_model_roles_test.py
 # E2E browser tests run by Playwright
-!tests/browser/about.spec.ts
-!tests/browser/branding.spec.ts
 !tests/browser/editor-regressions.spec.ts
 !tests/browser/interior-walls.spec.ts
 !tests/browser/mobile-3d.spec.ts
@@ -97,7 +95,6 @@ tests/
 !tests/browser/mobile-plan.spec.ts
 !tests/browser/mobile-room.spec.ts
 !tests/browser/mobile.spec.ts
-!tests/browser/planner.spec.ts
 !tests/browser/project-menu.spec.ts
 !tests/browser/public-host.spec.ts
 !tests/browser/roomFile.ts
