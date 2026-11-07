@@ -76,7 +76,7 @@ export function Icon({ name, ...props }: SVGProps<SVGSVGElement> & { name: IconN
     eye: <><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6S2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.5"/></>,
     grid: <><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></>,
     box: <><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 9h16"/></>,
-    info: <><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><path d="M11 2h2v20h-2z"/></>,
+    info: <><circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/><path d="M12 2v20M12 22v-2"/></>,
     link: <><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.73"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.73"/></>,
     externalLink: <><path d="M14 2H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></>,
   };

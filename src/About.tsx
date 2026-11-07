@@ -17,17 +17,13 @@ export function About({ onClose }: { onClose: () => void }) {
       <header className="about-head">
         <div className="about-back-row">
           <Button variant="ghost" size="icon" aria-label="Back" onClick={onClose} className="about-back">
-            <span className="about-back-text">Back</span>
             <Icon name="arrowLeft" />
+            <span className="about-back-text">Back</span>
           </Button>
         </div>
         <div className="about-header-row">
           <div className="about-logo">
-            <picture>
-              <source srcSet="/brand/logo-mono-light.svg" media="(prefers-color-scheme: dark)" />
-              <img src="/brand/logo-mono-dark.svg" alt="Domus logo" width="96" height="96" />
-            </picture>
-            <div className="about-logo-fallback">Domus</div>
+            <img src="/brand/logo-mono-dark.svg" alt="Domus logo" width="96" height="96" />
           </div>
           <div className="about-title-block">
             <div className="about-title-row">
@@ -37,7 +33,6 @@ export function About({ onClose }: { onClose: () => void }) {
             <p className="about-tagline">Design a room, arrange furniture, and explore your space in 3D.</p>
           </div>
         </div>
-        <hr className="about-divider" />
       </header>
 
       <p className="about-intro">
